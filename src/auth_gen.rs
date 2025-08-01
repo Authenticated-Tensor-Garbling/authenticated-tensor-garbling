@@ -5,7 +5,9 @@ use crate::fpre::{AuthBitShare, AuthTripleShare, FpreGen};
 use crate::block::Block;
 use crate::delta::Delta;
 use crate::keys::Key;
-use crate::circuit::{Circuit, Gate, AuthHalfGate};
+use crate::circuit::AuthHalfGate;
+
+use mpz_circuits::{Circuit, Gate};
 
 
 
@@ -117,8 +119,8 @@ impl AuthGen {
 
         // TODO this finds a random label for each wire, but we should keep only
         // the labels for the input wires initialized
-        let mut labels = vec![Block::ZERO; pre.num_input + pre.num_output];
-        for i in 0..(pre.num_input + pre.num_output) {
+        let mut labels = vec![Block::ZERO; pre.num_input + pre.num_and];
+        for i in 0..(pre.num_input + pre.num_and) {
             labels[i] = Block::random(&mut rng);
         }
         Self {
@@ -148,7 +150,7 @@ impl AuthGen {
         for gate in circ.gates() {
             match gate {
                 Gate::Xor { x, y, z } => {
-                    self.auth_bits[z.id()] = self.auth_bits[x.id()] + self.auth_bits[y.id()];
+                    self.auth_bits[z.id()] = self.auth_bits[x.id()] + self.auth_bits[y.id()]; // TODO do this in preprocessing; have circuit dependent preprocessing
                     self.labels[z.id()] = self.labels[x.id()] ^ self.labels[y.id()];
                 },
                 Gate::And { x, y, z } => {
@@ -164,7 +166,6 @@ impl AuthGen {
                     // Get AND of input auth_bits
                     let ss = self.triples[and_count].z;
 
-
                     // Garble the gate and compute output label
                     let (half_gate, lz) = and_gate(&lx, &ly, &sx, &sy, &sz, &ss, self.delta.as_block(), self.cipher, gid);
                     self.labels[z.id()] = lz;
@@ -173,6 +174,9 @@ impl AuthGen {
                     and_count += 1;
 
                     garbled_gates.push(half_gate);
+                },
+                _ => {
+                    panic!("Unsupported gate: {:?}", gate);
                 }
             }
         }

@@ -1,12 +1,13 @@
 use crate::{
     aes::{FixedKeyAes, FIXED_KEY_AES},
-    circuit::{Circuit, CircuitError, Gate},
     block::Block,
     macs::Mac,
     delta::Delta,
     fpre::{AuthBitShare, AuthTripleShare, FpreEval},
-    circuit::{AuthHalfGate},
 };
+
+use crate::circuit::AuthHalfGate;
+use mpz_circuits::{Circuit, CircuitError, Gate};
 
 /// Errors that can occur during garbled circuit evaluation.
 #[derive(Debug, thiserror::Error)]
@@ -142,10 +143,10 @@ impl AuthEval {
         Self {
             cipher: &(*FIXED_KEY_AES),
             delta: pre.delta_b,
-            labels: vec![Block::ZERO; circ.inputs() + circ.outputs()],
+            labels: vec![Block::ZERO; circ.inputs().end + circ.outputs().end],
             auth_bits: pre.wire_shares,
             triples: pre.triple_shares,
-            masked_values: vec![false; circ.inputs() + circ.outputs()],
+            masked_values: vec![false; circ.inputs().end + circ.outputs().end],
         }
     }
 
@@ -220,6 +221,9 @@ impl AuthEval {
 
                     gid += 2;
                     and_count += 1;
+                },
+                _ => {
+                    panic!("Unsupported gate: {:?}", gate);
                 }
             }
         }
