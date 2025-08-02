@@ -179,7 +179,7 @@ impl AuthTriple {
 }
 
 /// Per-party triple share: x,y,z each an `AuthBitShare`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AuthTripleShare {
     /// x component of the triple
     pub x: AuthBitShare,

@@ -1,15 +1,76 @@
-use crate::aes::{FixedKeyAes, FIXED_KEY_AES};
+use core::fmt;
+use std::ops::Range;
 
-use crate::fpre::{AuthBitShare, AuthTripleShare, FpreGen};
+use crate::{
+    circuit::{AuthHalfGate, AuthHalfGateBatch}, delta, fpre::{AuthBitShare, AuthTripleShare}, DEFAULT_BATCH_SIZE
+};
+use mpz_circuits::{
+    Circuit, Gate, CircuitError
+};
+use crate::{
+    aes::{FixedKeyAes, FIXED_KEY_AES},
+    block::Block,
+    keys::Key,
+    delta::Delta,
+};
 
-use crate::block::Block;
-use crate::delta::Delta;
-use crate::keys::Key;
-use crate::circuit::AuthHalfGate;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha12Rng;
 
-use mpz_circuits::{Circuit, Gate};
+/// Errors that can occur during authenticated garbled circuit generation.
+#[derive(Debug, thiserror::Error)]
+#[allow(missing_docs)]
+pub enum AuthGeneratorError {
+    #[error(transparent)]
+    CircuitError(#[from] CircuitError),
+    #[error("generator not finished")]
+    NotFinished,
+    #[error("MAC verification failed at gate {0}")]
+    MacCheckFailed(usize), 
+    #[error("expected {expected} auth bits, got {actual}")]
+    InvalidAuthBitCount { expected: usize, actual: usize },
+    #[error("expected {expected} derandomization bits, got {actual}")]
+    InvalidDerandCount { expected: usize, actual: usize },
+    #[error("expected {expected} input keys, got {actual}")]
+    InvalidInputKeyCount { expected: usize, actual: usize },
+}
 
+// hash helper
+fn h2d(a: Block, b: Block, cipher: &FixedKeyAes) -> Block {
+    let mut d = [a, a ^ b];
+    cipher.cr_many( &mut d);
+    d[0] = d[0] ^ d[1]; 
+    return d[0] ^ b;
+}
 
+// hash helper
+fn h2(a: Block, b: Block, cipher: &FixedKeyAes) -> Block {
+    let mut d = [a, b];
+    cipher.cr_many(&mut d);
+    d[0] = d[0] ^ d[1];
+    d[0] = d[0] ^ a;
+    return d[0] ^ b;
+}
+
+#[inline]
+pub(crate) fn sigma_share(
+    triple: &mut AuthTripleShare, 
+    px: bool, 
+    py: bool, 
+    delta: &Block
+) -> AuthBitShare {
+    let mut sigma_share = triple.z.clone();
+    if px {
+        sigma_share = sigma_share + triple.y;
+    }
+    if py {
+        sigma_share = sigma_share + triple.x;
+    }
+    if px && py {
+        sigma_share.key = sigma_share.key + Key::from(*delta); 
+    }
+    sigma_share
+}
 
 #[inline]
 pub(crate) fn and_gate(
@@ -90,121 +151,487 @@ pub struct AuthGenOutput {
 /// Authenticated garbled circuit generator.
 pub struct AuthGen {
     cipher: &'static FixedKeyAes,
-    delta: Delta,
     labels: Vec<Block>, 
     auth_bits: Vec<AuthBitShare>,
+    sigma_bits: Vec<AuthBitShare>,
     masked_values: Vec<bool>,
     triples: Vec<AuthTripleShare>,
+    leaky_triples: Vec<AuthTripleShare>,
+    permutation: Vec<usize>,
+    seed: u64, // via secure coin toss
+    bucket_size: usize,
 }
 
+// TODO: Allow separating pre-processing from generation
+
 impl AuthGen {
+
     /// Create a new AuthGen with seed from coin-tossing
-    pub fn new() -> Self {
+    pub fn new(seed: u64, bucket_size: usize) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
-            delta: Delta::new(Block::ZERO),
             labels: Vec::new(),
             auth_bits: Vec::new(),
+            sigma_bits: Vec::new(),
             masked_values: Vec::new(),
             triples: Vec::new(),
+            leaky_triples: Vec::new(),
+            permutation: Vec::new(),
+            seed,
+            bucket_size,
         }
     }
 
-    /// Instantiate an AuthGen with pre-generated wire and triple shares
-    /// Consumes the pre-generated wire and triple shares
-    pub fn new_with_pre(pre: FpreGen) -> Self {
+    pub fn generate_pre_ideal<'a>(
+        &'a mut self,
+        circ: &'a Circuit,
+        input_auth_bits: &[AuthBitShare],
+        and_auth_bits: &[AuthBitShare],
+        and_triples: &[AuthTripleShare],
+    ) -> Result<(), AuthGeneratorError> {
 
-        // TODO this RNG should either be seeded or passed in
-        let mut rng = rand::rng();
+        if input_auth_bits.len() != circ.inputs().len() {
+            return Err(AuthGeneratorError::InvalidAuthBitCount {
+                expected: (circ.inputs().len()),
+                actual: (input_auth_bits.len())
+            })
+        }
 
-        // TODO this finds a random label for each wire, but we should keep only
-        // the labels for the input wires initialized
-        let mut labels = vec![Block::ZERO; pre.num_input + pre.num_and];
-        for i in 0..(pre.num_input + pre.num_and) {
-            labels[i] = Block::random(&mut rng);
+        if circ.feed_count() > self.auth_bits.len() {
+            self.auth_bits.resize(circ.feed_count(), Default::default());
         }
-        Self {
-            cipher: &(*FIXED_KEY_AES),
-            delta: pre.delta_a,
-            labels,
-            auth_bits: pre.wire_shares,
-            masked_values: Vec::new(),
-            triples: pre.triple_shares,
+
+        if circ.and_count() > self.triples.len() {
+            self.triples.resize(circ.and_count(), Default::default());
         }
+
+        self.auth_bits[..input_auth_bits.len()].copy_from_slice(input_auth_bits);
+
+        let mut count = 0;
+        for gate in circ.gates() {
+            if let Gate::And { x: _, y: _, z } = gate {
+                self.auth_bits[z.id()] = and_auth_bits[count];
+                count += 1;
+            }
+        }
+
+        self.triples[..circ.and_count()].clone_from_slice(and_triples);
+
+        Ok(())
+    }
+    
+    /// Set input auth bits, begin generation of triples
+    pub fn generate_pre_1<'a>(
+        &'a mut self, 
+        circ: &'a Circuit,
+        delta: Delta,
+        input_auth_bits: &[AuthBitShare],
+        shares: &[AuthBitShare],
+    ) -> Result<(Vec<Block>, Vec<Block>), AuthGeneratorError> {
+
+        if input_auth_bits.len() != circ.inputs().len() {
+            return Err(AuthGeneratorError::InvalidAuthBitCount {
+                expected: circ.inputs().len(),
+                actual: input_auth_bits.len(),
+            });
+        }
+
+        if circ.feed_count() > self.auth_bits.len() {
+            self.auth_bits.resize(circ.feed_count(), Default::default());
+        }
+        self.auth_bits[..input_auth_bits.len()].copy_from_slice(input_auth_bits);
+
+        let mut count = 0;
+        for gate in circ.gates() {
+            if let Gate::And { x: _, y: _, z } = gate {
+                self.auth_bits[z.id()] = shares[count];
+                count += 1;
+            }
+        }
+
+        let remaining_shares = shares.len() - count;
+        let length = remaining_shares / 3;
+        for i in 0..length {
+            let base_idx = count + (3 * i);
+            self.leaky_triples.push(AuthTripleShare {
+                x: shares[base_idx],
+                y: shares[base_idx + 1],
+                z: shares[base_idx + 2]
+            });
+        }
+
+        let length = self.leaky_triples.len();
+        let mut c = vec![Block::ZERO; length];
+        let mut g = vec![Block::ZERO; length];
+
+        for i in 0..length {
+            c[i] = self.leaky_triples[i].y.mac.as_block().clone()
+                ^ self.leaky_triples[i].y.key.as_block().clone()
+                ^ delta.mul_bool(self.leaky_triples[i].y.bit());
+
+            g[i] = c[i] ^ h2d(self.leaky_triples[i].x.key.into(), delta.into_inner(), self.cipher);
+        }
+        Ok((c, g))
     }
 
-    pub fn get_masked_inputs(&self) -> Vec<bool> {
-        self.masked_values.clone()
+    /// Triple generation, Round 2
+    pub fn generate_pre_2<'a>(
+        &'a mut self, 
+        delta: Delta,
+        c: Vec<Block>, 
+        g: &mut Vec<Block>, 
+        gr: Vec<Block> // received
+    ) -> Result<Vec<bool>, AuthGeneratorError> {
+        let length = self.leaky_triples.len();
+        let mut d = vec![false; length];
+
+        for i in 0..length {
+            let mut s = h2(self.leaky_triples[i].x.mac.as_block().clone(), self.leaky_triples[i].x.key.as_block().clone(), self.cipher);
+            s = s ^ self.leaky_triples[i].z.mac.as_block().clone() ^ self.leaky_triples[i].z.key.as_block().clone();
+            s = s ^ (gr[i] ^ c[i]).mul_bool(self.leaky_triples[i].x.bit());
+            g[i] = s ^ delta.mul_bool(self.leaky_triples[i].z.bit());
+            d[i] = g[i].lsb();
+        }
+
+        Ok(d)
+    }
+
+    /// Triple generation, Round 3
+    pub fn generate_pre_3<'a>(
+        &'a mut self, 
+        delta: Delta,
+        g: &mut Vec<Block>, 
+        mut d: Vec<bool>, 
+        dr: Vec<bool> // received
+    ) -> Result<Vec<bool>, AuthGeneratorError> {
+        let length = self.leaky_triples.len();
+        for i in 0..length {
+            d[i] = d[i] ^ dr[i];
+            if d[i] {
+                self.leaky_triples[i].z.value = !self.leaky_triples[i].z.value;
+                g[i] = g[i] ^ delta.as_block();
+            }
+        }
+
+        let total = self.leaky_triples.len();
+        let bucket_size = self.bucket_size;
+        assert_eq!(total % bucket_size, 0,
+            "total length must be multiple of bucket_size");
+        let n = total / bucket_size;
+    
+        // Fisher–Yates shuffle in place
+        let mut rng = ChaCha12Rng::seed_from_u64(self.seed);
+        let mut location: Vec<usize> = (0..total).collect();
+        for i in (0..total).rev() {
+            let idx = rng.random_range(0..=i);
+            location.swap(i, idx);
+        }
+
+        self.permutation = location;
+        let mut data = vec![false; total];
+    
+        for i in 0..n {
+            let base_idx = self.permutation[i*bucket_size + 0];    
+            let y_base = self.leaky_triples[base_idx].y.bit();
+    
+            for j in 1..bucket_size {
+                let idx_j = self.permutation[i*bucket_size + j];
+                let y_j = self.leaky_triples[idx_j].y.bit();
+                data[i*bucket_size + j] = y_base ^ y_j;
+            }
+        }
+        Ok(data)
+    }
+
+    /// Generates digest, hash for equality check
+    pub fn check_equality<'a>(
+        &'a mut self, 
+        g: Vec<Block>, 
+    ) -> Result<(Block, Block, Block), AuthGeneratorError> {
+        let mut digest = self.cipher.ccr(g[0]);
+        for i in 1..g.len() {
+            digest = self.cipher.ccr(g[i]);
+        }
+
+        let salt = Block::new((rand::random::<u128>()).to_be_bytes());
+        let hash = self.cipher.tccr(salt, digest);
+
+        Ok((digest, salt, hash))
+    }
+
+    /// Triple generation, Round 4
+    pub fn generate_pre_4<'a>(
+        &'a mut self,
+        data: Vec<bool>,
+        data_recv: Vec<bool>, // received
+    ) -> Result<(), AuthGeneratorError> {
+
+        let total = self.leaky_triples.len();
+        let bucket_size = self.bucket_size;
+        assert_eq!(total % bucket_size, 0,
+            "total length must be multiple of bucket_size");
+        let n = total / bucket_size;
+
+        let mut final_data = vec![false; total];
+        for i in 0..total {
+            final_data[i] = data[i] ^ data_recv[i];
+        }
+
+        for i in 0..n {
+            let base_idx = self.permutation[i*bucket_size + 0];
+            let mut combined_share = self.leaky_triples[base_idx].clone();
+    
+            for j in 1..bucket_size {
+                let idx_j = self.permutation[i*bucket_size + j];
+    
+                combined_share.x = combined_share.x + self.leaky_triples[idx_j].x;
+                combined_share.z = combined_share.z + self.leaky_triples[idx_j].z;
+    
+                if final_data[i*bucket_size + j] {
+                    combined_share.z = combined_share.z + self.leaky_triples[idx_j].x;
+                }
+            }
+            self.triples.push(combined_share);
+        }
+        Ok(())
+    }
+
+    /// Circuit dependent local preprocessing.
+    pub fn generate_free<'a>(
+        &'a mut self, 
+        circ: &'a Circuit,
+    ) -> Result<(), AuthGeneratorError> {
+        for gate in circ.gates() {
+            match gate {
+                Gate::Xor { x, y, z } => {
+                    self.auth_bits[z.id()] = self.auth_bits[x.id()] + self.auth_bits[y.id()];
+                }
+                Gate::Inv { x, z } => {
+                    self.auth_bits[z.id()] = self.auth_bits[x.id()];
+                }
+                Gate::Id { x, z } => {
+                    self.auth_bits[z.id()] = self.auth_bits[x.id()];
+                }
+                Gate::And { .. } => {
+                    // AND gates are handled separately
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Generates the derandomized bits for circuit-dependent AND gate preprocessing.
+    pub fn generate_de<'a>(
+        &'a mut self,
+        circ: &'a Circuit,
+    ) -> Result<(Vec<bool>, Vec<bool>), AuthGeneratorError> {
+        let mut px = Vec::new();
+        let mut py = Vec::new();
+        let mut and_count = 0;
+
+        for gate in circ.gates() {
+            if let Gate::And { x, y, .. } = gate {
+                let sx = &self.auth_bits[x.id()];
+                let sy = &self.auth_bits[y.id()];
+                let triple = &self.triples[and_count];
+                
+                px.push(sx.bit() ^ triple.x.bit());
+                py.push(sy.bit() ^ triple.y.bit());
+                and_count += 1;
+            }
+        }
+        
+        Ok((px, py))
     }
 
     /// Generates an iterator over the encrypted gates of a circuit, finish circuit dependent preprocessing
     pub fn generate<'a>(
         &'a mut self,
         circ: &'a Circuit,
-    ) -> (Vec<Block>, Vec<AuthHalfGate>) {
+        delta: Delta,
+        input_labels: &[Key],
+        px: Vec<bool>, // received
+        py: Vec<bool>, // received
+    ) -> Result<AuthEncryptedGateIter<'a, std::slice::Iter<'a, Gate>>, AuthGeneratorError> {
         
-        let mut garbled_gates = Vec::with_capacity(circ.and_count());
-        let mut and_count: usize = 0;
-        let mut gid: usize = 0;
+        if input_labels.len() != circ.inputs().len() {
+            return Err(AuthGeneratorError::InvalidInputKeyCount {
+                expected: circ.inputs().len(),
+                actual: input_labels.len(),
+            });
+        }
+
+        if circ.feed_count() > self.labels.len() {
+            self.labels.resize(circ.feed_count(), Default::default());
+        }
+
+        self.labels[..input_labels.len()].copy_from_slice(Key::as_blocks(input_labels));
+        
+        if px.len().min(py.len()) < circ.and_count() {
+            return Err(AuthGeneratorError::InvalidDerandCount {
+                expected: circ.and_count(),
+                actual: px.len().min(py.len()),
+            });
+        }
+
+        let mut and_count = 0;
+        
+        self.sigma_bits.reserve(circ.and_count());
 
         for gate in circ.gates() {
-            match gate {
-                Gate::Xor { x, y, z } => {
-                    self.auth_bits[z.id()] = self.auth_bits[x.id()] + self.auth_bits[y.id()]; // TODO do this in preprocessing; have circuit dependent preprocessing
-                    self.labels[z.id()] = self.labels[x.id()] ^ self.labels[y.id()];
-                },
-                Gate::And { x, y, z } => {
-                    // Get zero labels for input wires
-                    let lx = self.labels[x.id()];
-                    let ly = self.labels[y.id()];
+            if let Gate::And { x, y, z: _ } = gate {
+                let sx = self.auth_bits[x.id()];
+                let sy = self.auth_bits[y.id()];
+                let triple = &mut self.triples[and_count];
 
-                    // Get input auth_bits
-                    let sx = self.auth_bits[x.id()];
-                    let sy = self.auth_bits[y.id()];
-                    let sz = self.auth_bits[z.id()];
+                let px = sx.bit() ^ triple.x.bit() ^ px[and_count];
+                let py = sy.bit() ^ triple.y.bit() ^ py[and_count];
 
-                    // Get AND of input auth_bits
-                    let ss = self.triples[and_count].z;
-
-                    // Garble the gate and compute output label
-                    let (half_gate, lz) = and_gate(&lx, &ly, &sx, &sy, &sz, &ss, self.delta.as_block(), self.cipher, gid);
-                    self.labels[z.id()] = lz;
-                    
-                    gid += 2;
-                    and_count += 1;
-
-                    garbled_gates.push(half_gate);
-                },
-                _ => {
-                    panic!("Unsupported gate: {:?}", gate);
-                }
+                // Compute auth_bit for output wire of this AND gate
+                let ss = sigma_share(triple, px, py, delta.as_block());
+                
+                self.sigma_bits.push(ss);
+                and_count += 1;
             }
         }
-        (self.labels.clone(), garbled_gates)
+
+        self.masked_values.resize(circ.feed_count(), false);
+        Ok(AuthEncryptedGateIter::new(
+            delta,
+            circ.gates().iter(),
+            circ.gates().iter(),
+            circ.outputs(),
+            &mut self.labels,
+            &mut self.auth_bits,
+            &mut self.sigma_bits,
+            &mut self.masked_values,
+            circ.and_count(),
+        ))
     }
 
-    /// Verify the circuit execution using masked values from evaluator
-    pub fn verify<'a>(
-        &'a self,
+    /// Generates an iterator over the batched encrypted gates of a circuit, finish circuit dependent preprocessing
+    pub fn generate_batched<'a>(
+        &'a mut self,
         circ: &'a Circuit,
-        masked_values: &[bool],
-    ) -> Block {
-        
+        delta: Delta,
+        input_labels: &[Key],
+        px: Vec<bool>,
+        py: Vec<bool>,
+    ) -> Result<AuthEncryptedGateBatchIter<'a, std::slice::Iter<'a, Gate>>, AuthGeneratorError> {
+        self.generate(circ, delta, input_labels, px, py)
+            .map(AuthEncryptedGateBatchIter)
+    }
+    
+}
+
+/// Iterator over the encrypted gates of a circuit.
+pub struct AuthEncryptedGateIter<'a, I> {
+    /// Cipher to use to encrypt the gates.
+    cipher: &'static FixedKeyAes,
+    /// Global offset.
+    delta: Delta,
+    /// Buffer for the 0-bit labels.
+    labels: &'a mut [Block],
+    /// Buffer for the auth bits.
+    auth_bits: &'a mut [AuthBitShare],
+    /// Buffer for the sigma bits.
+    sigma_bits: &'a mut [AuthBitShare],
+    /// Buffer for the masked values.
+    masked_values: &'a mut [bool],
+    /// Iterator over the gates.
+    gates: I,
+    /// Iterator over the gates to check authenticity.
+    gates_check: I,
+    /// Circuit outputs.
+    outputs: Range<usize>,
+    /// Current gate id.
+    gid: usize,
+    /// Number of AND gates generated.
+    counter: usize,
+    /// Number of AND gates in the circuit.
+    and_count: usize,
+    /// Whether the entire circuit has been garbled.
+    complete: bool,
+}
+
+impl<'a, I> fmt::Debug for AuthEncryptedGateIter<'a, I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AuthEncryptedGateIter {{ .. }}")
+    }
+}
+
+impl<'a, I> AuthEncryptedGateIter<'a, I>
+where
+    I: Iterator<Item = &'a Gate>,
+{
+    fn new(
+        delta: Delta,
+        gates: I,
+        gates_check: I,
+        outputs: Range<usize>,
+        labels: &'a mut [Block],
+        auth_bits: &'a mut [AuthBitShare],
+        sigma_bits: &'a mut [AuthBitShare],
+        masked_values: &'a mut [bool],
+        and_count: usize,
+    ) -> Self {
+        Self {
+            cipher: &(*FIXED_KEY_AES),
+            delta,
+            gates,
+            gates_check,
+            outputs,
+            labels,
+            auth_bits,
+            sigma_bits,
+            masked_values,
+            gid: 1,
+            counter: 0,
+            and_count,
+            complete: false,
+        }
+    }
+
+    /// Returns `true` if the generator has more encrypted gates to generate.
+    #[inline]
+    pub fn has_gates(&self) -> bool {
+        self.counter != self.and_count
+    }
+
+    /// Returns the encoded outputs of the circuit
+    pub fn finish(
+        mut self,
+        masked_values: Vec<bool>
+    ) -> Result<AuthGenOutput, AuthGeneratorError> {
+        if self.has_gates() {
+            return Err(AuthGeneratorError::NotFinished);
+        }
+
+        // Finish computing any "free" gates.
+        if !self.complete {
+            assert_eq!(self.next(), None);
+        }
+
+        let output_labels = Key::from_blocks(self.labels[self.outputs.clone()].to_vec());
+        let output_auth_bits = self.auth_bits[self.outputs.clone()].to_vec();
+
+        self.masked_values.copy_from_slice(&masked_values);
+
         let mut auth_hash = Block::ZERO;
         let mut and_count = 0;
         let delta = self.delta.as_block();
         
-        for gate in circ.gates() {
+        for gate in self.gates_check {
             if let Gate::And { x, y, z } = gate {
-                let ss = &self.triples[and_count].z;  // sigma share
-                let sz = &self.auth_bits[z.id()];     // output auth bit
-                let sx = &self.auth_bits[x.id()];     // input x auth bit
-                let sy = &self.auth_bits[y.id()];     // input y auth bit
+                let ss = &self.sigma_bits[and_count];
+                let sz = &self.auth_bits[z.id()];
+                let sx = &self.auth_bits[x.id()];
+                let sy = &self.auth_bits[y.id()];
 
-                // Get masked values from evaluator
-                let za = masked_values[x.id()];
-                let zb = masked_values[y.id()];
-                let zc = masked_values[z.id()];
+                // Get masked values
+                let za = self.masked_values[x.id()];
+                let zb = self.masked_values[y.id()];
+                let zc = self.masked_values[z.id()];
 
                 let share = check_and(ss, sz, sx, sy, za, zb, zc, *delta);
                 
@@ -213,128 +640,114 @@ impl AuthGen {
                 and_count += 1;
             }
         }
-
-        auth_hash
+        
+        Ok(AuthGenOutput { output_labels, output_auth_bits, auth_hash })
     }
 }
 
-// /// Iterator over the encrypted gates of a circuit.
-// pub struct AuthEncryptedGateIter<'a, I> {
-//     /// Cipher to use to encrypt the gates.
-//     cipher: &'static FixedKeyAes,
-//     /// Global offset.
-//     delta: Delta,
-//     /// Buffer for the 0-bit labels.
-//     labels: &'a mut [Block],
-//     /// Buffer for the auth bits.
-//     auth_bits: &'a mut [AuthBitShare],
-//     /// Buffer for the sigma bits.
-//     sigma_bits: &'a mut [AuthBitShare],
-//     /// Buffer for the masked values.
-//     masked_values: &'a mut [bool],
-//     /// Iterator over the gates.
-//     gates: I,
-//     /// Iterator over the gates to check authenticity.
-//     gates_check: I,
-//     /// Circuit outputs.
-//     outputs: Range<usize>,
-//     /// Current gate id.
-//     gid: usize,
-//     /// Number of AND gates generated.
-//     counter: usize,
-//     /// Number of AND gates in the circuit.
-//     and_count: usize,
-//     /// Whether the entire circuit has been garbled.
-//     complete: bool,
-// }
+impl<'a, I> Iterator for AuthEncryptedGateIter<'a, I>
+where
+    I: Iterator<Item = &'a Gate>,
+{
+    type Item = AuthHalfGate;
 
-// impl<'a, I> fmt::Debug for AuthEncryptedGateIter<'a, I> {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "AuthEncryptedGateIter {{ .. }}")
-//     }
-// }
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(gate) = self.gates.next() {
+            match gate {
+                Gate::Xor { x, y, z } => {
+                    self.labels[z.id()] = self.labels[x.id()] ^ self.labels[y.id()];
+                }
+                Gate::Inv { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()] ^ self.delta.as_block();
+                }
+                Gate::Id { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()].clone();
+                }
+                Gate::And { x, y, z } => {
+                    // Get labels for input wires
+                    let lx = self.labels[x.id()];
+                    let ly = self.labels[y.id()];
 
-// impl<'a, I> AuthEncryptedGateIter<'a, I>
-// where
-//     I: Iterator<Item = &'a Gate>,
-// {
-//     fn new(
-//         delta: Delta,
-//         gates: I,
-//         gates_check: I,
-//         outputs: Range<usize>,
-//         labels: &'a mut [Block],
-//         auth_bits: &'a mut [AuthBitShare],
-//         sigma_bits: &'a mut [AuthBitShare],
-//         masked_values: &'a mut [bool],
-//         and_count: usize,
-//     ) -> Self {
-//         Self {
-//             cipher: &(*FIXED_KEY_AES),
-//             delta,
-//             gates,
-//             gates_check,
-//             outputs,
-//             labels,
-//             auth_bits,
-//             sigma_bits,
-//             masked_values,
-//             gid: 1,
-//             counter: 0,
-//             and_count,
-//             complete: false,
-//         }
-//     }
+                    // Get input auth_bits
+                    let sx = self.auth_bits[x.id()];
+                    let sy = self.auth_bits[y.id()];
 
-//     /// Returns `true` if the generator has more encrypted gates to generate.
-//     #[inline]
-//     pub fn has_gates(&self) -> bool {
-//         self.counter != self.and_count
-//     }
+                    // Get AND of input auth_bits
+                    let ss = self.sigma_bits[self.counter];
 
-//     /// Returns the encoded outputs of the circuit
-//     pub fn finish(
-//         mut self,
-//         masked_values: Vec<bool>
-//     ) -> Result<AuthGenOutput, AuthGeneratorError> {
-//         if self.has_gates() {
-//             return Err(AuthGeneratorError::NotFinished);
-//         }
+                    // Get output auth_bit for wire
+                    let sz = self.auth_bits[z.id()];
 
-//         // Finish computing any "free" gates.
-//         if !self.complete {
-//             assert_eq!(self.next(), None);
-//         }
+                    // Garble the gate and compute output label
+                    let (half_gate, lz) = and_gate(&lx, &ly, &sx, &sy, &sz, &ss, self.delta.as_block(), self.cipher, self.gid);
+                    self.labels[z.id()] = lz;
+                    
+                    self.gid += 2;
+                    self.counter += 1;
 
-//         let output_labels = Key::from_blocks(self.labels[self.outputs.clone()].to_vec());
-//         let output_auth_bits = self.auth_bits[self.outputs.clone()].to_vec();
+                    // If we have generated all AND gates, we can compute
+                    // the rest of the "free" gates.
+                    if !self.has_gates() {
+                        assert!(self.next().is_none());
 
-//         self.masked_values.copy_from_slice(&masked_values);
+                        self.complete = true;
+                    }
 
-//         let mut auth_hash = Block::ZERO;
-//         let mut and_count = 0;
-//         let delta = self.delta.as_block();
-        
-//         for gate in self.gates_check {
-//             if let Gate::And { x, y, z } = gate {
-//                 let ss = &self.sigma_bits[and_count];
-//                 let sz = &self.auth_bits[z.id()];
-//                 let sx = &self.auth_bits[x.id()];
-//                 let sy = &self.auth_bits[y.id()];
+                    return Some(half_gate);
+                }
+            }
+        }
 
-//                 // Get masked values
-//                 let za = self.masked_values[x.id()];
-//                 let zb = self.masked_values[y.id()];
-//                 let zc = self.masked_values[z.id()];
+        None
+    }
+}
 
-//                 let share = check_and(ss, sz, sx, sy, za, zb, zc, *delta);
-                
-//                 // Update hash                            
-//                 auth_hash ^= self.cipher.tccr(Block::new((and_count as u128).to_be_bytes()), share);
-//                 and_count += 1;
-//             }
-//         }
-        
-//         Ok(AuthGenOutput { output_labels, output_auth_bits, auth_hash })
-//     }
-// }
+/// Iterator returned by [`Generator::generate_batched`].
+#[derive(Debug)]
+pub struct AuthEncryptedGateBatchIter<'a, I: Iterator, const N: usize = DEFAULT_BATCH_SIZE>(
+    AuthEncryptedGateIter<'a, I>,
+);
+
+impl<'a, I, const N: usize> AuthEncryptedGateBatchIter<'a, I, N>
+where
+    I: Iterator<Item = &'a Gate>,
+{
+    /// Returns `true` if the generator has more encrypted gates to generate.
+    pub fn has_gates(&self) -> bool {
+        self.0.has_gates()
+    }
+
+    /// Returns the encoded outputs of the circuit, and the hash of the
+    /// encrypted gates if present.
+    pub fn finish(self, masked_values: Vec<bool>) -> Result<AuthGenOutput, AuthGeneratorError> {
+        self.0.finish(masked_values)
+    }
+}
+
+impl<'a, I, const N: usize> Iterator for AuthEncryptedGateBatchIter<'a, I, N>
+where
+    I: Iterator<Item = &'a Gate>,
+{
+    type Item = AuthHalfGateBatch<N>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.has_gates() {
+            return None;
+        }
+
+        let mut batch = [AuthHalfGate::default(); N];
+        let mut i = 0;
+        for gate in self.0.by_ref() {
+            batch[i] = gate;
+            i += 1;
+
+            if i == N {
+                break;
+            }
+        }
+
+        Some(AuthHalfGateBatch::new(batch))
+    }
+}
