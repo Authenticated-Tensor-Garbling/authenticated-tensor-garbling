@@ -528,6 +528,113 @@ impl AuthEval {
         ))
     }
 
+    pub fn process<'a>(
+        &mut self,
+        circ: &'a Circuit,
+        delta: Delta,
+        half_gates: Vec<AuthHalfGate>,
+    ) {
+        let mut gid = 1;
+        let mut counter = 0;
+
+        for gate in circ.gates() {
+            match gate {
+                Gate::Xor { x, y, z } => {
+                    self.labels[z.id()] = self.labels[x.id()] ^ self.labels[y.id()];
+                    self.masked_values[z.id()] = self.masked_values[x.id()] ^ self.masked_values[y.id()];
+                }
+                Gate::Inv { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()];
+                    self.masked_values[z.id()] = !self.masked_values[x.id()];
+                }
+                Gate::Id { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()];
+                    self.masked_values[z.id()] = self.masked_values[x.id()];
+                }
+                Gate::And { x, y, z } => {
+                    // Get labels for input wires
+                    let lx = self.labels[x.id()];
+                    let ly = self.labels[y.id()];
+                    
+                    // Get input auth_bits
+                    let sx = self.auth_bits[x.id()];
+                    let sy = self.auth_bits[y.id()];
+
+                    // Get AND of input auth_bits
+                    let ss = self.sigma_bits[counter];
+
+                    // Get output auth_bit for wire
+                    let sz = self.auth_bits[z.id()];
+
+                    // Get masked input bits
+                    let za = self.masked_values[x.id()];
+                    let zb = self.masked_values[y.id()];
+
+                    // Evaluate the AND gate
+                    let (lz, zc) = and_gate(
+                        lx, 
+                        ly, 
+                        sx, 
+                        sy, 
+                        sz, 
+                        ss, 
+                        half_gates[counter], 
+                        za, 
+                        zb, 
+                        self.cipher, 
+                        gid
+                    );
+
+                    // Set output masked value and label
+                    self.masked_values[z.id()] = zc;
+                    self.labels[z.id()] = lz;
+
+                    counter += 1;
+                    gid += 2;
+
+                    // If we have more AND gates to evaluate, return.
+                    // if self.wants_gates() {
+                    //     return;
+                    // }
+                }
+            }
+        }
+    }
+
+    pub fn finish(&mut self, circ: &Circuit, delta: Delta) -> Result<AuthEvalOutput, AuthEvaluatorError> {
+        let output_labels = Mac::from_blocks(self.labels[circ.outputs().clone()].to_vec());
+        let output_auth_bits = self.auth_bits[circ.outputs().clone()].to_vec();
+        let masked_output_values = self.masked_values[circ.outputs().clone()].to_vec();
+
+        let mut auth_hash = Block::ZERO;
+        let mut and_count = 0;
+        let delta = delta.as_block();
+        
+        for gate in circ.gates() {
+            if let Gate::And { x, y, z } = gate {
+                let ss = &self.sigma_bits[and_count];
+                let sz = &self.auth_bits[z.id()];
+                let sx = &self.auth_bits[x.id()];
+                let sy = &self.auth_bits[y.id()];
+
+                // Get masked values
+                let za = self.masked_values[x.id()];
+                let zb = self.masked_values[y.id()];
+                let zc = self.masked_values[z.id()];
+
+                let share = check_and(ss, sz, sx, sy, za, zb, zc, *delta);
+                
+                // Update hash                            
+                auth_hash ^= self.cipher.tccr(Block::new((and_count as u128).to_be_bytes()), share);
+                and_count += 1;
+            }
+        }
+
+        let masked_values = self.masked_values.to_vec();
+
+        Ok(AuthEvalOutput { output_labels, output_auth_bits, masked_output_values, masked_values, auth_hash })
+    }
+
     /// Generates a consumer over the batched encrypted gates of a circuit, finish circuit dependent preprocessing
     pub fn evaluate_batched<'a>(
         &'a mut self,

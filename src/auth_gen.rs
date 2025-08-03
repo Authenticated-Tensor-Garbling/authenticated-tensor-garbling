@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{error, fmt};
 use std::ops::Range;
 
 use crate::{
@@ -509,6 +509,97 @@ impl AuthGen {
         ))
     }
 
+    pub fn garble<'a>(
+        &mut self,
+        circ: &'a Circuit,
+        delta: Delta,
+    ) -> Result<Vec<AuthHalfGate>, AuthGeneratorError>{
+        let mut gid = 1;
+        let mut counter = 0;
+
+        let mut half_gates = Vec::new();
+
+        for gate in circ.gates() {
+            match gate {
+                Gate::Xor { x, y, z } => {
+                    self.labels[z.id()] = self.labels[x.id()] ^ self.labels[y.id()];
+                }
+                Gate::Inv { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()] ^ delta.as_block();
+                }
+                Gate::Id { x, z } => {
+                    self.labels[z.id()] = self.labels[x.id()].clone();
+                }
+                Gate::And { x, y, z } => {
+                    // Get labels for input wires
+                    let lx = self.labels[x.id()];
+                    let ly = self.labels[y.id()];
+
+                    // Get input auth_bits
+                    let sx = self.auth_bits[x.id()];
+                    let sy: AuthBitShare = self.auth_bits[y.id()];
+
+                    // Get AND of input auth_bits
+                    let ss = self.sigma_bits[counter];
+
+                    // Get output auth_bit for wire
+                    let sz = self.auth_bits[z.id()];
+
+                    // Garble the gate and compute output label
+                    let (half_gate, lz) = and_gate(&lx, &ly, &sx, &sy, &sz, &ss, delta.as_block(), self.cipher, gid);
+                    self.labels[z.id()] = lz;
+                    
+                    gid += 2;
+                    counter += 1;
+
+                    // If we have generated all AND gates, we can compute
+                    // the rest of the "free" gates.
+                    // if !self.has_gates() {
+                    //     assert!(self.next().is_none());
+
+                    //     self.complete = true;
+                    // }
+
+                    half_gates.push(half_gate);
+                }
+            }
+        }
+        Ok(half_gates)
+    }
+
+    pub fn finish(&mut self, circ: &Circuit, delta: Delta, masked_values: Vec<bool>) -> Result<AuthGenOutput, AuthGeneratorError> {
+        let output_labels = Key::from_blocks(self.labels[circ.outputs().clone()].to_vec());
+        let output_auth_bits = self.auth_bits[circ.outputs().clone()].to_vec();
+
+        self.masked_values.copy_from_slice(&masked_values);
+
+        let mut auth_hash = Block::ZERO;
+        let mut and_count = 0;
+        let delta = delta.as_block();
+        
+        for gate in circ.gates() {
+            if let Gate::And { x, y, z } = gate {
+                let ss = &self.sigma_bits[and_count];
+                let sz = &self.auth_bits[z.id()];
+                let sx = &self.auth_bits[x.id()];
+                let sy = &self.auth_bits[y.id()];
+
+                // Get masked values
+                let za = self.masked_values[x.id()];
+                let zb = self.masked_values[y.id()];
+                let zc = self.masked_values[z.id()];
+
+                let share = check_and(ss, sz, sx, sy, za, zb, zc, *delta);
+                
+                // Update hash                            
+                auth_hash ^= self.cipher.tccr(Block::new((and_count as u128).to_be_bytes()), share);
+                and_count += 1;
+            }
+        }
+        
+        Ok(AuthGenOutput { output_labels, output_auth_bits, auth_hash })
+    }
+
     /// Generates an iterator over the batched encrypted gates of a circuit, finish circuit dependent preprocessing
     pub fn generate_batched<'a>(
         &'a mut self,
@@ -671,7 +762,7 @@ where
 
                     // Get input auth_bits
                     let sx = self.auth_bits[x.id()];
-                    let sy = self.auth_bits[y.id()];
+                    let sy: AuthBitShare = self.auth_bits[y.id()];
 
                     // Get AND of input auth_bits
                     let ss = self.sigma_bits[self.counter];

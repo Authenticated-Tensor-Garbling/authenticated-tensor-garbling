@@ -139,28 +139,26 @@ mod tests {
         let (px_gen, py_gen) = gb.generate_de(&circuit).unwrap();
         let (px_eval, py_eval) = ev.evaluate_de(&circuit).unwrap();
 
+        // apply the corrections to shares
+        let _ = gb.generate_batched(&AES128, delta_a, &input_keys, px_eval, py_eval).unwrap();
+        let _ = ev.evaluate_batched(&AES128, delta_b, &input_macs, masked_inputs, px_gen, py_gen).unwrap();
+
+        let half_gates = gb.garble(&circuit, delta_a).unwrap();
+        let _ = ev.process(&circuit, delta_b, half_gates);
         
-        // COPIED QUICK TEST
-        let mut gen_iter: AuthEncryptedGateBatchIter<'_, std::slice::Iter<'_, mpz_circuits::Gate>> = gb.generate_batched(&AES128, delta_a, &input_keys, px_eval, py_eval).unwrap();
-        let mut ev_consumer: AuthEncryptedGateBatchConsumer<'_, std::slice::Iter<'_, mpz_circuits::Gate>> = ev.evaluate_batched(&AES128, delta_b, &input_macs, masked_inputs, px_gen, py_gen).unwrap();
-
-        for gate in gen_iter.by_ref() {
-            ev_consumer.next(gate);
-        }
-
         let AuthEvalOutput {
             output_labels: eval_output_labels,
             output_auth_bits: eval_output_auth_bits,
             auth_hash: eval_auth_hash,
             masked_output_values,
             masked_values,
-        } = ev_consumer.finish().unwrap();
+        } = ev.finish(&circuit, delta_b).unwrap();
 
         let AuthGenOutput {
             output_labels: gen_output_labels,
             output_auth_bits: gen_output_auth_bits,
             auth_hash: gen_auth_hash,
-        } = gen_iter.finish(masked_values).unwrap();
+        } = gb.finish(&circuit, delta_a, masked_values).unwrap();
 
         // authentication check
         assert_eq!(gen_auth_hash, eval_auth_hash, "auth hash mismatch");
