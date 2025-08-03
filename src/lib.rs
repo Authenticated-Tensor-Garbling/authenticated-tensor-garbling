@@ -47,6 +47,15 @@ mod tests {
     use rand::Rng;
     use crate::macs::Mac;
 
+    use mpz_circuits::circuits::AES128;
+
+    use crate::auth_gen::AuthEncryptedGateBatchIter;
+    use crate::auth_eval::AuthEncryptedGateBatchConsumer;
+    use crate::auth_gen::AuthGenOutput;
+    use crate::auth_eval::AuthEvalOutput;
+    
+    use itybity::FromBitIterator;
+
     
     #[test]
     fn test_auth_garble() {
@@ -103,7 +112,7 @@ mod tests {
 
         let masked_inputs = key.iter().copied().chain(msg).into_iter_lsb0()
             .enumerate()
-            .map(|(i, b)| {b ^ gen_input_shares[i].bit() ^ gen_input_shares[i].bit()})
+            .map(|(i, b)| {b ^ gen_input_shares[i].bit() ^ eval_input_shares[i].bit()})
             .collect::<Vec<bool>>();
 
         let input_macs = masked_inputs.iter()
@@ -129,6 +138,56 @@ mod tests {
 
         let (px_gen, py_gen) = gb.generate_de(&circuit).unwrap();
         let (px_eval, py_eval) = ev.evaluate_de(&circuit).unwrap();
+
+        
+        // COPIED QUICK TEST
+        let mut gen_iter: AuthEncryptedGateBatchIter<'_, std::slice::Iter<'_, mpz_circuits::Gate>> = gb.generate_batched(&AES128, delta_a, &input_keys, px_eval, py_eval).unwrap();
+        let mut ev_consumer: AuthEncryptedGateBatchConsumer<'_, std::slice::Iter<'_, mpz_circuits::Gate>> = ev.evaluate_batched(&AES128, delta_b, &input_macs, masked_inputs, px_gen, py_gen).unwrap();
+
+        for gate in gen_iter.by_ref() {
+            ev_consumer.next(gate);
+        }
+
+        let AuthEvalOutput {
+            output_labels: eval_output_labels,
+            output_auth_bits: eval_output_auth_bits,
+            auth_hash: eval_auth_hash,
+            masked_output_values,
+            masked_values,
+        } = ev_consumer.finish().unwrap();
+
+        let AuthGenOutput {
+            output_labels: gen_output_labels,
+            output_auth_bits: gen_output_auth_bits,
+            auth_hash: gen_auth_hash,
+        } = gen_iter.finish(masked_values).unwrap();
+
+        // authentication check
+        assert_eq!(gen_auth_hash, eval_auth_hash, "auth hash mismatch");
+
+        let masks = gen_output_auth_bits.iter()
+            .zip(eval_output_auth_bits.iter())
+            .map(|(gen_auth_bit, eval_auth_bit)| gen_auth_bit.bit() ^ eval_auth_bit.bit())
+            .collect::<Vec<bool>>();
+        
+        // Unmask the output
+        let output: Vec<u8> = Vec::from_lsb0_iter(
+            masked_output_values
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(i, masked_value)| masked_value ^ masks[i]),
+        );
+
+        assert_eq!(output, expected, "output mismatch");
+
+        // Check output labels
+        for (i, (gen_label, eval_label)) in gen_output_labels.iter().zip(eval_output_labels.iter()).enumerate() {
+            let xor = gen_label.as_block() ^ eval_label.as_block();
+            let masked_value = masked_output_values[i];
+            let expected = delta_a.mul_bool(masked_value);
+            assert_eq!(xor, expected, "output label mismatch");
+        }
 
     }
 }
