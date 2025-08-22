@@ -1,10 +1,11 @@
 use std::ops::Add;
+use std::fmt::Display;
 
 use crate::block::Block;
 use crate::delta::Delta;
 use crate::macs::Mac;
 
-use rand::{distr::StandardUniform, prelude::Distribution};
+use rand::{CryptoRng, Rng, distr::StandardUniform, prelude::Distribution};
 
 /// MAC key.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -81,6 +82,11 @@ impl Key {
         // Key is a newtype of block.
         unsafe { std::mem::transmute(keys) }
     }
+
+    #[inline]
+    pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+        Self(Block::random(rng))
+    }
 }
 
 impl From<Key> for Block {
@@ -137,6 +143,12 @@ impl Distribution<Key> for StandardUniform {
     #[inline]
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Key {
         Key(rng.random())
+    }
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
