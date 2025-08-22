@@ -14,7 +14,7 @@ use std::{
 
 /// A block of 128 bits
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, PartialEq, Serialize, Deserialize, Pod, Zeroable)]
 pub struct Block([u8; 16]);
 
 impl Block {
@@ -211,11 +211,14 @@ impl Block {
 
 impl Display for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Block(")?;
-        for byte in self.0.iter() {
-            write!(f, "{byte:02x}")?;
-        }
-        f.write_str(")")?;
+        write!(f, "{:02x}", self.0[15])?;
+        Ok(())
+    }
+}
+
+impl Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02x}", self.0[15])?;
         Ok(())
     }
 }
@@ -285,6 +288,20 @@ impl<'a> TryFrom<&'a [u8]> for Block {
 
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         <[u8; 16]>::try_from(value).map(Self::from)
+    }
+}
+
+impl From<u128> for Block {
+    #[inline]
+    fn from(x: u128) -> Self {
+        Self::new(x.to_be_bytes())
+    }
+}
+
+impl From<Block> for u128 {
+    #[inline]
+    fn from(b: Block) -> Self {
+        u128::from_be_bytes(b.0)
     }
 }
 
