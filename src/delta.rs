@@ -1,7 +1,7 @@
 use crate::block::Block;
 
 use rand::{CryptoRng, Rng, distr::StandardUniform, prelude::Distribution};
-use std::ops::BitXor;
+use std::ops::{BitXor, BitXorAssign};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Delta(Block);
@@ -128,5 +128,12 @@ impl BitXor<&Delta> for &Block {
     #[inline]
     fn bitxor(self, rhs: &Delta) -> Block {
         self ^ rhs.0
+    }
+}
+
+impl BitXorAssign<Delta> for Block {
+    #[inline]
+    fn bitxor_assign(&mut self, rhs: Delta) {
+        *self ^= rhs.0;
     }
 }
