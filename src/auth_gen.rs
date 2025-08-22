@@ -1,8 +1,8 @@
-use core::{error, fmt};
+use core::fmt;
 use std::ops::Range;
 
 use crate::{
-    circuit::{AuthHalfGate, AuthHalfGateBatch}, delta, fpre::{AuthBitShare, AuthTripleShare}, DEFAULT_BATCH_SIZE
+    circuit::{AuthHalfGate, AuthHalfGateBatch}, fpre::{AuthBitShare, AuthTripleShare}, DEFAULT_BATCH_SIZE
 };
 use mpz_circuits::{
     Circuit, Gate, CircuitError
