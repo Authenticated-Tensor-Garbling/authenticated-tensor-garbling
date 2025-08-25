@@ -241,7 +241,6 @@ mod test {
 
         let input = BlockMatrix::random(4, 1);
         let missing = input.get_clear_value();
-        //let (missing, input) = prep_random_input(4);
 
         // Run generator to get tree and ciphertexts
         let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&input.as_view(), &0, cipher, delta);
