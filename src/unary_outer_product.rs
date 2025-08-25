@@ -1,9 +1,4 @@
-use crate::{aes::FixedKeyAes, block::Block, delta::Delta};
-
-/// Output structure for GGM tree generation
-pub struct GenGgmOutput {
-    seeds: Vec<Block>
-}
+use crate::{aes::FixedKeyAes, block::Block, delta::Delta, key_matrix::MatrixViewRef};
 
 /// Generates a complete GGM tree and returns both the tree and ciphertexts for the evaluator.
 /// 
@@ -17,7 +12,7 @@ pub struct GenGgmOutput {
 /// * `Vec<Block>` - Complete GGM tree as a flat vector
 /// * `Vec<(Block, Block)>` - Ciphertexts (even/odd sums) for each level
 pub fn gen_populate_seeds_mem_optimized(
-    x: &Vec<Block>,
+    x: &MatrixViewRef<Block>,
     _missing: &usize,
     cipher: &FixedKeyAes,
     delta: Delta,
@@ -100,7 +95,7 @@ pub fn gen_populate_seeds_mem_optimized(
 /// # Returns
 /// * `Vec<Block>` - Sparse GGM tree with missing nodes set to Block::default()
 pub fn eval_populate_seeds_mem_optimized(
-    x: &Vec<Block>,
+    x: &MatrixViewRef<Block>,
     levels: Vec<(Block, Block)>,
     _missing: &usize,
     cipher: &FixedKeyAes,
@@ -176,7 +171,7 @@ pub fn unary_outer_product() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{aes::FIXED_KEY_AES, block::Block};
+    use crate::{aes::FIXED_KEY_AES, block::Block, key_matrix::BlockMatrix};
     use rand;
 
     /// Generates random input for testing GGM tree operations.
@@ -187,6 +182,7 @@ mod test {
     /// # Returns
     /// * `usize` - Missing path index derived from LSBs of input blocks
     /// * `Vec<Block>` - Random input vector
+    #[allow(dead_code)]
     pub fn prep_random_input(n: usize) -> (usize, Vec<Block>) {
         let mut rng = rand::rng();
         
@@ -243,13 +239,15 @@ mod test {
         let cipher = &FIXED_KEY_AES;
         let delta = Delta::random(&mut rand::rng());
 
-        let (missing, input) = prep_random_input(4);
+        let input = BlockMatrix::random(4, 1);
+        let missing = input.get_clear_value();
+        //let (missing, input) = prep_random_input(4);
 
         // Run generator to get tree and ciphertexts
-        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&input, &0, cipher, delta);
+        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&input.as_view(), &0, cipher, delta);
 
         // Run evaluator to get tree
-        let eval_tree = eval_populate_seeds_mem_optimized(&input, levels, &0, cipher);
+        let eval_tree = eval_populate_seeds_mem_optimized(&input.as_view(), levels, &0, cipher);
         
         // Verify tree sizes match
         assert_eq!(gen_tree.len(), eval_tree.len(), "Tree sizes should match");

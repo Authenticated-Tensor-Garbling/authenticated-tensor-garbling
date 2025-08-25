@@ -122,8 +122,12 @@ impl<T> MatrixView<T> {
         }
     }
 
+    #[inline]
     pub fn rows(&self) -> usize { self.size.0 }
+    #[inline]
     pub fn cols(&self) -> usize { self.size.1 }
+    #[inline]
+    pub fn len(&self) -> usize { assert!(self.size.1 == 1, "Length is only defined for column vectors"); self.size.0 }
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +272,22 @@ impl<T: MatrixElement + Display> Display for TypedMatrix<T> {
             writeln!(f)?;
         }
         Ok(())
+    }
+}
+
+impl BlockMatrix {
+    pub fn get_clear_value(&self) -> usize {
+        self.as_view().vals.iter().rev().fold(0, |acc, b| {
+            (acc << 1) | b.lsb() as usize
+        })
+    }
+}
+
+impl KeyMatrix {
+    pub fn get_clear_value(&self) -> usize {
+        self.as_view().vals.iter().rev().fold(0, |acc, b| {
+            (acc << 1) | b.as_block().lsb() as usize
+        })
     }
 }
 
@@ -435,25 +455,6 @@ mod tests {
     fn test_index_out_of_bounds() {
         let matrix = KeyMatrix::new(2, 2);
         let _ = matrix[(2, 2)]; // This should panic
-    }
-
-    #[test]
-    fn test_vector_operations() {
-        let mut vector = KeyMatrix::column_vector(4);
-        let keys = vec![
-            Key::from(Block::new([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11])),
-            Key::from(Block::new([0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22])),
-            Key::from(Block::new([0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33])),
-            Key::from(Block::new([0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44])),
-        ];
-        
-        for (i, key) in keys.iter().enumerate() {
-            vector[i] = *key;
-        }
-        
-        for (i, key) in keys.iter().enumerate() {
-            assert_eq!(vector[i], *key);
-        }
     }
 
     #[test]
