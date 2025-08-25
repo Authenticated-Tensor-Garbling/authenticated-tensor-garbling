@@ -1,6 +1,6 @@
 use std::{fmt, ops::Range};
 use crate::{
-    circuit, delta::Delta, keys::Key, macs::Mac
+    delta::Delta, keys::Key, macs::Mac
 };
 
 use mpz_circuits::{
@@ -531,7 +531,7 @@ impl AuthEval {
     pub fn process<'a>(
         &mut self,
         circ: &'a Circuit,
-        delta: Delta,
+        _delta: Delta,
         half_gates: Vec<AuthHalfGate>,
     ) {
         let mut gid = 1;
