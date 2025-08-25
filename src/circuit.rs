@@ -28,6 +28,7 @@ pub struct AuthGarbledCircuit {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EncryptedGate(#[serde(with = "serde_arrays")] pub(crate) [Block; 2]);
 
+#[allow(dead_code)]
 impl EncryptedGate {
     pub(crate) fn new(inner: [Block; 2]) -> Self {
         Self(inner)

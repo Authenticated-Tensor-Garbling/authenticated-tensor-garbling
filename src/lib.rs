@@ -3,12 +3,16 @@ pub mod delta;
 pub mod keys;
 pub mod macs;
 
+pub mod key_matrix;
+
 pub mod circuit;
 pub mod aes;
 
 pub mod fpre;
 pub mod auth_gen;
 pub mod auth_eval;
+
+pub mod unary_outer_product;
 
 // Re-export circuits for convenience
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
@@ -17,7 +21,9 @@ pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, ev
 
 use crate::block::Block;
 
+#[allow(dead_code)]
 const CSP: usize = 128;
+#[allow(dead_code)]
 const SSP: usize = 40;
 
 const BYTES_PER_GATE: usize = 32;
@@ -26,19 +32,20 @@ const MAX_BATCH_SIZE: usize = 4 * KB;
 pub(crate) const DEFAULT_BATCH_SIZE: usize = MAX_BATCH_SIZE / BYTES_PER_GATE;
 
 /// Block for public 0 MAC.
+#[allow(dead_code)]
 pub(crate) const MAC_ZERO: Block = Block::new([
     146, 239, 91, 41, 80, 62, 197, 196, 204, 121, 176, 38, 171, 216, 63, 120,
 ]);
 /// Block for public 1 MAC.
+#[allow(dead_code)]
 pub(crate) const MAC_ONE: Block = Block::new([
     219, 104, 26, 50, 91, 130, 201, 178, 144, 31, 95, 155, 206, 113, 5, 103,
 ]);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
-    use crate::{aes::FIXED_KEY_AES, delta::Delta, fpre::AuthBitShare, keys::Key, auth_gen::AuthGen, auth_eval::AuthEval};
+    use crate::{delta::Delta, keys::Key, auth_gen::AuthGen, auth_eval::AuthEval};
     use ::aes::Aes128;
     use ::cipher::KeyInit;
     use ::cipher::BlockCipherEncrypt;
@@ -49,8 +56,7 @@ mod tests {
 
     use mpz_circuits::circuits::AES128;
 
-    use crate::auth_gen::AuthEncryptedGateBatchIter;
-    use crate::auth_eval::AuthEncryptedGateBatchConsumer;
+
     use crate::auth_gen::AuthGenOutput;
     use crate::auth_eval::AuthEvalOutput;
     
@@ -96,7 +102,7 @@ mod tests {
 
         // // Set up inputs
         let input_keys = (0..circuit.inputs().len())
-            .map(|_| rng.random())
+            .map(|_| Key::from(rng.random::<[u8; 16]>()))
             .collect::<Vec<Key>>();
 
         if fpre_gen.wire_shares.len() != total_number_shares {
