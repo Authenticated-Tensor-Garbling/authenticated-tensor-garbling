@@ -24,7 +24,7 @@ impl Delta {
     /// Generate a random block using the provided RNG
     #[inline]
     pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        Self::new(rng.random())
+        Self::new(Block::from(rng.random::<[u8; 16]>()))
     }
 
     #[inline]
@@ -52,7 +52,7 @@ impl Delta {
 impl Distribution<Delta> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Delta {
-        Delta::new(self.sample(rng))
+        Delta::new(Block::from(rng.random::<[u8; 16]>()))
     }
 }
 

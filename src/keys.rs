@@ -1,11 +1,11 @@
-use std::ops::Add;
+use std::ops::{Add, BitXor, BitXorAssign};
 use std::fmt::Display;
 
 use crate::block::Block;
 use crate::delta::Delta;
 use crate::macs::Mac;
 
-use rand::{CryptoRng, Rng, distr::StandardUniform, prelude::Distribution};
+use rand::{CryptoRng, Rng};
 
 /// MAC key.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -103,6 +103,20 @@ impl From<Block> for Key {
     }
 }
 
+impl From<[u8; 16]> for Key {
+    #[inline]
+    fn from(bytes: [u8; 16]) -> Self {
+        Self(Block::from(bytes))
+    }
+}
+
+impl From<Key> for [u8; 16] {
+    #[inline]
+    fn from(key: Key) -> Self {
+        key.0.into()
+    }
+}
+
 impl Add<Key> for Key {
     type Output = Self;
 
@@ -139,10 +153,53 @@ impl Add<&Key> for &Key {
     }
 }
 
-impl Distribution<Key> for StandardUniform {
+impl BitXorAssign for Key {
     #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Key {
-        Key(rng.random())
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.0 ^= rhs.0;
+    }
+}
+
+impl BitXorAssign<&Key> for Key {
+    #[inline]
+    fn bitxor_assign(&mut self, rhs: &Self) {
+        self.0 ^= &rhs.0;
+    }
+}
+
+impl BitXor for Key {
+    type Output = Self;
+
+    #[inline]
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+
+impl BitXor<&Key> for Key {
+    type Output = Self;
+
+    #[inline]
+    fn bitxor(self, rhs: &Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+
+impl BitXor<Key> for &Key {
+    type Output = Key;
+
+    #[inline]
+    fn bitxor(self, rhs: Key) -> Self::Output {
+        Key(self.0 ^ rhs.0)
+    }
+}
+
+impl BitXor<&Key> for &Key {
+    type Output = Key;
+
+    #[inline]
+    fn bitxor(self, rhs: &Key) -> Self::Output {
+        Key(self.0 ^ rhs.0)
     }
 }
 

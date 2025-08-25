@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use core::ops::{BitAnd, BitAndAssign, BitXor, BitXorAssign};
 use hybrid_array::{Array, typenum::consts::U16};
 use itybity::{BitIterable, BitLength, FromBitIterator, GetBit, Lsb0, Msb0};
-use rand::{CryptoRng, Rng, distr::StandardUniform, prelude::Distribution};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
@@ -466,12 +466,6 @@ impl BitAndAssign<&Block> for Block {
         self.0[2] &= rhs.0[2];
         self.0[1] &= rhs.0[1];
         self.0[0] &= rhs.0[0];
-    }
-}
-
-impl Distribution<Block> for StandardUniform {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        Block::new(rng.random())
     }
 }
 
