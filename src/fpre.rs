@@ -3,7 +3,6 @@ use std::iter::zip;
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
-use rand::rngs::StdRng;
 
 use crate::{delta::Delta, keys::Key, macs::Mac};
 
@@ -20,17 +19,17 @@ pub enum FpreError {
     InvalidTripleCount(usize, usize),
 }
 
-static SELECT_MASK: [Block; 2] = [Block::ZERO, Block::ONES];
+static _SELECT_MASK: [Block; 2] = [Block::ZERO, Block::ONES];
 
 // insecure hash function
-fn h2d(a: Block, b: Block) -> Block {
+fn _h2d(a: Block, b: Block) -> Block {
     let mut d = [a, a ^ b];
     d[0] = d[0] ^ d[1]; 
     return d[0] ^ b;
 }
 
 // insecure hash function
-fn h2(a: Block, b: Block) -> Block {
+fn _h2(a: Block, b: Block) -> Block {
     let mut d = [a, b];
     d[0] = d[0] ^ d[1];
     d[0] = d[0] ^ a;
@@ -116,7 +115,7 @@ impl Add<&AuthBitShare> for &AuthBitShare {
 
 /// Builds one `AuthBitShare` from a bit and delta, ensuring `key.lsb()==false`.
 fn build_share(rng: &mut ChaCha12Rng, bit: bool, delta: &Delta) -> AuthBitShare {
-    let key: Key = rng.random();
+    let key: Key = Key::from(rng.random::<[u8; 16]>());
     let mac: Mac = key.auth(bit, delta);
     AuthBitShare { key, mac, value: bit }
 }
@@ -408,7 +407,7 @@ impl FpreGen {
         println!("leaky triples: {:?}", self.leaky_shares[42]);
     }
 
-    fn triple_check_1(&mut self) -> (Vec<Block>, Vec<Block>) {
+    fn _triple_check_1(&mut self) -> (Vec<Block>, Vec<Block>) {
         let length = self.leaky_shares.len();
         let mut c = vec![Block::ZERO; length];
         let mut g = vec![Block::ZERO; length];
@@ -416,29 +415,29 @@ impl FpreGen {
         for i in 0..length {
             c[i] = self.leaky_shares[i].y.mac.as_block().clone()
                 ^ self.leaky_shares[i].y.key.as_block().clone()
-                ^ (SELECT_MASK[self.leaky_shares[i].y.bit() as usize] & self.delta_a.as_block());
+                ^ (_SELECT_MASK[self.leaky_shares[i].y.bit() as usize] & self.delta_a.as_block());
 
-            g[i] = c[i] ^ h2d(self.leaky_shares[i].x.key.into(), self.delta_a.into_inner());
+            g[i] = c[i] ^ _h2d(self.leaky_shares[i].x.key.into(), self.delta_a.into_inner());
         }
         (c, g)
     }
 
-    fn triple_check_2(&mut self, c: Vec<Block>, g: &mut Vec<Block>, gr: Vec<Block>) -> Vec<bool> {
+    fn _triple_check_2(&mut self, c: Vec<Block>, g: &mut Vec<Block>, gr: Vec<Block>) -> Vec<bool> {
         let length = self.leaky_shares.len();
         let mut d = vec![false; length];
 
         for i in 0..length {
-            let mut s = h2(self.leaky_shares[i].x.mac.as_block().clone(), self.leaky_shares[i].x.key.as_block().clone());
+            let mut s = _h2(self.leaky_shares[i].x.mac.as_block().clone(), self.leaky_shares[i].x.key.as_block().clone());
             s = s ^ self.leaky_shares[i].z.mac.as_block().clone() ^ self.leaky_shares[i].z.key.as_block().clone();
-            s = s ^ SELECT_MASK[self.leaky_shares[i].x.bit() as usize] & (gr[i] ^ c[i]);
-            g[i] = s ^ SELECT_MASK[self.leaky_shares[i].z.bit() as usize] & self.delta_a.as_block();
+            s = s ^ _SELECT_MASK[self.leaky_shares[i].x.bit() as usize] & (gr[i] ^ c[i]);
+            g[i] = s ^ _SELECT_MASK[self.leaky_shares[i].z.bit() as usize] & self.delta_a.as_block();
             d[i] = g[i].lsb();
         }
 
         return d;
     }
 
-    fn triple_check_3(&mut self, g: &mut Vec<Block>, mut d: Vec<bool>, dr: Vec<bool>) {
+    fn _triple_check_3(&mut self, g: &mut Vec<Block>, mut d: Vec<bool>, dr: Vec<bool>) {
         let length = self.leaky_shares.len();
         for i in 0..length {
             d[i] = d[i] ^ dr[i];
@@ -449,7 +448,7 @@ impl FpreGen {
         }
     }
 
-    fn triple_combine_1(
+    fn _triple_combine_1(
         self: &mut Self,
         seed: u64,
         bucket_size: usize,
@@ -485,7 +484,7 @@ impl FpreGen {
         data
     }
 
-    fn triple_combine_2(
+    fn _triple_combine_2(
         self: &mut Self,
         _seed: u64,
         bucket_size: usize,
@@ -575,7 +574,7 @@ impl FpreEval {
         println!("leaky triples: {:?}", self.leaky_shares[0]);
     }
 
-    fn triple_check_1(&mut self) -> (Vec<Block>, Vec<Block>) {
+    fn _triple_check_1(&mut self) -> (Vec<Block>, Vec<Block>) {
         let length = self.leaky_shares.len();
         let mut c = vec![Block::ZERO; length];
         let mut g = vec![Block::ZERO; length];
@@ -583,22 +582,22 @@ impl FpreEval {
         for i in 0..length {
             c[i] = self.leaky_shares[i].y.mac.as_block().clone()
                 ^ self.leaky_shares[i].y.key.as_block().clone()
-                ^ (SELECT_MASK[self.leaky_shares[i].y.bit() as usize] & self.delta_b.as_block());
+                ^ (_SELECT_MASK[self.leaky_shares[i].y.bit() as usize] & self.delta_b.as_block());
 
-            g[i] = c[i] ^ h2d(self.leaky_shares[i].x.key.into(), self.delta_b.into_inner());
+            g[i] = c[i] ^ _h2d(self.leaky_shares[i].x.key.into(), self.delta_b.into_inner());
         }
         (c, g)
     }
 
-    fn triple_check_2(&mut self, c: Vec<Block>, g: &mut Vec<Block>, gr: Vec<Block>) -> Vec<bool> {
+    fn _triple_check_2(&mut self, c: Vec<Block>, g: &mut Vec<Block>, gr: Vec<Block>) -> Vec<bool> {
         let length = self.leaky_shares.len();
         let mut d = vec![false; length];
 
         for i in 0..length {
-            let mut s = h2(self.leaky_shares[i].x.mac.as_block().clone(), self.leaky_shares[i].x.key.as_block().clone());
+            let mut s = _h2(self.leaky_shares[i].x.mac.as_block().clone(), self.leaky_shares[i].x.key.as_block().clone());
             s = s ^ self.leaky_shares[i].z.mac.as_block().clone() ^ self.leaky_shares[i].z.key.as_block().clone();
-            s = s ^ SELECT_MASK[self.leaky_shares[i].x.bit() as usize] & (gr[i] ^ c[i]);
-            g[i] = s ^ SELECT_MASK[self.leaky_shares[i].z.bit() as usize] & self.delta_b.as_block();
+            s = s ^ _SELECT_MASK[self.leaky_shares[i].x.bit() as usize] & (gr[i] ^ c[i]);
+            g[i] = s ^ _SELECT_MASK[self.leaky_shares[i].z.bit() as usize] & self.delta_b.as_block();
             d[i] = g[i].lsb();
         }
 
@@ -606,7 +605,7 @@ impl FpreEval {
 
     }
 
-    fn triple_check_3(&mut self, g: &mut Vec<Block>, mut d: Vec<bool>, dr: Vec<bool>) {
+    fn _triple_check_3(&mut self, g: &mut Vec<Block>, mut d: Vec<bool>, dr: Vec<bool>) {
         let length = self.leaky_shares.len();
         for i in 0..length {
             d[i] = d[i] ^ dr[i];
@@ -617,7 +616,7 @@ impl FpreEval {
         }
     }
 
-    fn triple_combine_1(
+    fn _triple_combine_1(
         self: &mut Self,
         seed: u64,
         bucket_size: usize,
@@ -653,7 +652,7 @@ impl FpreEval {
         data
     }
 
-    fn triple_combine_2(
+    fn _triple_combine_2(
         self: &mut Self,
         _seed: u64,
         bucket_size: usize,
