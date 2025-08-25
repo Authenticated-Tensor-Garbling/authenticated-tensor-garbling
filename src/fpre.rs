@@ -808,6 +808,7 @@ fn _verify_fpre(fpre_gen: FpreGen, fpre_eval: FpreEval){
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
 
     // #[test]
     // fn test_fpre(){
