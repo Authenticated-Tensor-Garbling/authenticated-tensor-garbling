@@ -24,6 +24,7 @@ impl Delta {
     /// Generate a random block using the provided RNG
     #[inline]
     pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+        // Self::new() sets the LSB to 1
         Self::new(Block::from(rng.random::<[u8; 16]>()))
     }
 
