@@ -13,7 +13,6 @@ use crate::{aes::FixedKeyAes, block::Block, delta::Delta, key_matrix::MatrixView
 /// * `Vec<(Block, Block)>` - Ciphertexts (even/odd sums) for each level
 pub fn gen_populate_seeds_mem_optimized(
     x: &MatrixViewRef<Block>,
-    _missing: &usize,
     cipher: &FixedKeyAes,
     delta: Delta,
 ) -> (Vec<Block>, Vec<(Block, Block)>) {
@@ -163,9 +162,72 @@ pub fn eval_populate_seeds_mem_optimized(
 /// and T(f) is the truth table of f. The resulting matrix is l x m.
 /// 
 /// This function is a placeholder for future implementation.
-pub fn unary_outer_product() {
-    // TODO: Implement unary outer product computation
-    unimplemented!("Unary outer product computation not yet implemented");
+pub fn gen_unary_outer_product(
+    // f: &Table,
+    seeds: &Vec<Block>,
+    y: &MatrixViewRef<Block>,
+    cipher: &FixedKeyAes,
+) -> Vec<Block> {
+
+    println!("seeds length: {:?}", seeds.len());
+    println!("y length: {:?}", y.len());
+
+    let m = y.len();
+
+    let mut out = Vec::new();
+
+    // For each share (B, B+ b∂)
+    // G sends the sum (XOR_i A_i) + B), which allows E to obtain A_{x + gamma} + b∂
+    // Expand the 2^n leaf seeds into 2^n by 
+    for j in 0..m {
+        let mut row: Block = Block::default();
+        for i in 0..seeds.len() {
+            let tweak = (seeds.len() * j + i) as u128;
+            print!("tweak: {:?}; seeds[i]: {:?};", tweak, seeds[i]);
+            row ^= cipher.tccr(Block::from(tweak), seeds[i]);
+            println!("X: {:?} \t", row);
+            //TODO add the function output here
+        }
+        row ^= y[j];
+        println!("y[j]: {:?}; row: {:?}", y[j], row);
+        out.push(row);
+    }
+
+    out
+
+}
+
+pub fn eval_unary_outer_product(
+    // f: &Table,
+    seeds: &Vec<Block>,
+    y: &MatrixViewRef<Block>,
+    cipher: &FixedKeyAes,
+    missing: usize,
+    gen_cts: &Vec<Block>,
+) -> Vec<Block> {
+    let m = y.len();
+
+    let mut output = Vec::new();
+
+    for j in 0..m {
+        let mut row = Block::default();
+        for i in 0..seeds.len() {
+            if i != missing {
+                let tweak = (seeds.len() * j + i) as u128;
+                print!("tweak: {:?}; seeds[i]: {:?};", tweak, seeds[i]);
+                row ^= cipher.tccr(Block::from(tweak), seeds[i]);
+                println!("X: {:?} \t", row);
+            } else{ 
+                println!("missing: {:?}; i: {:?}", missing, i);
+            }
+        }
+        row ^= gen_cts[j] ^ y[j];
+        println!("gen_cts[j]: {:?}; row: {:?}", gen_cts[j], row);
+        println!("--------------------------------");
+        output.push(row);
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -219,6 +281,8 @@ mod test {
         idx == (place - 1)
     }
 
+
+
     #[test]
     fn test_path_helper() {
         let missing: usize = 0b0000;
@@ -243,7 +307,7 @@ mod test {
         let missing = input.get_clear_value();
 
         // Run generator to get tree and ciphertexts
-        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&input.as_view(), &0, cipher, delta);
+        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&input.as_view(), cipher, delta);
 
         // Run evaluator to get tree
         let eval_tree = eval_populate_seeds_mem_optimized(&input.as_view(), levels, &0, cipher);
@@ -278,5 +342,82 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_unary_outer_product() {
+        println!("--------------------------------");
+        println!("test_unary_outer_product");
+        println!("--------------------------------");
+        let cipher = &FIXED_KEY_AES;
+        let delta = Delta::random(&mut rand::rng());
+
+        let x = BlockMatrix::random(4, 1);
+        let y = BlockMatrix::random(3, 1);
+        let missing = x.get_clear_value();
+
+        println!("Input x length: {:?}", x.rows());
+        println!("Input y length: {:?}", y.rows());
+        println!("Missing path: {:?}", missing);
+
+        // === GENERATOR SIDE (should NOT know missing) ===
+        println!("--------------------------------");
+        println!("Generator: Computing GGM tree and seeds");
+        
+        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&x.as_view(), cipher, delta);
+        let gen_seeds = &gen_tree[gen_tree.len() - (1 << x.rows())..gen_tree.len()].to_vec();
+        
+        println!("Generator seeds length: {:?}", gen_seeds.len());
+        
+        // Generator computes the unary outer product WITHOUT knowing missing
+        let gen_cts = gen_unary_outer_product(gen_seeds, &y.as_view(), cipher);
+        
+        println!("Generator ciphertexts: {:?}", gen_cts);
+
+        // === EVALUATOR SIDE (knows missing) ===
+        println!("--------------------------------");
+        println!("Evaluator: Computing sparse GGM tree");
+        
+        let eval_tree = eval_populate_seeds_mem_optimized(&x.as_view(), levels, &missing, cipher);
+        let eval_seeds = &eval_tree[(eval_tree.len() - (1 << x.rows()))..eval_tree.len()].to_vec();
+        
+        println!("Evaluator seeds length: {:?}", eval_seeds.len());
+        println!("Missing index: {:?}", missing);
+        
+        // Evaluator computes the unary outer product WITH missing information
+        let eval_result = eval_unary_outer_product(eval_seeds, &y.as_view(), cipher, missing, &gen_cts);
+        
+        println!("Evaluator result: {:?}", eval_result);
+
+        // === VERIFICATION (using oracle that knows everything) ===
+        println!("--------------------------------");
+        println!("Verification: Computing expected result");
+        
+        // Compute what the missing value should be using the generator's seeds
+        // This is only for verification - in real protocol, generator doesn't do this
+        let mut expected_missing_values = Vec::new();
+        for j in 0..y.rows() {
+            let tweak = (gen_seeds.len() * j + missing) as u128;
+            let missing_contribution = cipher.tccr(Block::from(tweak), gen_seeds[missing]);
+            expected_missing_values.push(missing_contribution);
+        }
+        
+        println!("Expected missing values: {:?}", expected_missing_values);
+
+        // === ASSERTIONS ===
+        println!("--------------------------------");
+        println!("Checking correctness");
+        
+        assert_eq!(eval_result.len(), expected_missing_values.len(), 
+                   "Result length should match expected length");
+        
+        for (i, (result, expected)) in eval_result.iter().zip(expected_missing_values.iter()).enumerate() {
+            println!("Row {}: result={:?}, expected={:?}", i, result, expected);
+            assert_eq!(result, expected, 
+                       "Row {}: Evaluator result should match expected missing value", i);
+        }
+        
+        println!("--------------------------------");
+        println!("Test passed: Unary outer product is correct!");
     }
 }
