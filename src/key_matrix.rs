@@ -167,6 +167,23 @@ impl<T: MatrixElement> TypedMatrix<T> {
         }
     }
 
+    pub fn random_zeros(rows: usize, cols: usize) -> Self {
+        let mut elements = Vec::<T>::new();
+
+        for _ in 0..(rows*cols) {
+            let mut bytes = rand::random::<[u8; 16]>();
+            bytes[0] &= 0xFE; // Clear last bit of last byte
+            let label = T::from(bytes);
+            elements.push(label);
+        }
+
+        Self {
+            rows,
+            cols,
+            elements,
+        }
+    }
+
     pub fn constant(rows: usize, cols: usize, val: T) -> Self {
         Self {
             rows,
@@ -277,6 +294,11 @@ impl<T: MatrixElement + Display> Display for TypedMatrix<T> {
 
 impl BlockMatrix {
     pub fn get_clear_value(&self) -> usize {
+        // Endianness note (little-endian vectors):
+        // We interpret index 0 as the least-significant bit (LSB) position of the vector,
+        // and index rows-1 as the most-significant bit (MSB). The fold below iterates in
+        // reverse to build the integer from MSB→LSB. If you change the vector endianness,
+        // update this to match the new convention.
         self.as_view().vals.iter().rev().fold(0, |acc, b| {
             (acc << 1) | b.lsb() as usize
         })

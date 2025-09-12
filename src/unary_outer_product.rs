@@ -1,4 +1,4 @@
-use crate::{aes::FixedKeyAes, block::Block, delta::Delta, key_matrix::MatrixViewRef};
+use crate::{aes::FixedKeyAes, block::Block, delta::Delta, key_matrix::MatrixViewRef, key_matrix::MatrixViewMut};
 
 /// Generates a complete GGM tree and returns both the tree and ciphertexts for the evaluator.
 /// 
@@ -24,9 +24,11 @@ pub fn gen_populate_seeds_mem_optimized(
     // Seed buffer for level-by-level computation
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
-    // Set the base case (Level 0)
-    // If LSB of x[n-1] is 1, then S_1 = x[n-1] and we compute S_0 = x[n-1] ^ delta
-    // If LSB of x[n-1] is 0, then S_0 = x[n-1] and we compute S_1 = x[n-1] ^ delta
+    // Endianness note (little-endian vectors):
+    // We treat index 0 as LSB and index n-1 as MSB of x. The tree is built from the
+    // most significant position downward, so we look at x[n-1] first.
+    // Base case (Level 0): If LSB of x[n-1] is 1, S_1 = x[n-1], S_0 = x[n-1] ^ delta;
+    // otherwise S_0 = x[n-1], S_1 = x[n-1] ^ delta.
     if x[n-1].lsb() {
         seeds[0] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1]);
         seeds[1] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1] ^ delta);
@@ -44,6 +46,8 @@ pub fn gen_populate_seeds_mem_optimized(
 
     // Iterate through all other levels
     for i in 1..n {
+        // Endianness note (little-endian vectors):
+        // Level i consumes bit from x[n-i-1], moving MSB→LSB across iterations.
         let mut seed = Block::from(x[n-i-1]);
 
         if !x[n-i-1].lsb() { 
@@ -104,9 +108,12 @@ pub fn eval_populate_seeds_mem_optimized(
     let n: usize = x.len();
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
+    // Endianness note (little-endian vectors):
+    // Index 0 is LSB, index n-1 is MSB. We start from x[n-1] as the first branching bit.
     // Get the one seed that evaluator knows initially
     seeds[!x[n-1].lsb() as usize] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1]);
     
+    // Missing path is constructed MSB→LSB by shifting in x[n-i-1].lsb() at each level.
     let mut missing = x[n-1].lsb() as usize;
 
     // Add Level 0 seeds to the tree
@@ -135,6 +142,7 @@ pub fn eval_populate_seeds_mem_optimized(
             }
         }
 
+        // Endianness note (little-endian vectors): consume bit at position n-i-1.
         let bit = x[n-i-1].lsb();
         missing = (missing << 1) | bit as usize;
         
@@ -166,34 +174,39 @@ pub fn gen_unary_outer_product(
     // f: &Table,
     seeds: &Vec<Block>,
     y: &MatrixViewRef<Block>,
+    out: &mut MatrixViewMut<Block>,
     cipher: &FixedKeyAes,
 ) -> Vec<Block> {
 
-    println!("seeds length: {:?}", seeds.len());
-    println!("y length: {:?}", y.len());
-
     let m = y.len();
 
-    let mut out = Vec::new();
+    let mut gen_cts: Vec<Block> = Vec::new();
 
     // For each share (B, B+ b∂)
     // G sends the sum (XOR_i A_i) + B), which allows E to obtain A_{x + gamma} + b∂
     // Expand the 2^n leaf seeds into 2^n by 
     for j in 0..m {
+        // Endianness note (little-endian y): index 0 is LSB of y, index m-1 is MSB.
         let mut row: Block = Block::default();
         for i in 0..seeds.len() {
             let tweak = (seeds.len() * j + i) as u128;
-            print!("tweak: {:?}; seeds[i]: {:?};", tweak, seeds[i]);
-            row ^= cipher.tccr(Block::from(tweak), seeds[i]);
-            println!("X: {:?} \t", row);
-            //TODO add the function output here
+            let s = cipher.tccr(Block::from(tweak), seeds[i]);
+            row ^= s;
+
+            // let i = f(i) is just i in usize
+            // Endianness note (little-endian x encoded in seed index i):
+            // bit k of i corresponds to the k-th least significant bit.
+            for k in 0..out.rows() {
+                if ((i >> k) & 1) == 1 {
+                    out[(k, j)] ^= s;
+                }
+            }
         }
         row ^= y[j];
-        println!("y[j]: {:?}; row: {:?}", y[j], row);
-        out.push(row);
+        gen_cts.push(row);
     }
 
-    out
+    gen_cts
 
 }
 
@@ -201,33 +214,44 @@ pub fn eval_unary_outer_product(
     // f: &Table,
     seeds: &Vec<Block>,
     y: &MatrixViewRef<Block>,
+    out: &mut MatrixViewMut<Block>,
     cipher: &FixedKeyAes,
     missing: usize,
     gen_cts: &Vec<Block>,
 ) -> Vec<Block> {
     let m = y.len();
 
-    let mut output = Vec::new();
+    let mut eval_cts: Vec<Block> = Vec::new();
 
     for j in 0..m {
-        let mut row = Block::default();
+        // Endianness note (little-endian y): index 0 is LSB of y, index m-1 is MSB.
+        let mut eval_ct = Block::default();
         for i in 0..seeds.len() {
             if i != missing {
                 let tweak = (seeds.len() * j + i) as u128;
-                print!("tweak: {:?}; seeds[i]: {:?};", tweak, seeds[i]);
-                row ^= cipher.tccr(Block::from(tweak), seeds[i]);
-                println!("X: {:?} \t", row);
-            } else{ 
-                println!("missing: {:?}; i: {:?}", missing, i);
+                let s = cipher.tccr(Block::from(tweak), seeds[i]);
+                eval_ct ^= s;
+                // Endianness note (little-endian x encoded in seed index i):
+                // bit k of i corresponds to the k-th least significant bit.
+                for k in 0..out.rows() {
+                    if ((i >> k) & 1) == 1 {
+                        out[(k, j)] ^= s;
+                    }
+                }
+            }   
+        }
+        eval_ct ^= gen_cts[j] ^ y[j];
+        eval_cts.push(eval_ct);
+        // Endianness note (little-endian x): distribute eval_ct to rows where missing has bit k set.
+        for k in 0..out.rows() {
+            if ((missing >> k) & 1) == 1 {
+                out[(k, j)] ^= eval_ct;
             }
         }
-        row ^= gen_cts[j] ^ y[j];
-        println!("gen_cts[j]: {:?}; row: {:?}", gen_cts[j], row);
         println!("--------------------------------");
-        output.push(row);
     }
 
-    output
+    eval_cts
 }
 
 #[cfg(test)]
@@ -346,78 +370,156 @@ mod test {
 
     #[test]
     fn test_unary_outer_product() {
-        println!("--------------------------------");
-        println!("test_unary_outer_product");
-        println!("--------------------------------");
+
+        //======================================================
+        //                      SETUP
+        //======================================================
+        // instantiate global cipher and value
         let cipher = &FIXED_KEY_AES;
         let delta = Delta::random(&mut rand::rng());
 
-        let x = BlockMatrix::random(4, 1);
-        let y = BlockMatrix::random(3, 1);
-        let missing = x.get_clear_value();
-
-        println!("Input x length: {:?}", x.rows());
-        println!("Input y length: {:?}", y.rows());
-        println!("Missing path: {:?}", missing);
-
-        // === GENERATOR SIDE (should NOT know missing) ===
-        println!("--------------------------------");
-        println!("Generator: Computing GGM tree and seeds");
+        // instantiate test sizes
+        let n = 4; // x is nx1
+        let m = 2; // y is mx1
+        let l = 3; // out is lxm
         
-        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&x.as_view(), cipher, delta);
-        let gen_seeds = &gen_tree[gen_tree.len() - (1 << x.rows())..gen_tree.len()].to_vec();
+        // instantiate clear values
+        let clear_y = rand::random_range(0..(1 << m));
+        let clear_x = rand::random_range(0..(1 << n));
         
-        println!("Generator seeds length: {:?}", gen_seeds.len());
-        
-        // Generator computes the unary outer product WITHOUT knowing missing
-        let gen_cts = gen_unary_outer_product(gen_seeds, &y.as_view(), cipher);
-        
-        println!("Generator ciphertexts: {:?}", gen_cts);
-
-        // === EVALUATOR SIDE (knows missing) ===
-        println!("--------------------------------");
-        println!("Evaluator: Computing sparse GGM tree");
-        
-        let eval_tree = eval_populate_seeds_mem_optimized(&x.as_view(), levels, &missing, cipher);
-        let eval_seeds = &eval_tree[(eval_tree.len() - (1 << x.rows()))..eval_tree.len()].to_vec();
-        
-        println!("Evaluator seeds length: {:?}", eval_seeds.len());
-        println!("Missing index: {:?}", missing);
-        
-        // Evaluator computes the unary outer product WITH missing information
-        let eval_result = eval_unary_outer_product(eval_seeds, &y.as_view(), cipher, missing, &gen_cts);
-        
-        println!("Evaluator result: {:?}", eval_result);
-
-        // === VERIFICATION (using oracle that knows everything) ===
-        println!("--------------------------------");
-        println!("Verification: Computing expected result");
-        
-        // Compute what the missing value should be using the generator's seeds
-        // This is only for verification - in real protocol, generator doesn't do this
-        let mut expected_missing_values = Vec::new();
-        for j in 0..y.rows() {
-            let tweak = (gen_seeds.len() * j + missing) as u128;
-            let missing_contribution = cipher.tccr(Block::from(tweak), gen_seeds[missing]);
-            expected_missing_values.push(missing_contribution);
+        // instantiate gen_x and eval_x, gen_y and eval_y:
+        // gen_x is a vector of random labels, LSBs 0 for testing
+        // eval_x is gen_x with the indices corresponding to 1 having the delta offset
+        // TODO push to a helper function
+        let gen_x = BlockMatrix::random_zeros(n, 1);
+        debug_assert!((0..n).all(|i| gen_x[i].lsb() == false), "gen_x LSBs must be 0");
+        let mut eval_x = BlockMatrix::constant(n, 1, Block::default());
+        for i in 0..n {
+            eval_x[i] = if ((clear_x >> i) & 1) == 0 {
+                gen_x[i]
+            } else {
+                gen_x[i] ^ delta
+            };
         }
-        
-        println!("Expected missing values: {:?}", expected_missing_values);
+        let gen_y = BlockMatrix::random_zeros(m, 1);
+        let mut eval_y = BlockMatrix::constant(m, 1, Block::default());
+        for i in 0..m {
+            eval_y[i] = if ((clear_y >> i) & 1) == 0 {
+                gen_y[i]
+            } else {
+                gen_y[i] ^ delta
+            };
+        }
 
-        // === ASSERTIONS ===
-        println!("--------------------------------");
-        println!("Checking correctness");
+        // sanity check for endianness
+        assert_eq!(clear_x, eval_x.get_clear_value());
         
-        assert_eq!(eval_result.len(), expected_missing_values.len(), 
-                   "Result length should match expected length");
+        // instantiate output matrices
+        let mut gen_out = BlockMatrix::new(l, m);
+        let mut eval_out = BlockMatrix::new(l, m);
+
+
+
+        //======================================================
+        //                  PROTOCOL
+        //======================================================
+
+        // generator: generate the GGM tree and seeds
+        let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&gen_x.as_view(), cipher, delta);
+        let gen_seeds = &gen_tree[gen_tree.len() - (1 << gen_x.rows())..gen_tree.len()].to_vec();
         
-        for (i, (result, expected)) in eval_result.iter().zip(expected_missing_values.iter()).enumerate() {
-            println!("Row {}: result={:?}, expected={:?}", i, result, expected);
+        // generator: get expanded ciphertexts XOR with Yj
+        let gen_cts = gen_unary_outer_product(gen_seeds, &gen_y.as_view(), &mut gen_out.as_view_mut(), cipher);
+
+        // evaluator: get the GGM tree, with the missing path set to Block::default()
+        let eval_tree = eval_populate_seeds_mem_optimized(&eval_x.as_view(), levels, &clear_x, cipher);
+        let eval_seeds = &eval_tree[(eval_tree.len() - (1 << eval_x.rows()))..eval_tree.len()].to_vec();
+        
+        // evaluator: get expanded ciphertexts XOR with Yj xor yjDelta and gen_cts
+        let eval_cts = eval_unary_outer_product(eval_seeds, &eval_y.as_view(), &mut eval_out.as_view_mut(), cipher, clear_x, &gen_cts);
+
+
+        //======================================================
+        //                GGM TREE CHECK
+        //======================================================
+        
+        // Refactored to above test
+
+
+
+        //======================================================
+        //                CIPHERTEXT CHECK
+        //======================================================
+
+        // Check: gen_cts[j] XOR eval_cts[j] equals expanded missing-seed
+        // contribution, additionally XOR delta when y[j].lsb() == 1.
+        for (j,  eval_ct) in eval_cts.iter().enumerate() {
+            let tweak = (gen_seeds.len() * j + clear_x) as u128;
+            let expanded_missing = cipher.tccr(Block::from(tweak), gen_seeds[clear_x]);
+            let y_diff = gen_y[j] ^ eval_y[j]; // equals delta if eval_y[j].lsb() is 1, else 0
+            assert_eq!(*eval_ct, expanded_missing ^ y_diff);
+        }
+
+        // check that the eval_cts match the expected missing values
+        let mut expected_missing_values = Vec::new();
+        for j in 0..m {
+            let tweak = (gen_seeds.len() * j + clear_x) as u128;
+            let missing_contribution = cipher.tccr(Block::from(tweak), gen_seeds[clear_x]);
+            // The evaluator's result should be the missing contribution XORed with the difference in y values
+            let y_diff = gen_y[j] ^ eval_y[j];
+            expected_missing_values.push(missing_contribution ^ y_diff);
+        }
+
+        for (i, (result, expected)) in eval_cts.iter().zip(expected_missing_values.iter()).enumerate() {
             assert_eq!(result, expected, 
                        "Row {}: Evaluator result should match expected missing value", i);
         }
         
-        println!("--------------------------------");
-        println!("Test passed: Unary outer product is correct!");
+
+
+        //======================================================
+        //                OUTPUT MATRIX CHECK
+        //======================================================
+
+        // The protocol computes [|T(f) * (U(x + c) & y) |] where:
+        // - T(f) is the truth table of function f (currently identity)
+        // - U(x + c) is the unary representation of x + c
+        // - & is the vector outer product
+        // - c is the missing path (color)
+        
+        // Compute the expected result: x OUTER y (outer product of x and y)
+        // But truncate x to l bits (MSBs of x should be truncated to be l bits long)
+        // For each bit position i in the first l bits of x and each bit position j in y:
+        // result[i][j] = x[i] & y[j]
+        let mut expected_result = vec![vec![false; m]; l];
+        for i in 0..l {
+            for j in 0..m {
+                let x_bit = ((clear_x >> i) & 1) == 1;
+                let y_bit = ((clear_y >> j) & 1) == 1;
+                expected_result[i][j] = x_bit & y_bit;
+            }
+        }
+        
+        // Now verify that the output matrices follow the expected pattern:
+        // - Where expected_result[k][j] = 0: gen_out[k][j] should equal eval_out[k][j]
+        // - Where expected_result[k][j] = 1: gen_out[k][j] should equal eval_out[k][j] ^ delta
+        for k in 0..l {
+            for j in 0..m {
+                let gen_val = gen_out[(k, j)];
+                let eval_val = eval_out[(k, j)];
+                let expected_bit = expected_result[k][j];
+                
+                if expected_bit {
+                    // Where expected_result = 1, they should differ by delta
+                    let expected_eval = gen_val ^ delta;
+                    assert_eq!(eval_val, expected_eval, 
+                               "At position ({},{}): eval_out should equal gen_out ^ delta when expected=1", k, j);
+                } else {
+                    // Where expected_result = 0, they should be identical
+                    assert_eq!(gen_val, eval_val, 
+                               "At position ({},{}): gen_out should equal eval_out when expected=0", k, j);
+                }
+            }
+        }
     }
 }
