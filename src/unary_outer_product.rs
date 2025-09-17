@@ -7,38 +7,83 @@ use crate::{
     key_matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef},
 };
 
-// pub fn gen_half_outer_product(
-//     x: &MatrixViewRef<Block>,
-//     y: &MatrixViewRef<Block>,
-//     out: &mut MatrixViewMut<Block>,
-//     cipher: &FixedKeyAes,
-// ) -> Vec<Block> {
-//     assert!(x.cols() == 1);
-//     assert!(y.cols() == 1);
+pub fn gen_chunked_half_outer_product(
+    x: &MatrixViewRef<Block>,
+    y: &MatrixViewRef<Block>,
+    out: &mut MatrixViewMut<Block>,
+    delta: Delta,
+    cipher: &FixedKeyAes,
+) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) { // awful return type
+    assert!(x.cols() == 1);
+    assert!(y.cols() == 1);
 
-//     let n = x.rows();
-//     let m = y.rows();
+    let n = x.rows();
+    let m = y.rows();
 
-//     assert!(out.rows() == n);
-//     assert!(out.cols() == m);
+    assert!(out.rows() == n);
+    assert!(out.cols() == m);
 
-//     let chunking_factor = 6;
+    let chunking_factor = 6;
 
-//     for s in 0..((n + chunking_factor-1)/chunking_factor) {
-//         let slice_size: usize;
-//         if chunking_factor *(s+1) > n {slice_size = n % chunking_factor;} else {slice_size = chunking_factor;}
-//         let mut slice = BlockMatrix::new(slice_size, 1);
-//         for i in 0..slice_size {
-//             slice[i] = x[i + s * chunking_factor];
-//         }
-//         out.with_subrows(chunking_factor * s, slice_size, |part| {
-//             gen_unary_outer_product(&slice.as_view(), y, part, cipher);
-//         });
-//     }
-    
-//     // Return empty vector for now - this should be replaced with actual implementation
-//     Vec::new()
-// }
+    let mut chunk_levels: Vec<Vec<(Block, Block)>> = Vec::new();
+    let mut chunk_cts: Vec<Vec<Block>> = Vec::new();
+
+    for s in 0..((n + chunking_factor-1)/chunking_factor) {
+        let slice_size: usize;
+        if chunking_factor *(s+1) > n {slice_size = n % chunking_factor;} else {slice_size = chunking_factor;}
+        let mut slice = BlockMatrix::new(slice_size, 1);
+        for i in 0..slice_size {
+            slice[i] = x[i + s * chunking_factor];
+        }
+        out.with_subrows(chunking_factor * s, slice_size, |part| {
+
+            let (gen_tree, levels) = gen_populate_seeds_mem_optimized(&slice.as_view(), cipher, delta);
+            let gen_seeds = &gen_tree[gen_tree.len() - (1 << slice.rows())..gen_tree.len()].to_vec();
+            let gen_cts = gen_unary_outer_product(gen_seeds, &y, part, cipher);
+
+            chunk_levels.push(levels);
+            chunk_cts.push(gen_cts);
+        });
+    }
+    // Return empty vector for now - this should be replaced with actual implementation
+    (chunk_levels, chunk_cts)
+}
+
+pub fn eval_chunked_half_outer_product(
+    x: &MatrixViewRef<Block>,
+    y: &MatrixViewRef<Block>,
+    out: &mut MatrixViewMut<Block>,
+    chunk_levels: Vec<Vec<(Block, Block)>>,
+    chunk_cts: Vec<Vec<Block>>,
+    cipher: &FixedKeyAes,
+) {
+    assert!(x.cols() == 1);
+    assert!(y.cols() == 1);
+
+    let n = x.rows();
+    let m = y.rows();
+
+    assert!(out.rows() == n);
+    assert!(out.cols() == m);
+
+    let chunking_factor = 6;
+
+    for s in 0..((n + chunking_factor-1)/chunking_factor) {
+        let slice_size: usize;
+        if chunking_factor *(s+1) > n {slice_size = n % chunking_factor;} else {slice_size = chunking_factor;}
+        let mut slice = BlockMatrix::new(slice_size, 1);
+        for i in 0..slice_size {
+            slice[i] = x[i + s * chunking_factor];
+        }
+        out.with_subrows(chunking_factor * s, slice_size, |part| {
+            
+            let eval_tree = eval_populate_seeds_mem_optimized(&slice.as_view(), chunk_levels[s].clone(), &slice.get_clear_value(), cipher);
+            let eval_seeds = &eval_tree[eval_tree.len() - (1 << slice.rows())..eval_tree.len()].to_vec();
+            let _eval_cts = eval_unary_outer_product(eval_seeds, &y, part, cipher, slice.get_clear_value(), &chunk_cts[s]);
+
+        });
+    }
+}
 
 // pub fn partial_half_outer_product(
 //     x: &MatrixViewRef<Block>,
@@ -713,14 +758,18 @@ mod test {
 
         let mut expected_result = vec![vec![false; m]; l];
         for i in 0..l {
+            print!("[ ");
             for j in 0..m {
                 let x_bit = ((clear_x >> i) & 1) == 1;
                 let y_bit = ((clear_y >> j) & 1) == 1;
                 expected_result[i][j] = x_bit & y_bit;
+                print!("{} ", expected_result[i][j] as usize);
             }
+            println!("]");
         }
 
         for k in 0..l {
+            print!("[ ");
             for j in 0..m {
                 let gen_val = gen_result[(k, j)];
                 let eval_val = eval_result[(k, j)];
@@ -731,12 +780,156 @@ mod test {
                     let expected_eval = gen_val ^ delta;
                     assert_eq!(eval_val, expected_eval, 
                                "At position ({},{}): eval_out should equal gen_out ^ delta when expected=1", k, j);
+                    print!("{} ", 1);
                 } else {
                     // Where expected_result = 0, they should be identical
                     assert_eq!(gen_val, eval_val, 
                                "At position ({},{}): gen_out should equal eval_out when expected=0", k, j);
+                    print!("{} ", 0);
                 }
+                
             }
+            println!("]");
+        }
+    }
+
+    #[test]
+    fn test_chunked_protocol() {
+        // ======================================================
+        //                      SETUP
+        // ======================================================
+
+        // instantiate global cipher and value
+        let cipher = &FIXED_KEY_AES;
+        let delta = Delta::random(&mut rand::rng());
+
+        // instantiate test sizes
+        let n = 3; // x is nx1
+        let m = 3; // y is mx1
+        let l = 3; // out is lxm
+        
+        // instantiate clear values
+        let clear_y = rand::random_range(0..(1 << m));
+        let clear_x = rand::random_range(0..(1 << n));
+        
+        // instantiate gen_x and eval_x, gen_y and eval_y:
+        // gen_x is a vector of random labels, LSBs 0 for testing
+        // eval_x is gen_x with the indices corresponding to 1 having the delta offset
+        let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
+        let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
+
+        let (alpha, beta) = gen_masks(n, m, &delta);
+
+        // let alpha: BlockMatrix = BlockMatrix::random(n, 1); No good because gives random masks
+        // let beta: BlockMatrix = BlockMatrix::random(m, 1); Does not toggle according to delta
+
+        // instantiate output matrices
+        let mut gen_first_half_out = BlockMatrix::new(l, m);
+        let mut eval_first_half_out = BlockMatrix::new(l, m);
+
+        let mut gen_second_half_out = BlockMatrix::new(l, m);
+        let mut eval_second_half_out = BlockMatrix::new(l, m);
+
+        // get shares of x XOR alpha
+        let gen_x_masked = gen_x.clone();
+        let eval_x_masked = &eval_x ^ &alpha;
+
+        // get shares of y
+        let gen_y_unmasked = &gen_y ^ &beta;
+        let eval_y_unmasked = &eval_y ^ &beta;
+
+        // get shares of y XOR beta
+        let gen_y_masked = gen_y.clone();
+        let eval_y_masked = &eval_y ^ &beta;
+
+        // get shares of alpha
+        let gen_alpha = alpha.clone();
+        let eval_alpha = BlockMatrix::constant(n, 1, Block::default());
+        let eval_beta = BlockMatrix::constant(m, 1, Block::default());
+
+        // ======================================================
+        //                  PROTOCOL
+        // ======================================================
+
+        // first half: H(x_masked) (x) y
+        // TODO change this to only output seeds/leafs
+        let gen_input_x = gen_x_masked;
+        let eval_input_x = eval_x_masked;
+
+        let gen_input_y = gen_y_unmasked;
+        let eval_input_y = eval_y_unmasked;
+
+        let (chunk_levels, chunk_cts) = gen_chunked_half_outer_product(&gen_input_x.as_view(), &gen_input_y.as_view(), &mut gen_first_half_out.as_view_mut(), delta, cipher);
+        eval_chunked_half_outer_product(&eval_input_x.as_view(), &eval_input_y.as_view(), &mut eval_first_half_out.as_view_mut(), chunk_levels, chunk_cts, cipher);
+
+
+
+        // second half: H(x_masked) (x) y_masked
+        let gen_input_x = gen_y_masked;
+        let eval_input_x = eval_y_masked;
+
+        let gen_input_y = gen_alpha.clone();
+        let eval_input_y = eval_alpha.clone();
+
+        let (chunk_levels, chunk_cts) = gen_chunked_half_outer_product(&gen_input_x.as_view(), &gen_input_y.as_view(), &mut gen_second_half_out.as_view_mut(), delta, cipher);
+        eval_chunked_half_outer_product(&eval_input_x.as_view(), &eval_input_y.as_view(), &mut eval_second_half_out.as_view_mut(), chunk_levels, chunk_cts, cipher);
+
+
+
+        // alpha xor beta is the last step
+        let gen_alpha_beta = alpha.color_cross_product(&beta, delta);
+        let eval_alpha_beta = eval_alpha.color_cross_product(&eval_beta, delta);
+
+        // the result will be in out
+        let mut gen_result = BlockMatrix::new(l, l);
+        for i in 0..l {
+            for j in 0..l {
+                gen_result[(i, j)] = gen_first_half_out[(i, j)] ^ gen_second_half_out[(j, i)] ^ gen_alpha_beta[(i, j)];
+            }
+        }
+
+
+        let mut eval_result = BlockMatrix::new(l, l);
+        for i in 0..l {
+            for j in 0..l {
+                eval_result[(i, j)] = eval_first_half_out[(i, j)] ^ eval_second_half_out[(j, i)] ^ eval_alpha_beta[(i, j)];
+            }
+        }
+
+        let mut expected_result = vec![vec![false; m]; l];
+        for i in 0..l {
+            print!("[ ");
+            for j in 0..m {
+                let x_bit = ((clear_x >> i) & 1) == 1;
+                let y_bit = ((clear_y >> j) & 1) == 1;
+                expected_result[i][j] = x_bit & y_bit;
+                print!("{} ", expected_result[i][j] as usize);
+            }
+            println!("]");
+        }
+
+        for k in 0..l {
+            print!("[ ");
+            for j in 0..m {
+                let gen_val = gen_result[(k, j)];
+                let eval_val = eval_result[(k, j)];
+                let expected_bit = expected_result[k][j];
+                
+                if expected_bit {
+                    // Where expected_result = 1, they should differ by delta
+                    let expected_eval = gen_val ^ delta;
+                    assert_eq!(eval_val, expected_eval, 
+                               "At position ({},{}): eval_out should equal gen_out ^ delta when expected=1", k, j);
+                    print!("{} ", 1);
+                } else {
+                    // Where expected_result = 0, they should be identical
+                    assert_eq!(gen_val, eval_val, 
+                               "At position ({},{}): gen_out should equal eval_out when expected=0", k, j);
+                    print!("{} ", 0);
+                }
+                
+            }
+            println!("]");
         }
     }
 }
