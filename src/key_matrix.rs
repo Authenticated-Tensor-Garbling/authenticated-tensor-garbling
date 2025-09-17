@@ -3,6 +3,7 @@ use std::ops::{BitXor, BitXorAssign, Index, IndexMut};
 
 use crate::keys::Key;
 use crate::block::Block;
+use crate::delta::Delta;
 
 /// Trait for types that can be used in TypedMatrix
 pub trait MatrixElement: 
@@ -19,41 +20,170 @@ pub trait MatrixElement:
 impl MatrixElement for Key {}
 impl MatrixElement for Block {}
 
-#[inline]
-fn shift_array(x: (usize, usize), y: (usize, usize)) -> (usize, usize) {
-    (x.0 + y.0, x.1 + y.1)
+
+/// Immutable view into a matrix with support for subviews and transposition.
+/// 
+/// This structure provides a safe way to create multiple views of the same underlying data
+/// without violating Rust's borrow checker rules. Each view contains metadata about how to
+/// interpret the data rather than holding separate references to the data.
+pub struct MatrixViewRef<'a, T> {
+    data: &'a [T],          // The actual data (immutable reference)
+    total_rows: usize,      // Total rows in the original matrix
+    total_cols: usize,      // Total columns in the original matrix
+    view_start: usize,      // Starting index of this view
+    view_rows: usize,       // Rows in this view
+    view_cols: usize,       // Columns in this view
+    transpose: bool,        // Whether this view is transposed
 }
 
-pub struct MatrixView<T> {
-    original_rows: usize,   // number of rows in the original matrix
-    size: (usize, usize),   // (rows, cols)
-    t: bool,                // transpose flag
-    s: (usize, usize),      // shift position
-    vals: T,            // reference to the underlying matrix
+/// Mutable view into a matrix with support for subviews and transposition.
+/// 
+/// This structure provides a safe way to create multiple views of the same underlying data
+/// without violating Rust's borrow checker rules. The `with_subrows` method uses closures
+/// to ensure that only one mutable view exists at a time.
+pub struct MatrixViewMut<'a, T> {
+    data: &'a mut [T],      // The actual data (mutable reference)
+    total_rows: usize,      // Total rows in the original matrix
+    total_cols: usize,      // Total columns in the original matrix
+    view_start: usize,      // Starting index of this view
+    view_rows: usize,       // Rows in this view
+    view_cols: usize,       // Columns in this view
+    transpose: bool,        // Whether this view is transposed
 }
-
-pub type MatrixViewRef<'a, T> = MatrixView<&'a [T]>;
-pub type MatrixViewMut<'a, T> = MatrixView<&'a mut [T]>;
 
 impl<'a, T> MatrixViewRef<'a, T> {
-    pub fn transpose(&self) -> Self {
+    pub fn new(data: &'a [T], total_rows: usize, total_cols: usize) -> Self {
         Self {
-            original_rows: self.original_rows,
-            size: (self.size.1, self.size.0),
-            t: !self.t,
-            s: (self.s.1, self.s.0),
-            vals: self.vals,
+            data,
+            total_rows,
+            total_cols,
+            view_start: 0,
+            view_rows: total_rows,
+            view_cols: total_cols,
+            transpose: false,
         }
     }
 
-    pub fn shift(&self, s: (usize, usize)) -> Self {
-        let new_s = shift_array(self.s, if self.t {(s.1, s.0)} else {s});
-        Self { original_rows: self.original_rows, size: self.size, t: self.t, s: new_s, vals: self.vals}
+    pub fn transpose(&self) -> Self {
+        Self {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: self.view_start,
+            view_rows: self.view_cols,
+            view_cols: self.view_rows,
+            transpose: !self.transpose,
+        }
     }
 
-    pub fn resize(&self, n: usize, m: usize) -> Self {
-        let new_size = (n, m);
-        Self { original_rows: self.original_rows, size: new_size, t: self.t, s: self.s, vals: self.vals }
+    pub fn shift(&self, row_offset: usize, col_offset: usize) -> Self {
+        let new_start = self.view_start + col_offset * self.total_rows + row_offset; // Column-major layout
+        Self {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: new_start,
+            view_rows: self.view_rows,
+            view_cols: self.view_cols,
+            transpose: self.transpose,
+        }
+    }
+
+    pub fn resize(&self, rows: usize, cols: usize) -> Self {
+        Self {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: self.view_start,
+            view_rows: rows,
+            view_cols: cols,
+            transpose: self.transpose,
+        }
+    }
+
+    pub fn with_subrows<F, R>(&self, offset: usize, rows: usize, f: F) -> R
+    where F: FnOnce(&MatrixViewRef<T>) -> R {
+        let new_start = self.view_start + offset; // For column-major, row offset is just added directly
+        let subview = MatrixViewRef {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: new_start,
+            view_rows: rows,
+            view_cols: self.view_cols,
+            transpose: self.transpose,
+        };
+        f(&subview)
+    }
+
+    #[inline]
+    pub fn rows(&self) -> usize { self.view_rows }
+    #[inline]
+    pub fn cols(&self) -> usize { self.view_cols }
+    #[inline]
+    pub fn len(&self) -> usize { 
+        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
+        self.view_rows 
+    }
+}
+
+impl<'a, T> MatrixViewMut<'a, T> {
+    pub fn new(data: &'a mut [T], total_rows: usize, total_cols: usize) -> Self {
+        Self {
+            data,
+            total_rows,
+            total_cols,
+            view_start: 0,
+            view_rows: total_rows,
+            view_cols: total_cols,
+            transpose: false,
+        }
+    }
+
+    pub fn transpose(&self) -> MatrixViewRef<T> {
+        MatrixViewRef {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: self.view_start,
+            view_rows: self.view_cols,
+            view_cols: self.view_rows,
+            transpose: !self.transpose,
+        }
+    }
+
+    pub fn shift(&mut self, row_offset: usize, col_offset: usize) {
+        self.view_start += col_offset * self.total_rows + row_offset; // Column-major layout
+    }
+
+    pub fn resize(&mut self, rows: usize, cols: usize) {
+        self.view_rows = rows;
+        self.view_cols = cols;
+    }
+
+    pub fn with_subrows<F, R>(&mut self, offset: usize, rows: usize, f: F) -> R
+    where F: FnOnce(&mut MatrixViewMut<T>) -> R {
+        let new_start = self.view_start + offset; // For column-major, row offset is just added directly
+        let mut subview = MatrixViewMut {
+            data: self.data,
+            total_rows: self.total_rows,
+            total_cols: self.total_cols,
+            view_start: new_start,
+            view_rows: rows,
+            view_cols: self.view_cols,
+            transpose: self.transpose,
+        };
+        f(&mut subview)
+    }
+
+    #[inline]
+    pub fn rows(&self) -> usize { self.view_rows }
+    #[inline]
+    pub fn cols(&self) -> usize { self.view_cols }
+    #[inline]
+    pub fn len(&self) -> usize { 
+        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
+        self.view_rows 
     }
 }
 
@@ -61,9 +191,9 @@ impl<'a, T> Index<(usize, usize)> for MatrixViewRef<'a, T> {
     type Output = T;
     
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let (i_, j_) = if self.t { (index.1, index.0) } else { (index.0, index.1) };
-        let (i_, j_) = shift_array((i_, j_), self.s);
-        &self.vals[j_*self.original_rows + i_]
+        let (row, col) = if self.transpose { (index.1, index.0) } else { (index.0, index.1) };
+        let idx = self.view_start + col * self.total_rows + row; // Column-major layout
+        &self.data[idx]
     }
 }
 
@@ -71,8 +201,9 @@ impl<'a, T> Index<usize> for MatrixViewRef<'a, T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        debug_assert!(self.cols() == 1, "Vector indexing only works for column vectors");
-        &self.vals[index]
+        debug_assert!(self.view_cols == 1, "Vector indexing only works for column vectors");
+        let idx = self.view_start + index;
+        &self.data[idx]
     }
 }
 
@@ -81,17 +212,17 @@ impl<'a, T> Index<(usize, usize)> for MatrixViewMut<'a, T> {
     type Output = T;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let (i_, j_) = if self.t { (index.1, index.0) } else { (index.0, index.1) };
-        let (i_, j_) = shift_array((i_, j_), self.s);
-        &self.vals[j_*self.original_rows + i_]
+        let (row, col) = if self.transpose { (index.1, index.0) } else { (index.0, index.1) };
+        let idx = self.view_start + col * self.total_rows + row; // Column-major layout
+        &self.data[idx]
     }
 }
 
 impl<'a, T> IndexMut<(usize, usize)> for MatrixViewMut<'a, T> {
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let (i_, j_) = if self.t { (index.1, index.0) } else { (index.0, index.1) };
-        let (i_, j_) = shift_array((i_, j_), self.s);
-        &mut self.vals[j_*self.original_rows + i_]
+        let (row, col) = if self.transpose { (index.1, index.0) } else { (index.0, index.1) };
+        let idx = self.view_start + col * self.total_rows + row; // Column-major layout
+        &mut self.data[idx]
     }
 }
 
@@ -99,36 +230,20 @@ impl<'a, T> Index<usize> for MatrixViewMut<'a, T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        debug_assert!(self.cols() == 1, "Vector indexing only works for column vectors");
-        &self.vals[index]
+        debug_assert!(self.view_cols == 1, "Vector indexing only works for column vectors");
+        let idx = self.view_start + index;
+        &self.data[idx]
     }
 }
 
 impl<'a, T> IndexMut<usize> for MatrixViewMut<'a, T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        debug_assert!(self.cols() == 1, "Vector indexing only works for column vectors");
-        &mut self.vals[index]
+        debug_assert!(self.view_cols == 1, "Vector indexing only works for column vectors");
+        let idx = self.view_start + index;
+        &mut self.data[idx]
     }
 }
 
-impl<T> MatrixView<T> {
-    pub fn new(original_rows: usize, size: (usize, usize), t: bool, s: (usize, usize), vals: T) -> Self {
-        Self {
-            original_rows,
-            size,
-            t,
-            s,
-            vals,
-        }
-    }
-
-    #[inline]
-    pub fn rows(&self) -> usize { self.size.0 }
-    #[inline]
-    pub fn cols(&self) -> usize { self.size.1 }
-    #[inline]
-    pub fn len(&self) -> usize { assert!(self.size.1 == 1, "Length is only defined for column vectors"); self.size.0 }
-}
 
 #[derive(Debug, Clone)]
 pub struct TypedMatrix<T: MatrixElement> {
@@ -193,11 +308,17 @@ impl<T: MatrixElement> TypedMatrix<T> {
     }
 
     pub fn as_view(&self) -> MatrixViewRef<T> {
-        MatrixViewRef::new(self.rows, (self.rows, self.cols), false, (0, 0), &self.elements[..])
+        MatrixViewRef::new(&self.elements[..], self.rows, self.cols)
     }
 
     pub fn as_view_mut(&mut self) -> MatrixViewMut<T> {
-        MatrixViewMut::new(self.rows, (self.rows, self.cols), false, (0, 0), &mut self.elements[..])
+        MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols)
+    }
+
+    pub fn with_subrows_mut<F, R>(&mut self, offset: usize, rows: usize, f: F) -> R
+    where F: FnOnce(&mut MatrixViewMut<T>) -> R {
+        let mut view = MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols);
+        view.with_subrows(offset, rows, f)
     }
 
     pub fn rows(&self) -> usize {
@@ -212,6 +333,20 @@ impl<T: MatrixElement> TypedMatrix<T> {
     #[inline]
     fn flat_index(&self, i: usize, j: usize) -> usize {
         j*self.rows + i
+    }
+}
+
+impl TypedMatrix<Block> {
+    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
+        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
+
+        let mut out = Self::new(self.rows, other.rows);
+        for i in 0..self.rows {
+            for j in 0..other.rows {
+                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
+            }
+        }
+        out
     }
 }
 
@@ -251,10 +386,15 @@ impl<T: MatrixElement> IndexMut<(usize, usize)> for TypedMatrix<T> {
 }
 
 // BitXor implementation for TypedMatrix
-impl<T: MatrixElement + BitXor<Output = T> + Copy> BitXor for TypedMatrix<T> {
+impl<T: MatrixElement + BitXor<Output = T> + Copy> BitXor<TypedMatrix<T>> for TypedMatrix<T> {
     type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
+
+        if self.rows != rhs.rows || self.cols != rhs.cols {
+            panic!("Matrix dimensions must match");
+        }
+
         let mut out = Self {
             rows: self.rows,
             cols: self.cols,
@@ -265,6 +405,50 @@ impl<T: MatrixElement + BitXor<Output = T> + Copy> BitXor for TypedMatrix<T> {
             for j in 0..self.cols {
                 let idx = self.flat_index(i, j);
                 out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
+            }
+        }
+        out
+    }
+}
+
+impl<'a, 'b, T: MatrixElement + BitXor<Output = T> + Copy> BitXor<&'b TypedMatrix<T>> for &'a TypedMatrix<T> {
+    type Output = TypedMatrix<T>;
+
+    fn bitxor(self, rhs: &'b TypedMatrix<T>) -> Self::Output {
+
+        if self.rows != rhs.rows || self.cols != rhs.cols {
+            panic!("Matrix dimensions must match");
+        }
+
+        let mut out = TypedMatrix {
+            rows: self.rows,
+            cols: self.cols,
+            elements: Vec::with_capacity(self.rows * self.cols),
+        };
+
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                let idx = self.flat_index(i, j);
+                out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
+            }
+        }
+        out
+    }
+}
+
+impl<'a, 'b, 'c, T: MatrixElement + BitXor<Output = T> + Copy> BitXor<&'b MatrixViewRef<'c, T>> for &'a TypedMatrix<T> {
+    type Output = TypedMatrix<T>;
+
+    fn bitxor(self, rhs: &'b MatrixViewRef<T>) -> Self::Output {
+        let mut out = TypedMatrix {
+            rows: self.rows,
+            cols: self.cols,
+            elements: Vec::with_capacity(self.rows * self.cols),
+        };
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                let idx = self.flat_index(i, j);
+                out.elements.push(self.elements[idx] ^ rhs[(i, j)]);
             }
         }
         out
@@ -299,16 +483,18 @@ impl BlockMatrix {
         // and index rows-1 as the most-significant bit (MSB). The fold below iterates in
         // reverse to build the integer from MSB→LSB. If you change the vector endianness,
         // update this to match the new convention.
-        self.as_view().vals.iter().rev().fold(0, |acc, b| {
-            (acc << 1) | b.lsb() as usize
+        let view = self.as_view();
+        (0..view.rows()).rev().fold(0, |acc, i| {
+            (acc << 1) | view[i].lsb() as usize
         })
     }
 }
 
 impl KeyMatrix {
     pub fn get_clear_value(&self) -> usize {
-        self.as_view().vals.iter().rev().fold(0, |acc, b| {
-            (acc << 1) | b.as_block().lsb() as usize
+        let view = self.as_view();
+        (0..view.rows()).rev().fold(0, |acc, i| {
+            (acc << 1) | view[i].as_block().lsb() as usize
         })
     }
 }
