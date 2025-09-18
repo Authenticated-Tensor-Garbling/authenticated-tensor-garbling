@@ -1,4 +1,4 @@
-use crate::{aes::FixedKeyAes, block::Block, delta::Delta, key_matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef}, tensor_pre::TensorProductPreGen};
+use crate::{aes::FixedKeyAes, block::Block, delta::Delta, matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef}, tensor_pre::TensorProductPreGen};
 
 #[derive(PartialEq, Clone, Copy)]
 enum ProtocolPhase {

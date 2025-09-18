@@ -3,7 +3,7 @@ pub mod delta;
 pub mod keys;
 pub mod macs;
 
-pub mod key_matrix;
+pub mod matrix;
 
 pub mod circuit;
 pub mod aes;
@@ -198,7 +198,7 @@ mod tests {
 
     }
 
-    use crate::{aes::FIXED_KEY_AES, tensor_gen::TensorProductGen, tensor_eval::TensorProductEval, unary_outer_product::{gen_chunked_half_outer_product, eval_chunked_half_outer_product, gen_masks}, key_matrix::BlockMatrix, tensor_pre::get_gen_eval_vecs, block::Block};
+    use crate::{aes::FIXED_KEY_AES, tensor_gen::TensorProductGen, tensor_eval::TensorProductEval, unary_outer_product::{gen_chunked_half_outer_product, eval_chunked_half_outer_product, gen_masks}, matrix::BlockMatrix, tensor_pre::get_gen_eval_vecs, block::Block};
 
     #[test]
     fn test_first_half_outer_product() {

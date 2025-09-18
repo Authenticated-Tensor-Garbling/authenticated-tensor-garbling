@@ -5,20 +5,15 @@ use crate::keys::Key;
 use crate::block::Block;
 use crate::delta::Delta;
 
-/// Trait for types that can be used in TypedMatrix
-pub trait MatrixElement: 
-    From<[u8; 16]> +
-    Default + 
-    Clone + 
-    Copy + 
-    PartialEq + 
-    std::fmt::Debug + 
-    Send + 
-    Sync + 
-    'static {}
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for crate::keys::Key {}
+    impl Sealed for crate::block::Block {}
+}
 
-impl MatrixElement for Key {}
-impl MatrixElement for Block {}
+pub trait MatrixElement: sealed::Sealed {}
+impl MatrixElement for crate::keys::Key {}
+impl MatrixElement for crate::block::Block {}
 
 
 /// Immutable view into a matrix with support for subviews and transposition.
@@ -26,7 +21,7 @@ impl MatrixElement for Block {}
 /// This structure provides a safe way to create multiple views of the same underlying data
 /// without violating Rust's borrow checker rules. Each view contains metadata about how to
 /// interpret the data rather than holding separate references to the data.
-pub struct MatrixViewRef<'a, T> {
+pub struct MatrixViewRef<'a, T: MatrixElement> {
     data: &'a [T],          // The actual data (immutable reference)
     total_rows: usize,      // Total rows in the original matrix
     total_cols: usize,      // Total columns in the original matrix
@@ -41,7 +36,7 @@ pub struct MatrixViewRef<'a, T> {
 /// This structure provides a safe way to create multiple views of the same underlying data
 /// without violating Rust's borrow checker rules. The `with_subrows` method uses closures
 /// to ensure that only one mutable view exists at a time.
-pub struct MatrixViewMut<'a, T> {
+pub struct MatrixViewMut<'a, T: MatrixElement> {
     data: &'a mut [T],      // The actual data (mutable reference)
     total_rows: usize,      // Total rows in the original matrix
     total_cols: usize,      // Total columns in the original matrix
@@ -51,7 +46,7 @@ pub struct MatrixViewMut<'a, T> {
     transpose: bool,        // Whether this view is transposed
 }
 
-impl<'a, T> MatrixViewRef<'a, T> {
+impl<'a, T: MatrixElement> MatrixViewRef<'a, T> {
     pub fn new(data: &'a [T], total_rows: usize, total_cols: usize) -> Self {
         Self {
             data,
@@ -131,7 +126,7 @@ impl<'a, T> MatrixViewRef<'a, T> {
     }
 }
 
-impl<'a, T> MatrixViewMut<'a, T> {
+impl<'a, T: MatrixElement> MatrixViewMut<'a, T> {
     pub fn new(data: &'a mut [T], total_rows: usize, total_cols: usize) -> Self {
         Self {
             data,
@@ -186,7 +181,7 @@ impl<'a, T> MatrixViewMut<'a, T> {
     }
 }
 
-impl<'a, T> Index<(usize, usize)> for MatrixViewRef<'a, T> {
+impl<'a, T: MatrixElement> Index<(usize, usize)> for MatrixViewRef<'a, T> {
     type Output = T;
     
     fn index(&self, index: (usize, usize)) -> &Self::Output {
@@ -196,7 +191,7 @@ impl<'a, T> Index<(usize, usize)> for MatrixViewRef<'a, T> {
     }
 }
 
-impl<'a, T> Index<usize> for MatrixViewRef<'a, T> {
+impl<'a, T: MatrixElement> Index<usize> for MatrixViewRef<'a, T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -207,7 +202,7 @@ impl<'a, T> Index<usize> for MatrixViewRef<'a, T> {
 }
 
 // Indexing for mutable views (read-write)
-impl<'a, T> Index<(usize, usize)> for MatrixViewMut<'a, T> {
+impl<'a, T: MatrixElement> Index<(usize, usize)> for MatrixViewMut<'a, T> {
     type Output = T;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
@@ -217,7 +212,7 @@ impl<'a, T> Index<(usize, usize)> for MatrixViewMut<'a, T> {
     }
 }
 
-impl<'a, T> IndexMut<(usize, usize)> for MatrixViewMut<'a, T> {
+impl<'a, T: MatrixElement> IndexMut<(usize, usize)> for MatrixViewMut<'a, T> {
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
         let (row, col) = if self.transpose { (index.1, index.0) } else { (index.0, index.1) };
         let idx = self.view_start + col * self.total_rows + row; // Column-major layout
@@ -225,7 +220,7 @@ impl<'a, T> IndexMut<(usize, usize)> for MatrixViewMut<'a, T> {
     }
 }
 
-impl<'a, T> Index<usize> for MatrixViewMut<'a, T> {
+impl<'a, T: MatrixElement> Index<usize> for MatrixViewMut<'a, T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -235,13 +230,14 @@ impl<'a, T> Index<usize> for MatrixViewMut<'a, T> {
     }
 }
 
-impl<'a, T> IndexMut<usize> for MatrixViewMut<'a, T> {
+impl<'a, T: MatrixElement> IndexMut<usize> for MatrixViewMut<'a, T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         debug_assert!(self.view_cols == 1, "Vector indexing only works for column vectors");
         let idx = self.view_start + index;
         &mut self.data[idx]
     }
 }
+
 
 
 #[derive(Debug, Clone)]
@@ -256,8 +252,16 @@ pub type KeyMatrix = TypedMatrix<Key>;
 pub type BlockMatrix = TypedMatrix<Block>;
 
 impl<T: MatrixElement> TypedMatrix<T> {
+    #[inline]
+    fn flat_index(&self, i: usize, j: usize) -> usize {
+        j*self.rows + i
+    }
+}
 
-    pub fn new(rows: usize, cols: usize) -> Self {
+impl<T: MatrixElement> TypedMatrix<T> 
+where T: Default + Clone {
+
+    pub fn new(rows: usize, cols: usize) -> Self where T: Default + Clone {
         Self {
             rows,
             cols,
@@ -270,31 +274,6 @@ impl<T: MatrixElement> TypedMatrix<T> {
             rows,
             cols: 1,
             elements: vec![T::default(); rows],
-        }
-    }
-
-    pub fn random(rows: usize, cols: usize) -> Self {
-        Self {
-            rows,
-            cols,
-            elements: (0..rows * cols).map(|_| T::from(rand::random::<[u8; 16]>())).collect(),
-        }
-    }
-
-    pub fn random_zeros(rows: usize, cols: usize) -> Self {
-        let mut elements = Vec::<T>::new();
-
-        for _ in 0..(rows*cols) {
-            let mut bytes = rand::random::<[u8; 16]>();
-            bytes[0] &= 0xFE; // Clear last bit of last byte
-            let label = T::from(bytes);
-            elements.push(label);
-        }
-
-        Self {
-            rows,
-            cols,
-            elements,
         }
     }
 
@@ -327,26 +306,10 @@ impl<T: MatrixElement> TypedMatrix<T> {
     pub fn cols(&self) -> usize {
         self.cols
     }
-
-    // helper function to convert 2D index to 1D index
-    #[inline]
-    fn flat_index(&self, i: usize, j: usize) -> usize {
-        j*self.rows + i
-    }
 }
 
 impl TypedMatrix<Block> {
-    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
-        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
 
-        let mut out = Self::new(self.rows, other.rows);
-        for i in 0..self.rows {
-            for j in 0..other.rows {
-                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
-            }
-        }
-        out
-    }
 }
 
 // Vector access
@@ -487,6 +450,43 @@ impl BlockMatrix {
             (acc << 1) | view[i].lsb() as usize
         })
     }
+
+    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: (0..rows * cols).map(|_| Block::random(rng)).collect(),
+        }
+    }
+
+    pub fn random_zeros(rows: usize, cols: usize) -> Self {
+        let mut elements = Vec::<Block>::new();
+
+        for _ in 0..(rows*cols) {
+            let mut bytes = rand::random::<[u8; 16]>();
+            bytes[0] &= 0xFE; // Clear last bit of last byte
+            let label = Block::from(bytes);
+            elements.push(label);
+        }
+
+        Self {
+            rows,
+            cols,
+            elements,
+        }
+    }
+
+    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
+        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
+
+        let mut out = Self::new(self.rows, other.rows);
+        for i in 0..self.rows {
+            for j in 0..other.rows {
+                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
+            }
+        }
+        out
+    }
 }
 
 impl KeyMatrix {
@@ -496,7 +496,35 @@ impl KeyMatrix {
             (acc << 1) | view[i].as_block().lsb() as usize
         })
     }
+
+    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: (0..rows * cols).map(|_| Key::random(rng)).collect(),
+        }
+    }
+
+    pub fn random_zeros(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        let mut elements = Vec::<Key>::new();
+
+        for _ in 0..(rows*cols) {
+            let mut bytes = rng.random::<[u8; 16]>();
+            bytes[0] &= 0xFE; // Clear last bit of last byte
+            let label = Key::from(bytes);
+            elements.push(label);
+        }
+
+        Self {
+            rows,
+            cols,
+            elements,
+        }
+    }
 }
+
+
+
 
 #[cfg(test)]
 mod tests {

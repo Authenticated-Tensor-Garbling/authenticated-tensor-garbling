@@ -4,7 +4,7 @@ use crate::{
     aes::FixedKeyAes,
     block::Block,
     delta::Delta,
-    key_matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef},
+    matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef},
 };
 
 pub fn gen_chunked_half_outer_product(
@@ -362,7 +362,7 @@ pub fn eval_unary_outer_product(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{aes::FIXED_KEY_AES, block::Block, key_matrix::BlockMatrix};
+    use crate::{aes::FIXED_KEY_AES, block::Block, matrix::BlockMatrix};
     use rand;
 
     /// Generates random input for testing GGM tree operations.
@@ -431,8 +431,9 @@ mod test {
     fn test_ggm_tree() {
         let cipher = &FIXED_KEY_AES;
         let delta = Delta::random(&mut rand::rng());
+        let rng = &mut rand::rng();
 
-        let input = BlockMatrix::random(4, 1);
+        let input = BlockMatrix::random(4, 1, rng);
         let missing = input.get_clear_value();
 
         // Run generator to get tree and ciphertexts
@@ -473,7 +474,7 @@ mod test {
         }
     }
 
-    fn get_gen_eval_vecs(delta: Delta, n: usize, clear_x: usize) -> (crate::key_matrix::TypedMatrix<Block>, crate::key_matrix::TypedMatrix<Block>) {
+    fn get_gen_eval_vecs(delta: Delta, n: usize, clear_x: usize) -> (crate::matrix::TypedMatrix<Block>, crate::matrix::TypedMatrix<Block>) {
         let gen_x = BlockMatrix::random_zeros(n, 1);
         debug_assert!((0..n).all(|i| gen_x[i].lsb() == false), "gen_x LSBs must be 0");
         let mut eval_x = BlockMatrix::constant(n, 1, Block::default());

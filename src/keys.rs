@@ -84,7 +84,7 @@ impl Key {
     }
 
     #[inline]
-    pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+    pub fn random<R: Rng>(rng: &mut R) -> Self {
         Self(Block::random(rng))
     }
 }

@@ -59,7 +59,7 @@ impl Block {
 
     /// Generate a random block using the provided RNG
     #[inline]
-    pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+    pub fn random<R: Rng>(rng: &mut R) -> Self {
         Self::new(rng.random())
     }
 
