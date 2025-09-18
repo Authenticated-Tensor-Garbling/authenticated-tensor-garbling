@@ -386,22 +386,10 @@ impl BitXor<&Block> for &Block {
 impl BitXorAssign<&Block> for Block {
     #[inline(always)]
     fn bitxor_assign(&mut self, rhs: &Self) {
-        self.0[15] ^= rhs.0[15];
-        self.0[14] ^= rhs.0[14];
-        self.0[13] ^= rhs.0[13];
-        self.0[12] ^= rhs.0[12];
-        self.0[11] ^= rhs.0[11];
-        self.0[10] ^= rhs.0[10];
-        self.0[9] ^= rhs.0[9];
-        self.0[8] ^= rhs.0[8];
-        self.0[7] ^= rhs.0[7];
-        self.0[6] ^= rhs.0[6];
-        self.0[5] ^= rhs.0[5];
-        self.0[4] ^= rhs.0[4];
-        self.0[3] ^= rhs.0[3];
-        self.0[2] ^= rhs.0[2];
-        self.0[1] ^= rhs.0[1];
-        self.0[0] ^= rhs.0[0];
+        let self_u128 = u128::from_le_bytes(self.0);
+        let rhs_u128 = u128::from_le_bytes(rhs.0);
+        let result = self_u128 ^ rhs_u128;
+        self.0 = result.to_le_bytes();
     }
 }
 
@@ -450,22 +438,11 @@ impl BitAnd<&Block> for &Block {
 impl BitAndAssign<&Block> for Block {
     #[inline(always)]
     fn bitand_assign(&mut self, rhs: &Self) {
-        self.0[15] &= rhs.0[15];
-        self.0[14] &= rhs.0[14];
-        self.0[13] &= rhs.0[13];
-        self.0[12] &= rhs.0[12];
-        self.0[11] &= rhs.0[11];
-        self.0[10] &= rhs.0[10];
-        self.0[9] &= rhs.0[9];
-        self.0[8] &= rhs.0[8];
-        self.0[7] &= rhs.0[7];
-        self.0[6] &= rhs.0[6];
-        self.0[5] &= rhs.0[5];
-        self.0[4] &= rhs.0[4];
-        self.0[3] &= rhs.0[3];
-        self.0[2] &= rhs.0[2];
-        self.0[1] &= rhs.0[1];
-        self.0[0] &= rhs.0[0];
+
+        let self_u12 = u128::from_le_bytes(self.0);
+        let rhs_u12 = u128::from_le_bytes(rhs.0);
+        let result = self_u12 & rhs_u12;
+        self.0 = result.to_le_bytes();
     }
 }
 
