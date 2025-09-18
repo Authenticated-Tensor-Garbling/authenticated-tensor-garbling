@@ -117,9 +117,13 @@ impl<'a, T> MatrixViewRef<'a, T> {
     }
 
     #[inline]
-    pub fn rows(&self) -> usize { self.view_rows }
+    pub fn rows(&self) -> usize { 
+        if self.transpose { self.view_cols } else { self.view_rows }
+    }
     #[inline]
-    pub fn cols(&self) -> usize { self.view_cols }
+    pub fn cols(&self) -> usize { 
+        if self.transpose { self.view_rows } else { self.view_cols }
+    }
     #[inline]
     pub fn len(&self) -> usize { 
         assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
@@ -140,15 +144,10 @@ impl<'a, T> MatrixViewMut<'a, T> {
         }
     }
 
-    pub fn transpose(&self) -> MatrixViewRef<T> {
-        MatrixViewRef {
-            data: self.data,
-            total_rows: self.total_rows,
-            total_cols: self.total_cols,
-            view_start: self.view_start,
-            view_rows: self.view_cols,
-            view_cols: self.view_rows,
+    pub fn transpose(self) -> Self {
+        Self {
             transpose: !self.transpose,
+            ..self
         }
     }
 
@@ -177,9 +176,9 @@ impl<'a, T> MatrixViewMut<'a, T> {
     }
 
     #[inline]
-    pub fn rows(&self) -> usize { self.view_rows }
+    pub fn rows(&self) -> usize { if self.transpose { self.view_cols } else { self.view_rows }}
     #[inline]
-    pub fn cols(&self) -> usize { self.view_cols }
+    pub fn cols(&self) -> usize { if self.transpose { self.view_rows } else { self.view_cols } }
     #[inline]
     pub fn len(&self) -> usize { 
         assert!(self.view_cols == 1, "Length is only defined for column vectors"); 

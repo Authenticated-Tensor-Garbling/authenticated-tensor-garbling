@@ -85,16 +85,6 @@ pub fn eval_chunked_half_outer_product(
     }
 }
 
-// pub fn partial_half_outer_product(
-//     x: &MatrixViewRef<Block>,
-//     y: &MatrixViewRef<Block>,
-//     out: &mut MatrixViewMut<Block>,
-//     cipher: &FixedKeyAes
-// ) -> Vec<Block> {
-//     unimplemented!();
-//     // unary_outer_product(x, y, out, cipher)
-// }
-
 pub fn gen_masks(n: usize, m: usize, delta: &Delta) -> (BlockMatrix, BlockMatrix) {
     if n == 0 || m == 0{
         panic!("n and m must be greater than 0");
@@ -121,7 +111,6 @@ pub fn gen_masks(n: usize, m: usize, delta: &Delta) -> (BlockMatrix, BlockMatrix
 /// 
 /// # Arguments
 /// * `x` - Input vector of blocks, where the highest index has the lowest subscript
-/// * `_missing` - Unused parameter (kept for interface consistency)
 /// * `cipher` - Fixed-key AES cipher for cryptographic operations
 /// * `delta` - Global offset used in GGM tree construction
 /// 
