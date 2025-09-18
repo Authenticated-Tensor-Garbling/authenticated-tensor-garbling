@@ -41,7 +41,7 @@ impl TensorProductEval {
     fn eval_populate_seeds_mem_optimized(
         x: &MatrixViewRef<Block>,
         levels: Vec<(Block, Block)>,
-        clear_value: &usize,
+        _clear_value: &usize,
         cipher: &FixedKeyAes,
     ) -> Vec<Block> {
         let mut tree: Vec<Block> = Vec::new();

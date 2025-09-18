@@ -5,7 +5,7 @@ use crate::block::Block;
 use crate::delta::Delta;
 use crate::macs::Mac;
 
-use rand::{CryptoRng, Rng};
+use rand::Rng;
 
 /// MAC key.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

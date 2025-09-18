@@ -705,7 +705,7 @@ mod test {
 
         let eval_tree = eval_populate_seeds_mem_optimized(&eval_input_x.as_view(), levels, &eval_input_x_clear, cipher);
         let eval_seeds = &eval_tree[(eval_tree.len() - (1 << eval_input_x.rows()))..eval_tree.len()].to_vec();
-        let eval_cts = eval_unary_outer_product(eval_seeds, &eval_input_y.as_view(), &mut eval_first_half_out.as_view_mut(), cipher, eval_input_x_clear, &gen_cts);
+        let _ = eval_unary_outer_product(eval_seeds, &eval_input_y.as_view(), &mut eval_first_half_out.as_view_mut(), cipher, eval_input_x_clear, &gen_cts);
 
 
 
@@ -723,7 +723,7 @@ mod test {
 
         let eval_tree = eval_populate_seeds_mem_optimized(&eval_input_x.as_view(), levels, &eval_input_x_clear, cipher);
         let eval_seeds = &eval_tree[(eval_tree.len() - (1 << eval_input_x.rows()))..eval_tree.len()].to_vec();
-        let eval_cts = eval_unary_outer_product(eval_seeds, &eval_input_y.as_view(), &mut eval_second_half_out.as_view_mut(), cipher, eval_input_x_clear, &gen_cts);
+        let _ = eval_unary_outer_product(eval_seeds, &eval_input_y.as_view(), &mut eval_second_half_out.as_view_mut(), cipher, eval_input_x_clear, &gen_cts);
 
 
         // alpha xor beta is the last step
