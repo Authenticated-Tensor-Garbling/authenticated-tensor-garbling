@@ -152,9 +152,8 @@ impl BlockMatrix {
 
         let mut out = Self::new(self.rows, other.rows);
         for i in 0..self.rows {
-            let base = i * other.rows;
             for j in 0..other.rows {
-                let idx = base + j;
+                let idx = j * self.rows + i;  // Use column-major indexing: j*rows + i
                 out.elements[idx] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
             }
         }
