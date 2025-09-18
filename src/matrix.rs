@@ -152,8 +152,10 @@ impl BlockMatrix {
 
         let mut out = Self::new(self.rows, other.rows);
         for i in 0..self.rows {
+            let base = i * other.rows;
             for j in 0..other.rows {
-                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
+                let idx = base + j;
+                out.elements[idx] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
             }
         }
         out
@@ -234,9 +236,7 @@ where T: BitXor<Output = T> + Copy {
 
     fn bitxor(self, rhs: Self) -> Self::Output {
 
-        if self.rows != rhs.rows || self.cols != rhs.cols {
-            panic!("Matrix dimensions must match");
-        }
+        debug_assert!(self.rows == rhs.rows && self.cols == rhs.cols, "Matrix dimensions must match");
 
         let mut out = Self {
             rows: self.rows,
@@ -244,9 +244,10 @@ where T: BitXor<Output = T> + Copy {
             elements: Vec::with_capacity(self.rows * self.cols),
         };
 
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
+        for j in 0..self.cols {
+            let base  = j * self.rows;
+            for i in 0..self.rows {
+                let idx = base + i;
                 out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
             }
         }
@@ -260,9 +261,7 @@ where T: BitXor<Output = T> + Copy {
 
     fn bitxor(self, rhs: &'b TypedMatrix<T>) -> Self::Output {
 
-        if self.rows != rhs.rows || self.cols != rhs.cols {
-            panic!("Matrix dimensions must match");
-        }
+        debug_assert!(self.rows == rhs.rows && self.cols == rhs.cols, "Matrix dimensions must match");
 
         let mut out = TypedMatrix {
             rows: self.rows,
@@ -270,9 +269,10 @@ where T: BitXor<Output = T> + Copy {
             elements: Vec::with_capacity(self.rows * self.cols),
         };
 
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
+        for j in 0..self.cols {
+            let base = j * self.rows;
+            for i in 0..self.rows {
+                let idx = base + i;
                 out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
             }
         }
@@ -290,9 +290,10 @@ where T: BitXor<Output = T> + Copy {
             cols: self.cols,
             elements: Vec::with_capacity(self.rows * self.cols),
         };
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
+        for j in 0..self.cols {
+            let base = j * self.rows;
+            for i in 0..self.rows {
+                let idx = base + i;
                 out.elements.push(self.elements[idx] ^ rhs[(i, j)]);
             }
         }
@@ -313,9 +314,11 @@ where T: BitXorAssign + Copy {
 impl<T: MatrixElement> Display for TypedMatrix<T>
 where T: Display {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                write!(f, "{} ", self.elements[self.flat_index(i, j)])?;
+        for j in 0..self.cols {
+            let base = j * self.rows;
+            for i in 0..self.rows {
+                let idx = base + i;
+                write!(f, "{} ", self.elements[idx])?;
             }
             writeln!(f)?;
         }
@@ -337,7 +340,21 @@ impl<'a, T: MatrixElement> MatrixViewRef<'a, T> {
         }
     }
 
-    pub fn transpose(&self) -> Self {
+    #[inline]
+    pub fn rows(&self) -> usize { 
+        if self.transpose { self.view_cols } else { self.view_rows }
+    }
+    #[inline]
+    pub fn cols(&self) -> usize { 
+        if self.transpose { self.view_rows } else { self.view_cols }
+    }
+    #[inline]
+    pub fn len(&self) -> usize { 
+        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
+        self.view_rows 
+    }
+
+    pub fn transpose(self) -> Self {
         Self {
             data: self.data,
             total_rows: self.total_rows,
@@ -387,20 +404,6 @@ impl<'a, T: MatrixElement> MatrixViewRef<'a, T> {
             transpose: self.transpose,
         };
         f(&subview)
-    }
-
-    #[inline]
-    pub fn rows(&self) -> usize { 
-        if self.transpose { self.view_cols } else { self.view_rows }
-    }
-    #[inline]
-    pub fn cols(&self) -> usize { 
-        if self.transpose { self.view_rows } else { self.view_cols }
-    }
-    #[inline]
-    pub fn len(&self) -> usize { 
-        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
-        self.view_rows 
     }
 }
 
