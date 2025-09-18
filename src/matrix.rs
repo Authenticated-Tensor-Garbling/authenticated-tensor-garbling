@@ -12,15 +12,23 @@ mod sealed {
 }
 
 pub trait MatrixElement: sealed::Sealed {}
+
 impl MatrixElement for crate::keys::Key {}
 impl MatrixElement for crate::block::Block {}
 
 
-/// Immutable view into a matrix with support for subviews and transposition.
-/// 
-/// This structure provides a safe way to create multiple views of the same underlying data
-/// without violating Rust's borrow checker rules. Each view contains metadata about how to
-/// interpret the data rather than holding separate references to the data.
+#[derive(Debug, Clone)]
+pub struct TypedMatrix<T: MatrixElement> {
+    rows: usize,
+    cols: usize,
+    elements: Vec<T>,
+}
+
+// Type alias for backward compatibility
+pub type KeyMatrix = TypedMatrix<Key>;
+pub type BlockMatrix = TypedMatrix<Block>;
+
+
 pub struct MatrixViewRef<'a, T: MatrixElement> {
     data: &'a [T],          // The actual data (immutable reference)
     total_rows: usize,      // Total rows in the original matrix
@@ -31,11 +39,7 @@ pub struct MatrixViewRef<'a, T: MatrixElement> {
     transpose: bool,        // Whether this view is transposed
 }
 
-/// Mutable view into a matrix with support for subviews and transposition.
-/// 
-/// This structure provides a safe way to create multiple views of the same underlying data
-/// without violating Rust's borrow checker rules. The `with_subrows` method uses closures
-/// to ensure that only one mutable view exists at a time.
+
 pub struct MatrixViewMut<'a, T: MatrixElement> {
     data: &'a mut [T],      // The actual data (mutable reference)
     total_rows: usize,      // Total rows in the original matrix
@@ -45,6 +49,280 @@ pub struct MatrixViewMut<'a, T: MatrixElement> {
     view_cols: usize,       // Columns in this view
     transpose: bool,        // Whether this view is transposed
 }
+
+
+impl<T: MatrixElement> TypedMatrix<T> {
+    #[inline]
+    fn flat_index(&self, i: usize, j: usize) -> usize {
+        j*self.rows + i
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn as_view(&self) -> MatrixViewRef<T> {
+        MatrixViewRef::new(&self.elements[..], self.rows, self.cols)
+    }
+
+    pub fn as_view_mut(&mut self) -> MatrixViewMut<T> {
+        MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols)
+    }
+
+    pub fn with_subrows_mut<F, R>(&mut self, offset: usize, rows: usize, f: F) -> R
+    where F: FnOnce(&mut MatrixViewMut<T>) -> R {
+        let mut view = MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols);
+        view.with_subrows(offset, rows, f)
+    }
+}
+
+
+impl<T: MatrixElement> TypedMatrix<T> where T: Default + Clone {
+
+    pub fn new(rows: usize, cols: usize) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: vec![T::default(); rows * cols],
+        }
+    }
+
+    pub fn column_vector(rows: usize) -> Self {
+        Self {
+            rows,
+            cols: 1,
+            elements: vec![T::default(); rows],
+        }
+    }
+
+    pub fn constant(rows: usize, cols: usize, val: T) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: vec![val; rows * cols],
+        }
+    }
+}
+
+
+impl BlockMatrix {
+    pub fn get_clear_value(&self) -> usize {
+        // Endianness note (little-endian vectors):
+        // We interpret index 0 as the least-significant bit (LSB) position of the vector,
+        // and index rows-1 as the most-significant bit (MSB). The fold below iterates in
+        // reverse to build the integer from MSB→LSB. If you change the vector endianness,
+        // update this to match the new convention.
+        let view = self.as_view();
+        (0..view.rows()).rev().fold(0, |acc, i| {
+            (acc << 1) | view[i].lsb() as usize
+        })
+    }
+
+    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: (0..rows * cols).map(|_| Block::random(rng)).collect(),
+        }
+    }
+
+    pub fn random_zeros(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        let mut elements = Vec::<Block>::new();
+
+        for _ in 0..(rows*cols) {
+            let mut bytes = rng.random::<[u8; 16]>();
+            bytes[0] &= 0xFE; // Clear last bit of last byte
+            let label = Block::from(bytes);
+            elements.push(label);
+        }
+
+        Self {
+            rows,
+            cols,
+            elements,
+        }
+    }
+
+    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
+        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
+
+        let mut out = Self::new(self.rows, other.rows);
+        for i in 0..self.rows {
+            for j in 0..other.rows {
+                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
+            }
+        }
+        out
+    }
+}
+
+
+impl KeyMatrix {
+    pub fn get_clear_value(&self) -> usize {
+        let view = self.as_view();
+        (0..view.rows()).rev().fold(0, |acc, i| {
+            (acc << 1) | view[i].as_block().lsb() as usize
+        })
+    }
+
+    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        Self {
+            rows,
+            cols,
+            elements: (0..rows * cols).map(|_| Key::random(rng)).collect(),
+        }
+    }
+
+    pub fn random_zeros(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
+        let mut elements = Vec::<Key>::new();
+
+        for _ in 0..(rows*cols) {
+            let mut bytes = rng.random::<[u8; 16]>();
+            bytes[0] &= 0xFE; // Clear last bit of last byte
+            let label = Key::from(bytes);
+            elements.push(label);
+        }
+
+        Self {
+            rows,
+            cols,
+            elements,
+        }
+    }
+}
+
+
+impl<T: MatrixElement> Index<usize> for TypedMatrix<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        debug_assert!(self.cols == 1, "Vector indexing only works for column vectors");
+        &self.elements[index]
+    }
+}
+
+impl<T: MatrixElement> IndexMut<usize> for TypedMatrix<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        debug_assert!(self.cols == 1, "Vector indexing only works for column vectors");
+        &mut self.elements[index]
+    }
+}
+
+impl<T: MatrixElement> Index<(usize, usize)> for TypedMatrix<T> {
+    type Output = T;
+
+    fn index(&self, index: (usize, usize)) -> &Self::Output {
+        &self.elements[self.flat_index(index.0, index.1)]
+    }
+}
+
+impl<T: MatrixElement> IndexMut<(usize, usize)> for TypedMatrix<T> {
+
+    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
+        let idx = self.flat_index(index.0, index.1);
+        &mut self.elements[idx]
+    }
+}
+
+impl<T: MatrixElement> BitXor<TypedMatrix<T>> for TypedMatrix<T>
+where T: BitXor<Output = T> + Copy {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+
+        if self.rows != rhs.rows || self.cols != rhs.cols {
+            panic!("Matrix dimensions must match");
+        }
+
+        let mut out = Self {
+            rows: self.rows,
+            cols: self.cols,
+            elements: Vec::with_capacity(self.rows * self.cols),
+        };
+
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                let idx = self.flat_index(i, j);
+                out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
+            }
+        }
+        out
+    }
+}
+
+impl<'a, 'b, T: MatrixElement> BitXor<&'b TypedMatrix<T>> for &'a TypedMatrix<T>
+where T: BitXor<Output = T> + Copy {
+    type Output = TypedMatrix<T>;
+
+    fn bitxor(self, rhs: &'b TypedMatrix<T>) -> Self::Output {
+
+        if self.rows != rhs.rows || self.cols != rhs.cols {
+            panic!("Matrix dimensions must match");
+        }
+
+        let mut out = TypedMatrix {
+            rows: self.rows,
+            cols: self.cols,
+            elements: Vec::with_capacity(self.rows * self.cols),
+        };
+
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                let idx = self.flat_index(i, j);
+                out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
+            }
+        }
+        out
+    }
+}
+
+impl<'a, 'b, 'c, T: MatrixElement> BitXor<&'b MatrixViewRef<'c, T>> for &'a TypedMatrix<T>
+where T: BitXor<Output = T> + Copy {
+    type Output = TypedMatrix<T>;
+
+    fn bitxor(self, rhs: &'b MatrixViewRef<T>) -> Self::Output {
+        let mut out = TypedMatrix {
+            rows: self.rows,
+            cols: self.cols,
+            elements: Vec::with_capacity(self.rows * self.cols),
+        };
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                let idx = self.flat_index(i, j);
+                out.elements.push(self.elements[idx] ^ rhs[(i, j)]);
+            }
+        }
+        out
+    }
+}
+
+// BitXorAssign implementation for TypedMatrix
+impl<T: MatrixElement> BitXorAssign for TypedMatrix<T>
+where T: BitXorAssign + Copy {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.elements.iter_mut().zip(rhs.elements.iter()).for_each(|(a, b)| {
+            *a ^= *b;
+        });
+    }
+}
+
+impl<T: MatrixElement> Display for TypedMatrix<T>
+where T: Display {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                write!(f, "{} ", self.elements[self.flat_index(i, j)])?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
 
 impl<'a, T: MatrixElement> MatrixViewRef<'a, T> {
     pub fn new(data: &'a [T], total_rows: usize, total_cols: usize) -> Self {
@@ -138,7 +416,19 @@ impl<'a, T: MatrixElement> MatrixViewMut<'a, T> {
             transpose: false,
         }
     }
-
+    
+    #[inline]
+    pub fn rows(&self) -> usize { if self.transpose { self.view_cols } else { self.view_rows }}
+    
+    #[inline]
+    pub fn cols(&self) -> usize { if self.transpose { self.view_rows } else { self.view_cols } }
+    
+    #[inline]
+    pub fn len(&self) -> usize { 
+        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
+        self.view_rows 
+    }
+    
     pub fn transpose(self) -> Self {
         Self {
             transpose: !self.transpose,
@@ -147,7 +437,7 @@ impl<'a, T: MatrixElement> MatrixViewMut<'a, T> {
     }
 
     pub fn shift(&mut self, row_offset: usize, col_offset: usize) {
-        self.view_start += col_offset * self.total_rows + row_offset; // Column-major layout
+        self.view_start += col_offset * self.total_rows + row_offset;
     }
 
     pub fn resize(&mut self, rows: usize, cols: usize) {
@@ -157,7 +447,7 @@ impl<'a, T: MatrixElement> MatrixViewMut<'a, T> {
 
     pub fn with_subrows<F, R>(&mut self, offset: usize, rows: usize, f: F) -> R
     where F: FnOnce(&mut MatrixViewMut<T>) -> R {
-        let new_start = self.view_start + offset; // For column-major, row offset is just added directly
+        let new_start = self.view_start + offset;
         let mut subview = MatrixViewMut {
             data: self.data,
             total_rows: self.total_rows,
@@ -169,24 +459,15 @@ impl<'a, T: MatrixElement> MatrixViewMut<'a, T> {
         };
         f(&mut subview)
     }
-
-    #[inline]
-    pub fn rows(&self) -> usize { if self.transpose { self.view_cols } else { self.view_rows }}
-    #[inline]
-    pub fn cols(&self) -> usize { if self.transpose { self.view_rows } else { self.view_cols } }
-    #[inline]
-    pub fn len(&self) -> usize { 
-        assert!(self.view_cols == 1, "Length is only defined for column vectors"); 
-        self.view_rows 
-    }
 }
+
 
 impl<'a, T: MatrixElement> Index<(usize, usize)> for MatrixViewRef<'a, T> {
     type Output = T;
     
     fn index(&self, index: (usize, usize)) -> &Self::Output {
         let (row, col) = if self.transpose { (index.1, index.0) } else { (index.0, index.1) };
-        let idx = self.view_start + col * self.total_rows + row; // Column-major layout
+        let idx = self.view_start + col * self.total_rows + row;
         &self.data[idx]
     }
 }
@@ -201,7 +482,6 @@ impl<'a, T: MatrixElement> Index<usize> for MatrixViewRef<'a, T> {
     }
 }
 
-// Indexing for mutable views (read-write)
 impl<'a, T: MatrixElement> Index<(usize, usize)> for MatrixViewMut<'a, T> {
     type Output = T;
 
@@ -237,293 +517,6 @@ impl<'a, T: MatrixElement> IndexMut<usize> for MatrixViewMut<'a, T> {
         &mut self.data[idx]
     }
 }
-
-
-
-#[derive(Debug, Clone)]
-pub struct TypedMatrix<T: MatrixElement> {
-    rows: usize,
-    cols: usize,
-    elements: Vec<T>,
-}
-
-// Type alias for backward compatibility
-pub type KeyMatrix = TypedMatrix<Key>;
-pub type BlockMatrix = TypedMatrix<Block>;
-
-impl<T: MatrixElement> TypedMatrix<T> {
-    #[inline]
-    fn flat_index(&self, i: usize, j: usize) -> usize {
-        j*self.rows + i
-    }
-}
-
-impl<T: MatrixElement> TypedMatrix<T> 
-where T: Default + Clone {
-
-    pub fn new(rows: usize, cols: usize) -> Self where T: Default + Clone {
-        Self {
-            rows,
-            cols,
-            elements: vec![T::default(); rows * cols],
-        }
-    }
-
-    pub fn column_vector(rows: usize) -> Self {
-        Self {
-            rows,
-            cols: 1,
-            elements: vec![T::default(); rows],
-        }
-    }
-
-    pub fn constant(rows: usize, cols: usize, val: T) -> Self {
-        Self {
-            rows,
-            cols,
-            elements: vec![val; rows * cols],
-        }
-    }
-
-    pub fn as_view(&self) -> MatrixViewRef<T> {
-        MatrixViewRef::new(&self.elements[..], self.rows, self.cols)
-    }
-
-    pub fn as_view_mut(&mut self) -> MatrixViewMut<T> {
-        MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols)
-    }
-
-    pub fn with_subrows_mut<F, R>(&mut self, offset: usize, rows: usize, f: F) -> R
-    where F: FnOnce(&mut MatrixViewMut<T>) -> R {
-        let mut view = MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols);
-        view.with_subrows(offset, rows, f)
-    }
-
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    pub fn cols(&self) -> usize {
-        self.cols
-    }
-}
-
-impl TypedMatrix<Block> {
-
-}
-
-// Vector access
-impl<T: MatrixElement> Index<usize> for TypedMatrix<T> {
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        debug_assert!(self.cols == 1, "Vector indexing only works for column vectors");
-        &self.elements[index]
-    }
-}
-
-impl<T: MatrixElement> IndexMut<usize> for TypedMatrix<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        debug_assert!(self.cols == 1, "Vector indexing only works for column vectors");
-        &mut self.elements[index]
-    }
-}
-
-// Matrix access
-impl<T: MatrixElement> Index<(usize, usize)> for TypedMatrix<T> {
-    type Output = T;
-
-    fn index(&self, index: (usize, usize)) -> &Self::Output {
-        &self.elements[self.flat_index(index.0, index.1)]
-    }
-}
-
-// Matrix access
-impl<T: MatrixElement> IndexMut<(usize, usize)> for TypedMatrix<T> {
-
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let idx = self.flat_index(index.0, index.1);
-        &mut self.elements[idx]
-    }
-}
-
-// BitXor implementation for TypedMatrix
-impl<T: MatrixElement + BitXor<Output = T> + Copy> BitXor<TypedMatrix<T>> for TypedMatrix<T> {
-    type Output = Self;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-
-        if self.rows != rhs.rows || self.cols != rhs.cols {
-            panic!("Matrix dimensions must match");
-        }
-
-        let mut out = Self {
-            rows: self.rows,
-            cols: self.cols,
-            elements: Vec::with_capacity(self.rows * self.cols),
-        };
-
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
-                out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
-            }
-        }
-        out
-    }
-}
-
-impl<'a, 'b, T: MatrixElement + BitXor<Output = T> + Copy> BitXor<&'b TypedMatrix<T>> for &'a TypedMatrix<T> {
-    type Output = TypedMatrix<T>;
-
-    fn bitxor(self, rhs: &'b TypedMatrix<T>) -> Self::Output {
-
-        if self.rows != rhs.rows || self.cols != rhs.cols {
-            panic!("Matrix dimensions must match");
-        }
-
-        let mut out = TypedMatrix {
-            rows: self.rows,
-            cols: self.cols,
-            elements: Vec::with_capacity(self.rows * self.cols),
-        };
-
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
-                out.elements.push(self.elements[idx] ^ rhs.elements[idx]);
-            }
-        }
-        out
-    }
-}
-
-impl<'a, 'b, 'c, T: MatrixElement + BitXor<Output = T> + Copy> BitXor<&'b MatrixViewRef<'c, T>> for &'a TypedMatrix<T> {
-    type Output = TypedMatrix<T>;
-
-    fn bitxor(self, rhs: &'b MatrixViewRef<T>) -> Self::Output {
-        let mut out = TypedMatrix {
-            rows: self.rows,
-            cols: self.cols,
-            elements: Vec::with_capacity(self.rows * self.cols),
-        };
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                let idx = self.flat_index(i, j);
-                out.elements.push(self.elements[idx] ^ rhs[(i, j)]);
-            }
-        }
-        out
-    }
-}
-
-// BitXorAssign implementation for TypedMatrix
-impl<T: MatrixElement + BitXorAssign + Copy> BitXorAssign for TypedMatrix<T> {
-    fn bitxor_assign(&mut self, rhs: Self) {
-        self.elements.iter_mut().zip(rhs.elements.iter()).for_each(|(a, b)| {
-            *a ^= *b;
-        });
-    }
-}
-
-impl<T: MatrixElement + Display> Display for TypedMatrix<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for i in 0..self.rows {
-            for j in 0..self.cols {
-                write!(f, "{} ", self.elements[self.flat_index(i, j)])?;
-            }
-            writeln!(f)?;
-        }
-        Ok(())
-    }
-}
-
-impl BlockMatrix {
-    pub fn get_clear_value(&self) -> usize {
-        // Endianness note (little-endian vectors):
-        // We interpret index 0 as the least-significant bit (LSB) position of the vector,
-        // and index rows-1 as the most-significant bit (MSB). The fold below iterates in
-        // reverse to build the integer from MSB→LSB. If you change the vector endianness,
-        // update this to match the new convention.
-        let view = self.as_view();
-        (0..view.rows()).rev().fold(0, |acc, i| {
-            (acc << 1) | view[i].lsb() as usize
-        })
-    }
-
-    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
-        Self {
-            rows,
-            cols,
-            elements: (0..rows * cols).map(|_| Block::random(rng)).collect(),
-        }
-    }
-
-    pub fn random_zeros(rows: usize, cols: usize) -> Self {
-        let mut elements = Vec::<Block>::new();
-
-        for _ in 0..(rows*cols) {
-            let mut bytes = rand::random::<[u8; 16]>();
-            bytes[0] &= 0xFE; // Clear last bit of last byte
-            let label = Block::from(bytes);
-            elements.push(label);
-        }
-
-        Self {
-            rows,
-            cols,
-            elements,
-        }
-    }
-
-    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
-        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
-
-        let mut out = Self::new(self.rows, other.rows);
-        for i in 0..self.rows {
-            for j in 0..other.rows {
-                out.elements[self.flat_index(i, j)] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
-            }
-        }
-        out
-    }
-}
-
-impl KeyMatrix {
-    pub fn get_clear_value(&self) -> usize {
-        let view = self.as_view();
-        (0..view.rows()).rev().fold(0, |acc, i| {
-            (acc << 1) | view[i].as_block().lsb() as usize
-        })
-    }
-
-    pub fn random(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
-        Self {
-            rows,
-            cols,
-            elements: (0..rows * cols).map(|_| Key::random(rng)).collect(),
-        }
-    }
-
-    pub fn random_zeros(rows: usize, cols: usize, rng: &mut impl rand::Rng) -> Self {
-        let mut elements = Vec::<Key>::new();
-
-        for _ in 0..(rows*cols) {
-            let mut bytes = rng.random::<[u8; 16]>();
-            bytes[0] &= 0xFE; // Clear last bit of last byte
-            let label = Key::from(bytes);
-            elements.push(label);
-        }
-
-        Self {
-            rows,
-            cols,
-            elements,
-        }
-    }
-}
-
-
 
 
 #[cfg(test)]

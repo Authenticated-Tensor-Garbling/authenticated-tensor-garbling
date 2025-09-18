@@ -475,7 +475,7 @@ mod test {
     }
 
     fn get_gen_eval_vecs(delta: Delta, n: usize, clear_x: usize) -> (crate::matrix::TypedMatrix<Block>, crate::matrix::TypedMatrix<Block>) {
-        let gen_x = BlockMatrix::random_zeros(n, 1);
+        let gen_x = BlockMatrix::random_zeros(n, 1, &mut rand::rng());
         debug_assert!((0..n).all(|i| gen_x[i].lsb() == false), "gen_x LSBs must be 0");
         let mut eval_x = BlockMatrix::constant(n, 1, Block::default());
         for i in 0..n {
