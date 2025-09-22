@@ -5,7 +5,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 
 /// Insecure ideal Fpre that pre-generates auth bits for input and output vectors of a tensor gate.
-pub struct tensor_fpre {
+pub struct TensorFpre {
     rng: ChaCha12Rng,
     n: usize,
     m: usize,
@@ -17,7 +17,10 @@ pub struct tensor_fpre {
     gamma_auth_bits: Vec<AuthBit>,
 }
 
-impl tensor_fpre {
+pub struct TensorFpre {
+}
+
+impl TensorFpre {
     /// Creates a new tensor_fpre with random `delta_a`, `delta_b`.
     pub fn new(seed: u64, n: usize, m: usize) -> Self {
         let mut rng = ChaCha12Rng::seed_from_u64(seed);
@@ -38,7 +41,7 @@ impl tensor_fpre {
         }
     }
 
-    /// Creates a new tensor_fpre with given `delta_a`, `delta_b`.
+    /// Creates a new TensorFpre with given `delta_a`, `delta_b`.
     pub fn new_with_delta(seed: u64, n: usize, m: usize, delta_a: Delta, delta_b: Delta) -> Self {
         let rng = ChaCha12Rng::seed_from_u64(seed);
 
@@ -122,7 +125,7 @@ mod tests {
         let n = 3;
         let m = 4;
 
-        let mut fpre = tensor_fpre::new(0, n, m);
+        let mut fpre = TensorFpre::new(0, n, m);
         fpre.generate();
 
         // confirm dimensions
