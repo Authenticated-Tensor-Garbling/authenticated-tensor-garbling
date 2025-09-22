@@ -1,6 +1,6 @@
 use crate::block::Block;
 
-use rand::{CryptoRng, Rng, distr::StandardUniform, prelude::Distribution};
+use rand::{Rng, distr::StandardUniform, prelude::Distribution};
 use std::ops::{BitXor, BitXorAssign};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,6 +14,11 @@ impl Delta {
         Self(value)
     }
 
+    #[inline]
+    pub fn lsb(&self) -> bool {
+        self.0.lsb()
+    }
+
     /// Set the pointer bit of the Delta
     #[inline]
     pub fn set_lsb(mut self, value: bool) -> Self {
@@ -23,7 +28,7 @@ impl Delta {
 
     /// Generate a random block using the provided RNG
     #[inline]
-    pub fn random<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
+    pub fn random<R: Rng>(rng: &mut R) -> Self {
         // Self::new() sets the LSB to 1
         Self::new(Block::from(rng.random::<[u8; 16]>()))
     }
@@ -47,13 +52,6 @@ impl Delta {
     #[inline]
     pub fn into_inner(self) -> Block {
         self.0
-    }
-}
-
-impl Distribution<Delta> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Delta {
-        Delta::new(Block::from(rng.random::<[u8; 16]>()))
     }
 }
 
