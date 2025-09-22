@@ -114,7 +114,7 @@ impl Add<&AuthBitShare> for &AuthBitShare {
 }
 
 /// Builds one `AuthBitShare` from a bit and delta, ensuring `key.lsb()==false`.
-fn build_share(rng: &mut ChaCha12Rng, bit: bool, delta: &Delta) -> AuthBitShare {
+pub fn build_share(rng: &mut ChaCha12Rng, bit: bool, delta: &Delta) -> AuthBitShare {
     let key: Key = Key::from(rng.random::<[u8; 16]>());
     let mac: Mac = key.auth(bit, delta);
     AuthBitShare { key, mac, value: bit }

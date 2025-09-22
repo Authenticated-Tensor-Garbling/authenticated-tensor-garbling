@@ -1,5 +1,5 @@
 // TODO refactor authbit from fpre to a common module, or redefine with new name.
-use crate::{delta::Delta, fpre::{AuthBit, AuthTriple, build_share, AuthBitShare}};
+use crate::{block::Block, delta::Delta, fpre::{AuthBit, build_share, AuthBitShare}};
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
@@ -11,13 +11,41 @@ pub struct TensorFpre {
     m: usize,
     delta_a: Delta,
     delta_b: Delta,
+    alpha_labels: Vec<InputSharing>,
+    beta_labels: Vec<InputSharing>,
     alpha_auth_bits: Vec<AuthBit>,
     beta_auth_bits: Vec<AuthBit>,
     correlated_auth_bits: Vec<AuthBit>,
     gamma_auth_bits: Vec<AuthBit>,
 }
 
-pub struct TensorFpre {
+pub struct TensorFpreGen {
+    pub n: usize,
+    pub m: usize,
+    pub delta_a: Delta,
+    pub alpha_labels: Vec<Block>,
+    pub beta_labels: Vec<Block>,
+    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    pub beta_auth_bit_shares: Vec<AuthBitShare>,
+    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
+}
+
+pub struct TensorFpreEval {
+    pub n: usize,
+    pub m: usize,
+    pub delta_b: Delta,
+    pub alpha_labels: Vec<Block>,
+    pub beta_labels: Vec<Block>,
+    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    pub beta_auth_bit_shares: Vec<AuthBitShare>,
+    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
+}
+
+struct InputSharing {
+    pub gen_share: Block,
+    pub eval_share: Block,
 }
 
 impl TensorFpre {
@@ -34,6 +62,8 @@ impl TensorFpre {
             m,
             delta_a,
             delta_b,
+            alpha_labels: Vec::with_capacity(n),
+            beta_labels: Vec::with_capacity(m),
             alpha_auth_bits:        Vec::with_capacity(n),
             beta_auth_bits:         Vec::with_capacity(m),
             correlated_auth_bits:   Vec::with_capacity(n * m),
@@ -51,10 +81,49 @@ impl TensorFpre {
             m,
             delta_a,
             delta_b,
+            alpha_labels: Vec::with_capacity(n),
+            beta_labels: Vec::with_capacity(m),
             alpha_auth_bits: Vec::with_capacity(n),
             beta_auth_bits: Vec::with_capacity(m),
             correlated_auth_bits: Vec::with_capacity(n * m),
             gamma_auth_bits: Vec::with_capacity(n * m),
+        }
+    }
+
+    pub fn gen_input_sharings(&mut self, alpha: usize, beta: usize) {
+        assert!(alpha < 1<<self.n, "alpha must be < 2^n");
+        assert!(beta < 1<<self.m, "beta must be < 2^m");
+
+        for i in 0..self.n {
+            let mut gen_label = Block::random(&mut self.rng);
+            gen_label.set_lsb(false);
+
+            let eval_label: Block;
+
+            let bit = 1<<i & alpha;
+            if bit != 0 {
+                eval_label = gen_label ^ self.delta_a.as_block();
+            } else {
+                eval_label = gen_label.clone();
+            }
+
+            self.alpha_labels.push(InputSharing { gen_share: gen_label, eval_share: eval_label });
+        }
+
+        for i in 0..self.m {
+            let mut gen_label = Block::random(&mut self.rng);
+            gen_label.set_lsb(false);
+
+            let eval_label: Block;
+
+            let bit = 1<<i & beta;
+            if bit != 0 {
+                eval_label = gen_label ^ self.delta_a.as_block();
+            } else {
+                eval_label = gen_label.clone();
+            }
+
+            self.beta_labels.push(InputSharing { gen_share: gen_label, eval_share: eval_label });
         }
     }
 
@@ -114,6 +183,31 @@ impl TensorFpre {
             }
         }
     }
+
+    pub fn into_gen_eval(self) -> (TensorFpreGen, TensorFpreEval) {
+
+        (TensorFpreGen {
+            n: self.n,
+            m: self.m,
+            delta_a: self.delta_a,
+            alpha_labels: self.alpha_labels.iter().map(|share| share.gen_share).collect(),
+            beta_labels: self.beta_labels.iter().map(|share| share.gen_share).collect(),
+            alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.gen_share).collect(),
+            beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.gen_share).collect(),
+            correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.gen_share).collect(),
+            gamma_auth_bit_shares: self.gamma_auth_bits.iter().map(|bit| bit.gen_share).collect(),
+        }, TensorFpreEval {
+            n: self.n,
+            m: self.m,
+            delta_b: self.delta_b,
+            alpha_labels: self.alpha_labels.iter().map(|share| share.eval_share).collect(),
+            beta_labels: self.beta_labels.iter().map(|share| share.eval_share).collect(),
+            alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.eval_share).collect(),
+            beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.eval_share).collect(),
+            correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
+            gamma_auth_bit_shares: self.gamma_auth_bits.iter().map(|bit| bit.eval_share).collect(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -121,7 +215,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tensor_fpre() {
+    fn test_tensor_fpre_auth_bits() {
         let n = 3;
         let m = 4;
 
@@ -160,6 +254,36 @@ mod tests {
                 let alpha_beta = &fpre.correlated_auth_bits[base + i];
                 println!("verifying correlated_auth_bits: {}",j * n + i);
                 assert!(alpha_beta.full_bit() == (alpha.full_bit() && beta.full_bit()), "alpha_beta must equal alpha.full_bit() && beta.full_bit()");
+            }
+        }
+    }
+    
+    #[test]
+    fn test_tensor_fpre_input_sharings() {
+        let n = 3;
+        let m = 4;
+
+        let mut fpre = TensorFpre::new(0, n, m);
+        fpre.gen_input_sharings(0b101, 0b110);
+
+        assert_eq!(fpre.alpha_labels.len(), n);
+        assert_eq!(fpre.beta_labels.len(), m);
+
+        for (i, label_sharing) in fpre.alpha_labels.iter().enumerate() {
+            let bit = 1<<i & 0b101;
+            if bit != 0 {
+                assert_eq!(label_sharing.eval_share, label_sharing.gen_share ^ fpre.delta_a.as_block());
+            } else {
+                assert_eq!(label_sharing.eval_share, label_sharing.gen_share);
+            }
+        }
+
+        for (i, label_sharing) in fpre.beta_labels.iter().enumerate() {
+            let bit = 1<<i & 0b110;
+            if bit != 0 {
+                assert_eq!(label_sharing.eval_share, label_sharing.gen_share ^ fpre.delta_a.as_block());
+            } else {
+                assert_eq!(label_sharing.eval_share, label_sharing.gen_share);
             }
         }
     }

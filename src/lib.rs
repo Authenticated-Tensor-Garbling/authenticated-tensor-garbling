@@ -17,7 +17,8 @@ pub mod tensor_pre;
 pub mod tensor_gen;
 pub mod tensor_eval;
 
-mod auth_unary_outer_product;
+mod auth_tensor_fpre;
+mod auth_tensor_gen;
 
 // Re-export circuits for convenience
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
