@@ -13,15 +13,15 @@ pub struct AuthTensorEval {
     n: usize,
     m: usize,
 
-    delta_b: Delta,
+    pub delta_b: Delta,
 
-    x_labels: Vec<Block>,
-    y_labels: Vec<Block>,
+    pub x_labels: Vec<Block>,
+    pub y_labels: Vec<Block>,
 
-    alpha_auth_bit_shares: Vec<AuthBitShare>,
-    beta_auth_bit_shares: Vec<AuthBitShare>,
-    correlated_auth_bit_shares: Vec<AuthBitShare>,
-    gamma_auth_bit_shares: Vec<AuthBitShare>,
+    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    pub beta_auth_bit_shares: Vec<AuthBitShare>,
+    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -57,7 +57,7 @@ impl AuthTensorEval {
             delta_b: fpre_eval.delta_b,
             x_labels: fpre_eval.alpha_labels,
             y_labels: fpre_eval.beta_labels,
-            alpha_auth_bit_shares: Vec::new(),
+            alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,
             gamma_auth_bit_shares: fpre_eval.gamma_auth_bit_shares,
@@ -227,7 +227,7 @@ impl AuthTensorEval {
         }
     }
 
-    fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+    pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
             x[i] = self.x_labels[i];
@@ -241,7 +241,7 @@ impl AuthTensorEval {
         (x, y)
     }
 
-    fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+    pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         let mut x = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
             x[i] = self.y_labels[i];
@@ -249,7 +249,7 @@ impl AuthTensorEval {
         
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y[i] = *self.beta_auth_bit_shares[i].mac.as_block();
+            y[i] = *self.alpha_auth_bit_shares[i].mac.as_block();
         }
 
         (x, y)
@@ -268,7 +268,10 @@ impl AuthTensorEval {
     pub fn evaluate_final(&mut self) {
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
+                self.first_half_out[(i, j)] ^= 
+                    self.second_half_out[(j, i)] ^
+                    self.correlated_auth_bit_shares[j * self.n + i].mac.as_block(); //^
+                    // self.gamma_auth_bit_shares[j * self.n + i].mac.as_block()
             }
         }
     }

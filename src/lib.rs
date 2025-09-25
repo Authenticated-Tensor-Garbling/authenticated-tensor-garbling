@@ -572,25 +572,162 @@ mod tests {
 
     #[test]
     fn test_auth_tensor_product() {
-        
+        let mut rng = rand::rng();
+        let delta_a = Delta::random(&mut rng);
+        let delta_b = Delta::random(&mut rng);
+
         let n = 2;
         let m = 3;
 
-        let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_with_input_values(0b101, 0b110);
+        let input_x = 0b101;
+        let input_y = 0b110;
+
+        let mut fpre = TensorFpre::new_with_delta(54, n, m, 6, delta_a, delta_b);
+        fpre.generate_with_input_values(input_x, input_y);
+        let (clear_x, clear_y, alpha, beta) = fpre.get_clear_values();
+        let masked_x = clear_x ^ alpha;
+        let masked_y = clear_y ^ beta;
+
+        let n_bitmask = (1<<n)-1;
+        let m_bitmask = (1<<m)-1;
+
+        assert_eq!(input_x & n_bitmask, clear_x);
+        assert_eq!(input_y & m_bitmask, clear_y);
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 
         let mut gb = AuthTensorGen::new_from_fpre_gen(1, fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(1, fpre_eval);
 
+        // check that gb and ev have correct masks
+        // x_labels should be masked_x ^ alpha
+        // y_labels should be masked_y ^ beta
+        for i in 0..n {
+            if ((1<<i) & masked_x) != 0 {
+                assert_eq!(gb.x_labels[i], ev.x_labels[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gb.x_labels[i], ev.x_labels[i]);
+            }
+            if ((1<<i) & masked_y) != 0 {
+                assert_eq!(gb.y_labels[i], ev.y_labels[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gb.y_labels[i], ev.y_labels[i]);
+            }
+        }
+
+        //check the inputs to the first half outer product: masked_x (x) beta
+        let (gen_x, gen_y) = gb.get_first_inputs();
+        let (eval_x, eval_y) = ev.get_first_inputs();
+
+        for i in 0..n {
+            if ((1<<i) & masked_x) != 0 {
+                assert_eq!(gen_x[i], eval_x[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gen_x[i], eval_x[i]);
+            }
+        }
+        for i in 0..m {
+            if ((1<<i) & input_y) != 0 {
+                assert_eq!(gen_y[i], eval_y[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gen_y[i], eval_y[i]);
+            }
+        }
+
+
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_first_half();
         ev.evaluate_first_half(gen_chunk_levels, gen_chunk_cts);
+
+        // check that first_out has the correct value
+        // first_out should be masked_x (tensor) input_y
+        for i in 0..n {
+            for j in 0..m {
+                let expected_val = (((masked_x>>i)&1) & ((input_y>>j)&1)) != 0;
+                if expected_val {
+                    assert_eq!(gb.first_half_out[(i, j)], ev.first_half_out[(i, j)] ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
+                } else {
+                    assert_eq!(gb.first_half_out[(i, j)], ev.first_half_out[(i, j)], "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
+                }
+            }
+        }
+
+        //check the inputs to the second half outer product: masked_y (x) alpha
+        let (gen_x, gen_y) = gb.get_second_inputs();
+        let (eval_x, eval_y) = ev.get_second_inputs();
+
+        for i in 0..m {
+            if ((1<<i) & masked_y) != 0 {
+                assert_eq!(gen_x[i], eval_x[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gen_x[i], eval_x[i]);
+            }
+        }
+        for i in 0..n {
+            if ((1<<i) & alpha) != 0 {
+                assert_eq!(gen_y[i], eval_y[i] ^ delta_a.as_block());
+            } else {
+                assert_eq!(gen_y[i], eval_y[i]);
+            }
+        }
 
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_second_half();
         ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
 
+        // check that second_out has the correct value
+        // second_out should be masked_y (tensor) alpha
+        for i in 0..m {
+            for j in 0..n {
+                let expected_val = (((masked_y>>i)&1) & ((alpha>>j)&1)) != 0;
+                if expected_val {
+                    assert_eq!(gb.second_half_out[(i, j)], ev.second_half_out[(i, j)] ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
+                } else {
+                    assert_eq!(gb.second_half_out[(i, j)], ev.second_half_out[(i, j)], "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
+                }
+            }
+        }
+
+        // check that final_out has the correct value
+        // final_out should be masked_x (tensor) input_y (tensor) alpha
+        for i in 0..n {
+            for j in 0..m {
+                let expected_val = (((alpha>>i)&1) & ((beta>>j)&1)) != 0;
+                let gb_share =
+                    if gb.correlated_auth_bit_shares[j * n + i].bit() {
+                        gb.delta_a.as_block() ^ gb.correlated_auth_bit_shares[j * n + i].key.as_block()
+                    } else {
+                        *gb.correlated_auth_bit_shares[j * n + i].key.as_block()
+                    };
+                let ev_share = *ev.correlated_auth_bit_shares[j * n + i].mac.as_block();
+
+                if expected_val {
+                    assert_eq!(gb_share, ev_share ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
+                } else {
+                    assert_eq!(gb_share, ev_share, "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
+                }
+            }
+        }
+
         gb.garble_final();
         ev.evaluate_final();
+
+        // check each element for correctness
+        for i in 0..n {
+            let x_bit = ((input_x >> i) & 1) != 0;
+            for j in 0..m {
+                let y_bit = ((input_y >> j) & 1) != 0;
+                let expected_val = x_bit & y_bit;
+                print!("{} ", expected_val);
+
+                let gb_val = gb.first_half_out[(i, j)];
+                let ev_val = ev.first_half_out[(i, j)];
+                
+                if expected_val {
+                    assert_eq!(gb_val, ev_val ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
+                } else {
+                    assert_eq!(gb_val, ev_val, "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
+                }
+            }
+            println!();
+        }
     }
 }

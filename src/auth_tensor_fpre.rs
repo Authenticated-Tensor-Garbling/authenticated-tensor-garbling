@@ -51,6 +51,16 @@ struct InputSharing {
     pub eval_share: Block,
 }
 
+impl InputSharing {
+    pub fn bit(&self) -> bool {
+        if self.gen_share == self.eval_share {
+            false
+        } else {
+            true
+        }
+    }
+}
+
 impl TensorFpre {
     /// Creates a new tensor_fpre with random `delta_a`, `delta_b`.
     pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize) -> Self {
@@ -117,45 +127,24 @@ impl TensorFpre {
             },
         }
     }
-    
-    pub fn gen_input_sharings(&mut self, x: usize, y: usize) {
-        assert!(x < 1<<self.n, "alpha must be < 2^n");
-        assert!(y < 1<<self.m, "beta must be < 2^m");
-
-        for i in 0..self.n {
-            
-        }
-
-        for i in 0..self.m {
-            let mut gen_label = Block::random(&mut self.rng);
-            gen_label.set_lsb(false);
-
-            let eval_label: Block;
-
-            let bit = 1<<i & y;
-            if bit != 0 {
-                eval_label = gen_label ^ self.delta_a.as_block();
-            } else {
-                eval_label = gen_label.clone();
-            }
-
-            self.y_labels.push(InputSharing { gen_share: gen_label, eval_share: eval_label });
-        }
-    }
 
     /// Generates all auth bits for the input and output vectors of a tensor gate.
     /// alpha, beta, ab* = alpha * beta
     /// gamma
-    pub fn generate_with_input_values(&mut self, x: usize, y: usize) {
+    pub fn generate_with_input_values(&mut self, x: usize, y: usize) -> (usize, usize) {
 
+        let mut alpha: usize = 0;
         for i in 0..self.n {
             // generate the auth bit
             let alpha_bit = self.rng.random_bool(0.5);
-            let alpha = self.gen_auth_bit(alpha_bit);
-            self.alpha_auth_bits.push(alpha);
+            let alpha_auth_bit = self.gen_auth_bit(alpha_bit);
+            self.alpha_auth_bits.push(alpha_auth_bit);
+
+            // accumulate alpha bits in little-endian order
+            alpha |= (alpha_bit as usize) << i;
 
 
-            // generate the label sharing
+            // generate the label sharing of x ^ alpha
             let mut gen_label = Block::random(&mut self.rng);
             gen_label.set_lsb(false);
 
@@ -171,13 +160,17 @@ impl TensorFpre {
 
         }
 
+        let mut beta: usize = 0;
         for j in 0..self.m {
             // generate the auth bit
             let beta_bit = self.rng.random_bool(0.5);
-            let beta =self.gen_auth_bit(beta_bit);
-            self.beta_auth_bits.push(beta);
+            let beta_auth_bit = self.gen_auth_bit(beta_bit);
+            self.beta_auth_bits.push(beta_auth_bit);
 
-            // generate the label sharing
+            // accumulate beta bits in little-endian order
+            beta |= (beta_bit as usize) << j;
+
+            // generate the label sharing of y ^ beta
             let mut gen_label = Block::random(&mut self.rng);
             gen_label.set_lsb(false);
 
@@ -198,8 +191,8 @@ impl TensorFpre {
         for j in 0..self.m {
             for i in 0..self.n {
                 let g = self.rng.random_bool(0.5);
-                let gamma = self.gen_auth_bit(g);
-                self.gamma_auth_bits.push(gamma);
+                let gamma_auth_bit = self.gen_auth_bit(g);
+                self.gamma_auth_bits.push(gamma_auth_bit);        
 
                 let alpha = &self.alpha_auth_bits[i];
                 let beta = &self.beta_auth_bits[j];
@@ -207,6 +200,7 @@ impl TensorFpre {
                 self.correlated_auth_bits.push(alpha_beta);
             }
         }
+        (alpha, beta)
     }
 
     pub fn into_gen_eval(self) -> (TensorFpreGen, TensorFpreEval) {
@@ -234,6 +228,31 @@ impl TensorFpre {
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             gamma_auth_bit_shares: self.gamma_auth_bits.iter().map(|bit| bit.eval_share).collect(),
         })
+    }
+
+    /// Gets the clear values of the input and output vectors and the auth bits.
+    /// x_label holds x^alpha
+    /// y_label holds y^beta
+    /// alpha_auth_bits holds alpha
+    /// beta_auth_bits holds beta
+    /// Returns (x^alpha, y^beta, alpha, beta)
+    pub fn get_clear_values(&self) -> (usize, usize, usize, usize) {
+
+        let mut x: usize = 0;
+        let mut y: usize = 0;
+
+        let mut alpha: usize = 0;
+        let mut beta: usize = 0;
+        for i in 0..self.n {
+            x |= (self.x_labels[i].bit() as usize) << i;
+            alpha |= (self.alpha_auth_bits[i].full_bit() as usize) << i;
+        }
+        for j in 0..self.m {
+            y |= (self.y_labels[j].bit() as usize) << j;
+            beta |= (self.beta_auth_bits[j].full_bit() as usize) << j;
+        }
+
+        (x^alpha, y^beta, alpha, beta)
     }
 }
 

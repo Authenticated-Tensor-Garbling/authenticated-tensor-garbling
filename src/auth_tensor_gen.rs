@@ -18,15 +18,15 @@ pub struct AuthTensorGen {
     n: usize,
     m: usize,
     
-    delta_a: Delta,
+    pub delta_a: Delta,
     
-    x_labels: Vec<Block>,
-    y_labels: Vec<Block>,
+    pub x_labels: Vec<Block>,
+    pub y_labels: Vec<Block>,
 
-    alpha_auth_bit_shares: Vec<AuthBitShare>,
-    beta_auth_bit_shares: Vec<AuthBitShare>,
-    correlated_auth_bit_shares: Vec<AuthBitShare>,
-    gamma_auth_bit_shares: Vec<AuthBitShare>,
+    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    pub beta_auth_bit_shares: Vec<AuthBitShare>,
+    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -191,7 +191,7 @@ impl AuthTensorGen {
         gen_cts
     }
 
-    pub fn  gen_chunked_half_outer_product(
+    pub fn gen_chunked_half_outer_product(
         &mut self,
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
@@ -233,9 +233,9 @@ impl AuthTensorGen {
     }
 
     /// returns: the garbler's x and y inputs to the first tensor half gate
-    /// x --> a (x) alpha
-    /// y --> b
-    fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+    /// x <= input_x (x) alpha == x_labels
+    /// y <= beta
+    pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
 
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
@@ -259,9 +259,9 @@ impl AuthTensorGen {
     }
 
     /// returns: the evaluator's x and y inputs to the second tensor half gate
-    /// x --> beta
-    /// y --> a (x) alpha
-    fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+    /// x <= beta
+    /// y <= masked_x
+    pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         let mut x = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
             x[i] = self.y_labels[i];
@@ -305,14 +305,16 @@ impl AuthTensorGen {
                     *self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
                 };
 
-                let gamma_share = if self.gamma_auth_bit_shares[j * self.n + i].bit() {
+                let _gamma_share = if self.gamma_auth_bit_shares[j * self.n + i].bit() {
                     self.delta_a.as_block() ^ self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
                 } else {
                     *self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
                 };
 
                 self.first_half_out[(i, j)] ^=
-                    self.second_half_out[(j, i)] ^ correlated_share ^ gamma_share;
+                    self.second_half_out[(j, i)] ^
+                    correlated_share;// ^
+                    // gamma_share;
             }
         }
     }
@@ -329,7 +331,7 @@ mod tests {
         let m = 3;
 
         let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_with_input_values(0b101, 0b110);
+        fpre.generate_with_input_values(0b1101, 0b110);
 
         let (fpre_gen, _) = fpre.into_gen_eval();
         
