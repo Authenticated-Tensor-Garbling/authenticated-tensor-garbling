@@ -19,6 +19,7 @@ pub mod tensor_eval;
 
 mod auth_tensor_fpre;
 mod auth_tensor_gen;
+mod auth_tensor_eval;
 
 // Re-export circuits for convenience
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};

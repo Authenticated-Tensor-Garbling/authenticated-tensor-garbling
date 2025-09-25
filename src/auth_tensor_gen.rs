@@ -10,15 +10,7 @@ use crate::{
     matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef},
 };
 
-#[derive(PartialEq, Clone, Copy)]
-enum ProtocolPhase {
-    Setup,
-    FirstHalf,
-    SecondHalf,
-    Final,
-}
-
-pub struct auth_tensor_gen {
+pub struct AuthTensorGen {
     cipher: &'static FixedKeyAes,
     seed: u64,
     chunking_factor: usize,
@@ -38,11 +30,9 @@ pub struct auth_tensor_gen {
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
-
-    phase: ProtocolPhase,
 }
 
-impl auth_tensor_gen {
+impl AuthTensorGen {
     pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
@@ -59,7 +49,6 @@ impl auth_tensor_gen {
             gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
-            phase: ProtocolPhase::Setup,
         }
     }
 
@@ -79,7 +68,6 @@ impl auth_tensor_gen {
             gamma_auth_bit_shares: fpre_gen.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
-            phase: ProtocolPhase::Setup,
         }
     }
 
@@ -307,6 +295,27 @@ impl auth_tensor_gen {
 
         (chunk_levels, chunk_cts)
     }
+
+    pub fn garble_final(&mut self) {
+        for i in 0..self.n {
+            for j in 0..self.m {
+                let correlated_share = if self.correlated_auth_bit_shares[j * self.n + i].bit() {
+                    self.delta_a.as_block() ^ self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
+                } else {
+                    *self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
+                };
+
+                let gamma_share = if self.gamma_auth_bit_shares[j * self.n + i].bit() {
+                    self.delta_a.as_block() ^ self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
+                } else {
+                    *self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
+                };
+
+                self.first_half_out[(i, j)] ^=
+                    self.second_half_out[(j, i)] ^ correlated_share ^ gamma_share;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -333,7 +342,7 @@ mod tests {
         assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
         assert_eq!(fpre_gen.gamma_auth_bit_shares.len(), n * m);
         
-        let mut gar = auth_tensor_gen::new_from_fpre_gen(1, fpre_gen);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(1, fpre_gen);
 
         assert_eq!(gar.x_labels.len(), n);
         assert_eq!(gar.y_labels.len(), m);
@@ -345,7 +354,6 @@ mod tests {
         assert_eq!(gar.gamma_auth_bit_shares.len(), n * m);
 
         let (chunk_levels, chunk_cts) = gar.garble_first_half();
-
 
     }
 }

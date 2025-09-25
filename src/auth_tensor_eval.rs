@@ -265,6 +265,14 @@ impl AuthTensorEval {
         self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), chunk_levels, chunk_cts, false);
     }
 
+    pub fn evaluate_final(&mut self) {
+        for i in 0..self.n {
+            for j in 0..self.m {
+                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
+            }
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -272,6 +280,6 @@ mod tests {
 
     #[test]
     fn test_auth_tensor_eval() {
-        unimplemented!();        
+        unimplemented!();
     }
 }
