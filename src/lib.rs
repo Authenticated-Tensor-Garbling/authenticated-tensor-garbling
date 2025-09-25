@@ -565,4 +565,32 @@ mod tests {
             println!("]");
         }
     }
+
+    use crate::auth_tensor_fpre::TensorFpre;
+    use crate::auth_tensor_gen::AuthTensorGen;
+    use crate::auth_tensor_eval::AuthTensorEval;
+
+    #[test]
+    fn test_auth_tensor_product() {
+        
+        let n = 2;
+        let m = 3;
+
+        let mut fpre = TensorFpre::new(0, n, m, 6);
+        fpre.generate_with_input_values(0b101, 0b110);
+
+        let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
+
+        let mut gb = AuthTensorGen::new_from_fpre_gen(1, fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(1, fpre_eval);
+
+        let (gen_chunk_levels, gen_chunk_cts) = gb.garble_first_half();
+        ev.evaluate_first_half(gen_chunk_levels, gen_chunk_cts);
+
+        let (gen_chunk_levels, gen_chunk_cts) = gb.garble_second_half();
+        ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
+
+        gb.garble_final();
+        ev.evaluate_final();
+    }
 }
