@@ -9,16 +9,16 @@ enum ProtocolPhase {
 }
 
 pub struct TensorProductGen {
-    cipher: &'static FixedKeyAes,
-    chunking_factor: usize,
-    n: usize,
-    m: usize,
-    delta: Delta,
+    pub cipher: &'static FixedKeyAes,
+    pub chunking_factor: usize,
+    pub n: usize,
+    pub m: usize,
+    pub delta: Delta,
 
-    x: BlockMatrix,
-    y: BlockMatrix,
-    alpha: BlockMatrix,
-    beta: BlockMatrix,
+    pub x: BlockMatrix,
+    pub y: BlockMatrix,
+    pub alpha: BlockMatrix,
+    pub beta: BlockMatrix,
     
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,

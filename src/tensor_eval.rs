@@ -9,13 +9,13 @@ enum ProtocolPhase {
 }
 
 pub struct TensorProductEval {
-    cipher: &'static FixedKeyAes,
-    chunking_factor: usize,
-    n: usize,
-    m: usize,
+    pub cipher: &'static FixedKeyAes,
+    pub chunking_factor: usize,
+    pub n: usize,
+    pub m: usize,
 
-    x: BlockMatrix,
-    y: BlockMatrix,
+    pub x: BlockMatrix,
+    pub y: BlockMatrix,
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
 

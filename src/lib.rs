@@ -21,11 +21,7 @@ mod auth_tensor_fpre;
 mod auth_tensor_gen;
 mod auth_tensor_eval;
 
-// Re-export circuits for convenience
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
-
-
-
 use crate::block::Block;
 
 #[allow(dead_code)]
@@ -52,23 +48,22 @@ pub(crate) const MAC_ONE: Block = Block::new([
 #[cfg(test)]
 mod tests {
 
-    use crate::{delta::Delta, keys::Key, auth_gen::AuthGen, auth_eval::AuthEval};
-    use ::aes::Aes128;
-    use ::cipher::KeyInit;
-    use ::cipher::BlockCipherEncrypt;
-    use itybity::IntoBitIterator;
-    use crate::fpre::Fpre;
     use rand::Rng;
-    use crate::macs::Mac;
-
-    use mpz_circuits::circuits::AES128;
-
-
-    use crate::auth_gen::AuthGenOutput;
-    use crate::auth_eval::AuthEvalOutput;
-    
     use itybity::FromBitIterator;
-
+    use itybity::IntoBitIterator;
+    use mpz_circuits::circuits::AES128;
+    use aes::Aes128;
+    use cipher::{KeyInit, BlockCipherEncrypt};
+    use crate::{
+        delta::Delta,
+        keys::Key,
+        auth_gen::AuthGen,
+        auth_eval::AuthEval,
+        fpre::Fpre,
+        macs::Mac,
+        auth_gen::AuthGenOutput,
+        auth_eval::AuthEvalOutput
+    };
     
     #[test]
     fn test_auth_garble() {
@@ -139,10 +134,6 @@ mod tests {
             })
             .collect::<Vec<Mac>>();
 
-        println!("number of ands: {:?}", circuit.and_count());
-        println!("number of and authbits: {:?}", gen_and_shares.len());
-        println!("feed_count: {:?}", circuit.feed_count());
-
         gb.generate_pre_ideal(&circuit, gen_input_shares, gen_and_shares, fpre_gen.triple_shares.as_slice()).unwrap();
         ev.generate_pre_ideal(&circuit, eval_input_shares, eval_and_shares, fpre_eval.triple_shares.as_slice()).unwrap();
 
@@ -202,7 +193,19 @@ mod tests {
 
     }
 
-    use crate::{aes::FIXED_KEY_AES, tensor_gen::TensorProductGen, tensor_eval::TensorProductEval, unary_outer_product::{gen_chunked_half_outer_product, eval_chunked_half_outer_product, gen_masks}, matrix::BlockMatrix, tensor_pre::get_gen_eval_vecs, block::Block};
+    use crate::{
+        aes::FIXED_KEY_AES,
+        tensor_gen::TensorProductGen,
+        tensor_eval::TensorProductEval,
+        unary_outer_product::{
+            gen_chunked_half_outer_product,
+            eval_chunked_half_outer_product,
+            gen_masks
+        },
+        matrix::BlockMatrix,
+        tensor_pre::get_gen_eval_vecs,
+        block::Block
+    };
 
     #[test]
     fn test_first_half_outer_product() {
@@ -271,19 +274,6 @@ mod tests {
         let refactored_gen_result = gar.first_half_out.clone();
         let refactored_eval_result = eval.first_half_out.clone();
         
-        // Compare results
-        println!("=== FIRST HALF COMPARISON ===");
-        println!("Inputs used:");
-        println!("  clear_x: {}, clear_y: {}", clear_x, clear_y);
-        println!("  delta: {:?}", delta);
-        println!("  gen_x_masked clear value: {}", gen_x_masked.get_clear_value());
-        println!("  eval_x_masked clear value: {}", eval_x_masked.get_clear_value());
-        println!("  gen_y_unmasked clear value: {}", gen_y_unmasked.get_clear_value());
-        println!("  eval_y_unmasked clear value: {}", eval_y_unmasked.get_clear_value());
-        println!("  alpha clear value: {}", alpha.get_clear_value());
-        println!("  beta clear value: {}", beta.get_clear_value());
-        println!();
-        println!("Reference gen result:");
         for i in 0..n {
             for j in 0..m {
                 print!("{:02x} ", ref_gen_first_half_out[(i, j)].as_bytes()[0]);
@@ -459,6 +449,83 @@ mod tests {
         println!("Second half outer product test PASSED!");
     }
 
+    fn verify_vector_sharing(
+        clear_val: usize,
+        gb_share: &Vec<Block>,
+        ev_share: &Vec<Block>,
+        delta: &Delta,
+        n: usize
+    ) -> bool {
+        assert_eq!(gb_share.len(), n);
+        assert_eq!(gb_share.len(), ev_share.len());
+        for i in 0..gb_share.len() {
+            let expected_val = ((clear_val>>i)&1) != 0;
+            if expected_val {
+                if gb_share[i] != ev_share[i] ^ delta.as_block() {
+                    return false;
+                }
+            } else {
+                if gb_share[i] != ev_share[i] {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn verify_column_matrix_sharing(
+        clear_val: usize,
+        gb_share: &BlockMatrix,
+        ev_share: &BlockMatrix,
+        delta: &Delta,
+        n: usize,
+    ) -> bool {
+        assert_eq!(gb_share.rows(), n);
+        assert_eq!(gb_share.rows(), ev_share.rows());
+        for i in 0..gb_share.rows() {
+            let expected_val = ((clear_val>>i)&1) != 0;
+            if expected_val {
+                if gb_share[i] != ev_share[i] ^ delta.as_block() {
+                    return false;
+                }
+            } else {
+                if gb_share[i] != ev_share[i] {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn verify_tensor_output(
+        clear_x: usize,
+        clear_y: usize,
+        n: usize,
+        m: usize,
+        gb_out: &BlockMatrix,
+        ev_out: &BlockMatrix,
+        delta: &Delta,
+    ) -> bool {
+        for i in 0..n {
+            for k in 0..m {
+                let expected_val = (((clear_x>>i)&1) & ((clear_y>>k)&1)) != 0;
+                if expected_val {
+                    if gb_out[(i, k)] != ev_out[(i, k)] ^ delta.as_block() {
+                        return false;
+                    }
+                } else {
+                    if gb_out[(i, k)] != ev_out[(i, k)] {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    use crate::tensor_pre::TensorProductPreGen;
+    use crate::tensor_pre::TensorProductPreEval;
+
     #[test]
     fn test_semihonest_tensor_product() {
         let cipher = &FIXED_KEY_AES;
@@ -476,27 +543,15 @@ mod tests {
         let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
         let (alpha, beta) = gen_masks(n, m, &delta);
 
-        let pre_gen = crate::tensor_pre::TensorProductPreGen::new(
+        let pre_gen = TensorProductPreGen::new(
             cipher, 6, n, m, delta, 
             gen_x.clone(), gen_y.clone(), 
             alpha.clone(), beta.clone()
         );
-        let pre_eval = crate::tensor_pre::TensorProductPreEval::new(
+        let pre_eval = TensorProductPreEval::new(
             cipher, 6, n, m, 
             (&eval_x ^ &alpha).clone(), (&eval_y ^ &beta).clone()
         );
-
-        // Debug: Print setup values
-        println!("=== SETUP DEBUG ===");
-        println!("clear_x: {:b} ({}), clear_y: {:b} ({})", clear_x, clear_x, clear_y, clear_y);
-        println!("delta: {:02x}", delta.as_block().as_bytes()[0]);
-        println!("gen_x clear value: {}", pre_gen.x.get_clear_value());
-        println!("gen_y clear value: {}", pre_gen.y.get_clear_value());
-        println!("eval_x clear value: {}", pre_eval.x.get_clear_value());
-        println!("eval_y clear value: {}", pre_eval.y.get_clear_value());
-        println!("alpha clear value: {}", pre_gen.alpha.get_clear_value());
-        println!("beta clear value: {}", pre_gen.beta.get_clear_value());
-        println!("==================");
 
         let mut tensor_gen = TensorProductGen::new(pre_gen);
         let mut tensor_eval = TensorProductEval::new(pre_eval);
@@ -602,37 +657,24 @@ mod tests {
         // check that gb and ev have correct masks
         // x_labels should be masked_x ^ alpha
         // y_labels should be masked_y ^ beta
-        for i in 0..n {
-            if ((1<<i) & masked_x) != 0 {
-                assert_eq!(gb.x_labels[i], ev.x_labels[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gb.x_labels[i], ev.x_labels[i]);
-            }
-            if ((1<<i) & masked_y) != 0 {
-                assert_eq!(gb.y_labels[i], ev.y_labels[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gb.y_labels[i], ev.y_labels[i]);
-            }
-        }
+        assert!(
+            verify_vector_sharing(masked_x, &gb.x_labels, &ev.x_labels, &delta_a, n)
+        );
+        assert!(
+            verify_vector_sharing(masked_y, &gb.y_labels, &ev.y_labels, &delta_a, m)
+        );
+
 
         //check the inputs to the first half outer product: masked_x (x) beta
         let (gen_x, gen_y) = gb.get_first_inputs();
         let (eval_x, eval_y) = ev.get_first_inputs();
 
-        for i in 0..n {
-            if ((1<<i) & masked_x) != 0 {
-                assert_eq!(gen_x[i], eval_x[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gen_x[i], eval_x[i]);
-            }
-        }
-        for i in 0..m {
-            if ((1<<i) & input_y) != 0 {
-                assert_eq!(gen_y[i], eval_y[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gen_y[i], eval_y[i]);
-            }
-        }
+        assert!(
+            verify_column_matrix_sharing(masked_x, &gen_x, &eval_x, &delta_a, n)
+        );
+        assert!(
+            verify_column_matrix_sharing(input_y, &gen_y, &eval_y, &delta_a, m)
+        );
 
 
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_first_half();
@@ -640,51 +682,31 @@ mod tests {
 
         // check that first_out has the correct value
         // first_out should be masked_x (tensor) input_y
-        for i in 0..n {
-            for j in 0..m {
-                let expected_val = (((masked_x>>i)&1) & ((input_y>>j)&1)) != 0;
-                if expected_val {
-                    assert_eq!(gb.first_half_out[(i, j)], ev.first_half_out[(i, j)] ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
-                } else {
-                    assert_eq!(gb.first_half_out[(i, j)], ev.first_half_out[(i, j)], "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
-                }
-            }
-        }
+        assert!(
+            verify_tensor_output(masked_x, input_y, n, m, &gb.first_half_out, &ev.first_half_out, &delta_a)
+        );
+
 
         //check the inputs to the second half outer product: masked_y (x) alpha
         let (gen_x, gen_y) = gb.get_second_inputs();
         let (eval_x, eval_y) = ev.get_second_inputs();
 
-        for i in 0..m {
-            if ((1<<i) & masked_y) != 0 {
-                assert_eq!(gen_x[i], eval_x[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gen_x[i], eval_x[i]);
-            }
-        }
-        for i in 0..n {
-            if ((1<<i) & alpha) != 0 {
-                assert_eq!(gen_y[i], eval_y[i] ^ delta_a.as_block());
-            } else {
-                assert_eq!(gen_y[i], eval_y[i]);
-            }
-        }
+        assert!(
+            verify_column_matrix_sharing(masked_y, &gen_x, &eval_x, &delta_a, m)
+        );
+        assert!(
+            verify_column_matrix_sharing(alpha, &gen_y, &eval_y, &delta_a, n)
+        );
+
 
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_second_half();
         ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
 
         // check that second_out has the correct value
         // second_out should be masked_y (tensor) alpha
-        for i in 0..m {
-            for j in 0..n {
-                let expected_val = (((masked_y>>i)&1) & ((alpha>>j)&1)) != 0;
-                if expected_val {
-                    assert_eq!(gb.second_half_out[(i, j)], ev.second_half_out[(i, j)] ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
-                } else {
-                    assert_eq!(gb.second_half_out[(i, j)], ev.second_half_out[(i, j)], "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
-                }
-            }
-        }
+        assert!(
+            verify_tensor_output(masked_y, alpha, m, n, &gb.second_half_out, &ev.second_half_out, &delta_a)
+        );
 
         // check that final_out has the correct value
         // final_out should be masked_x (tensor) input_y (tensor) alpha
