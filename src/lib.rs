@@ -2,6 +2,7 @@ pub mod block;
 pub mod delta;
 pub mod keys;
 pub mod macs;
+pub mod sharing;
 
 pub mod matrix;
 
@@ -12,7 +13,7 @@ pub mod fpre;
 pub mod auth_gen;
 pub mod auth_eval;
 
-pub mod unary_outer_product;
+// pub mod unary_outer_product;
 pub mod tensor_pre;
 pub mod tensor_gen;
 pub mod tensor_eval;
@@ -193,261 +194,254 @@ mod tests {
 
     }
 
+    // #[test]
+    // fn test_first_half_outer_product() {
+    //     // Test that the first half outer product works correctly
+    //     let cipher = &FIXED_KEY_AES;
+        
+    //     // Use a fixed seed to ensure deterministic results
+    //     let mut rng = rand::rng();
+    //     let delta = Delta::random(&mut rng);
+        
+    //     let n = 3;
+    //     let m = 4;
+    //     let clear_x = 5;  // Fixed value instead of random
+    //     let clear_y = 3;  // Fixed value instead of random
+        
+    //     // Setup using reference implementation first to get the exact inputs
+    //     // Use the same rng to ensure deterministic results
+    //     let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
+    //     let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
+    //     let (alpha, beta) = gen_masks(n, m, &delta);
+        
+    //     let gen_x_masked = gen_x.clone();
+    //     let eval_x_masked = &eval_x ^ &alpha;
+    //     let gen_y_unmasked = &gen_y ^ &beta;
+    //     let eval_y_unmasked = &eval_y ^ &beta;
+        
+    //     // Execute first half using reference implementation
+    //     let mut ref_gen_first_half_out = BlockMatrix::new(n, m);
+    //     let mut ref_eval_first_half_out = BlockMatrix::new(n, m);
+        
+    //     let (ref_chunk_levels, ref_chunk_cts) = gen_chunked_half_outer_product(
+    //         &gen_x_masked.as_view(), 
+    //         &gen_y_unmasked.as_view(), 
+    //         &mut ref_gen_first_half_out.as_view_mut(), 
+    //         delta, 
+    //         cipher
+    //     );
+    //     eval_chunked_half_outer_product(
+    //         &eval_x_masked.as_view(), 
+    //         &eval_y_unmasked.as_view(), 
+    //         &mut ref_eval_first_half_out.as_view_mut(), 
+    //         ref_chunk_levels, 
+    //         ref_chunk_cts, 
+    //         cipher
+    //     );
+        
+    //     // Now setup using refactored code with the SAME inputs
+    //     // We need to manually create the pre_gen and pre_eval with the exact same values
+    //     // that the reference implementation computed
+    //     let pre_gen = crate::tensor_pre::SemiHonestTensorPreGen::new(
+    //         cipher, 6, n, m, delta, 
+    //         gen_x.clone(), gen_y.clone(), 
+    //         alpha.clone(), beta.clone()
+    //     );
+    //     let pre_eval = crate::tensor_pre::SemiHonestTensorPreEval::new(
+    //         cipher, 6, n, m, 
+    //         eval_x_masked.clone(), eval_y_unmasked.clone()
+    //     );
+    //     let mut gar = TensorProductGen::new(pre_gen);
+    //     let mut eval = TensorProductEval::new(pre_eval);
+        
+    //     // Execute first half using refactored code
+    //     let (gen_chunk_levels, gen_chunk_cts) = gar.execute_first_half_outer_product();
+    //     eval.execute_first_half_outer_product(gen_chunk_levels, gen_chunk_cts);
+        
+    //     let refactored_gen_result = gar.first_half_out.clone();
+    //     let refactored_eval_result = eval.first_half_out.clone();
+        
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", ref_gen_first_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Reference eval result:");
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", ref_eval_first_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Refactored gen result:");
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", refactored_gen_result[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Reference gen result:");
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", ref_gen_first_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Refactored eval result:");
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", refactored_eval_result[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Reference eval result:");
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             print!("{:02x} ", ref_eval_first_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+        
+    //     // Check if results match element-wise
+    //     for i in 0..n {
+    //         for j in 0..m {
+    //             assert_eq!(refactored_gen_result[(i,j)], ref_gen_first_half_out[(i,j)], 
+    //                 "Generator results differ at position ({},{})", i, j);
+    //             assert_eq!(refactored_eval_result[(i,j)], ref_eval_first_half_out[(i,j)],
+    //                 "Evaluator results differ at position ({},{})", i, j); 
+    //         }
+    //     }
+    //     println!("First half outer product test PASSED!");
+    // }
+
+    // #[test]
+    // fn test_second_half_outer_product() {
+    //     // Test that the second half outer product works correctly
+    //     let cipher = &FIXED_KEY_AES;
+        
+    //     // Use a fixed seed to ensure deterministic results
+    //     let mut rng = rand::rng();
+    //     let delta = Delta::random(&mut rng);
+        
+    //     let n = 4;
+    //     let m = 3;
+    //     let clear_x = 5;  // Fixed value instead of random
+    //     let clear_y = 3;  // Fixed value instead of random
+        
+    //         // Setup using reference implementation first to get the exact inputs
+    //         let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
+    //         let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
+    //         let (alpha, beta) = gen_masks(n, m, &delta);
+            
+    //         // For second half, we need the masked versions
+    //         let gen_y_masked = gen_y.clone();
+    //         let eval_y_masked = &eval_y ^ &beta;
+    //         let gen_alpha = alpha.clone();
+    //         let eval_alpha = BlockMatrix::constant(n, 1, Block::default());
+            
+    //         // Execute second half using reference implementation
+    //         // Second half produces (y ⊕ β) ⊗ α which is m × n
+    //         let mut ref_gen_second_half_out = BlockMatrix::new(m, n);
+    //         let mut ref_eval_second_half_out = BlockMatrix::new(m, n);
+        
+    //         let (ref_chunk_levels, ref_chunk_cts) = gen_chunked_half_outer_product(
+    //             &gen_y_masked.as_view(), 
+    //             &gen_alpha.as_view(), 
+    //             &mut ref_gen_second_half_out.as_view_mut(), 
+    //             delta, 
+    //             cipher
+    //         );
+    //         eval_chunked_half_outer_product(
+    //             &eval_y_masked.as_view(), 
+    //             &eval_alpha.as_view(), 
+    //             &mut ref_eval_second_half_out.as_view_mut(), 
+    //             ref_chunk_levels, 
+    //             ref_chunk_cts, 
+    //             cipher
+    //         );
+        
+    //     // Now setup using refactored code with the SAME inputs
+    //     let pre_gen = crate::tensor_pre::SemiHonestTensorPreGen::new(
+    //         cipher, 6, n, m, delta, 
+    //         gen_x.clone(), gen_y.clone(),
+    //         alpha.clone(), beta.clone()
+    //     );
+    //     let pre_eval = crate::tensor_pre::SemiHonestTensorPreEval::new(
+    //         cipher, 6, n, m, 
+    //         (&eval_x ^ &alpha).clone(), (&eval_y ^ &beta).clone()
+    //     );
+    //     let mut gar = TensorProductGen::new(pre_gen);
+    //     let mut eval = TensorProductEval::new(pre_eval);
+        
+    //     // Execute first half to set up the phase
+    //     let (gen_chunk_levels, gen_chunk_cts) = gar.execute_first_half_outer_product();
+    //     eval.execute_first_half_outer_product(gen_chunk_levels, gen_chunk_cts);
+        
+    //     // Execute second half using refactored code
+    //     let (gen_chunk_levels, gen_chunk_cts) = gar.execute_second_half_outer_product();
+    //     eval.execute_second_half_outer_product(gen_chunk_levels, gen_chunk_cts);
+        
+    //     let refactored_gen_result = gar.second_half_out.clone();
+    //     let refactored_eval_result = eval.second_half_out.clone();
+        
+    //     // Compare results
+    //     println!("=== SECOND HALF COMPARISON ===");
+    //     println!("Inputs used:");
+    //     println!("  clear_x: {}, clear_y: {}", clear_x, clear_y);
+    //     println!("  delta: {:?}", delta);
+    //     println!("  gen_y_masked clear value: {}", gen_y_masked.get_clear_value());
+    //     println!("  eval_y_masked clear value: {}", eval_y_masked.get_clear_value());
+    //     println!("  gen_alpha clear value: {}", gen_alpha.get_clear_value());
+    //     println!("  eval_alpha clear value: {}", eval_alpha.get_clear_value());
+    //     println!();
+    //     println!("Reference gen result:");
+    //     for i in 0..m {
+    //         for j in 0..n {
+    //             print!("{:02x} ", ref_gen_second_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Reference eval result:");
+    //     for i in 0..m {
+    //         for j in 0..n {
+    //             print!("{:02x} ", ref_eval_second_half_out[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Refactored gen result:");
+    //     for i in 0..m {
+    //         for j in 0..n {
+    //             print!("{:02x} ", refactored_gen_result[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+    //     println!("Refactored eval result:");
+    //     for i in 0..m {
+    //         for j in 0..n {
+    //             print!("{:02x} ", refactored_eval_result[(i, j)].as_bytes()[0]);
+    //         }
+    //         println!();
+    //     }
+        
+    //     // Check if results match element-wise
+    //     for i in 0..m {
+    //         for j in 0..n {
+    //             assert_eq!(refactored_gen_result[(i,j)], ref_gen_second_half_out[(i,j)], 
+    //                 "Generator second half results differ at position ({},{})", i, j);
+    //             assert_eq!(refactored_eval_result[(i,j)], ref_eval_second_half_out[(i,j)],
+    //                 "Evaluator second half results differ at position ({},{})", i, j); 
+    //         }
+    //     }
+    //     println!("Second half outer product test PASSED!");
+    // }
+
     use crate::{
-        aes::FIXED_KEY_AES,
         tensor_gen::TensorProductGen,
         tensor_eval::TensorProductEval,
-        unary_outer_product::{
-            gen_chunked_half_outer_product,
-            eval_chunked_half_outer_product,
-            gen_masks
-        },
         matrix::BlockMatrix,
-        tensor_pre::get_gen_eval_vecs,
         block::Block
     };
-
-    #[test]
-    fn test_first_half_outer_product() {
-        // Test that the first half outer product works correctly
-        let cipher = &FIXED_KEY_AES;
-        
-        // Use a fixed seed to ensure deterministic results
-        let mut rng = rand::rng();
-        let delta = Delta::random(&mut rng);
-        
-        let n = 3;
-        let m = 4;
-        let clear_x = 5;  // Fixed value instead of random
-        let clear_y = 3;  // Fixed value instead of random
-        
-        // Setup using reference implementation first to get the exact inputs
-        // Use the same rng to ensure deterministic results
-        let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
-        let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
-        let (alpha, beta) = gen_masks(n, m, &delta);
-        
-        let gen_x_masked = gen_x.clone();
-        let eval_x_masked = &eval_x ^ &alpha;
-        let gen_y_unmasked = &gen_y ^ &beta;
-        let eval_y_unmasked = &eval_y ^ &beta;
-        
-        // Execute first half using reference implementation
-        let mut ref_gen_first_half_out = BlockMatrix::new(n, m);
-        let mut ref_eval_first_half_out = BlockMatrix::new(n, m);
-        
-        let (ref_chunk_levels, ref_chunk_cts) = gen_chunked_half_outer_product(
-            &gen_x_masked.as_view(), 
-            &gen_y_unmasked.as_view(), 
-            &mut ref_gen_first_half_out.as_view_mut(), 
-            delta, 
-            cipher
-        );
-        eval_chunked_half_outer_product(
-            &eval_x_masked.as_view(), 
-            &eval_y_unmasked.as_view(), 
-            &mut ref_eval_first_half_out.as_view_mut(), 
-            ref_chunk_levels, 
-            ref_chunk_cts, 
-            cipher
-        );
-        
-        // Now setup using refactored code with the SAME inputs
-        // We need to manually create the pre_gen and pre_eval with the exact same values
-        // that the reference implementation computed
-        let pre_gen = crate::tensor_pre::TensorProductPreGen::new(
-            cipher, 6, n, m, delta, 
-            gen_x.clone(), gen_y.clone(), 
-            alpha.clone(), beta.clone()
-        );
-        let pre_eval = crate::tensor_pre::TensorProductPreEval::new(
-            cipher, 6, n, m, 
-            eval_x_masked.clone(), eval_y_unmasked.clone()
-        );
-        let mut gar = TensorProductGen::new(pre_gen);
-        let mut eval = TensorProductEval::new(pre_eval);
-        
-        // Execute first half using refactored code
-        let (gen_chunk_levels, gen_chunk_cts) = gar.execute_first_half_outer_product();
-        eval.execute_first_half_outer_product(gen_chunk_levels, gen_chunk_cts);
-        
-        let refactored_gen_result = gar.first_half_out.clone();
-        let refactored_eval_result = eval.first_half_out.clone();
-        
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", ref_gen_first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Reference eval result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", ref_eval_first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Refactored gen result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", refactored_gen_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Reference gen result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", ref_gen_first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Refactored eval result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", refactored_eval_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Reference eval result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", ref_eval_first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        
-        // Check if results match element-wise
-        for i in 0..n {
-            for j in 0..m {
-                assert_eq!(refactored_gen_result[(i,j)], ref_gen_first_half_out[(i,j)], 
-                    "Generator results differ at position ({},{})", i, j);
-                assert_eq!(refactored_eval_result[(i,j)], ref_eval_first_half_out[(i,j)],
-                    "Evaluator results differ at position ({},{})", i, j); 
-            }
-        }
-        println!("First half outer product test PASSED!");
-    }
-
-    #[test]
-    fn test_second_half_outer_product() {
-        // Test that the second half outer product works correctly
-        let cipher = &FIXED_KEY_AES;
-        
-        // Use a fixed seed to ensure deterministic results
-        let mut rng = rand::rng();
-        let delta = Delta::random(&mut rng);
-        
-        let n = 4;
-        let m = 3;
-        let clear_x = 5;  // Fixed value instead of random
-        let clear_y = 3;  // Fixed value instead of random
-        
-            // Setup using reference implementation first to get the exact inputs
-            let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
-            let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
-            let (alpha, beta) = gen_masks(n, m, &delta);
-            
-            // For second half, we need the masked versions
-            let gen_y_masked = gen_y.clone();
-            let eval_y_masked = &eval_y ^ &beta;
-            let gen_alpha = alpha.clone();
-            let eval_alpha = BlockMatrix::constant(n, 1, Block::default());
-            
-            // Execute second half using reference implementation
-            // Second half produces (y ⊕ β) ⊗ α which is m × n
-            let mut ref_gen_second_half_out = BlockMatrix::new(m, n);
-            let mut ref_eval_second_half_out = BlockMatrix::new(m, n);
-        
-            let (ref_chunk_levels, ref_chunk_cts) = gen_chunked_half_outer_product(
-                &gen_y_masked.as_view(), 
-                &gen_alpha.as_view(), 
-                &mut ref_gen_second_half_out.as_view_mut(), 
-                delta, 
-                cipher
-            );
-            eval_chunked_half_outer_product(
-                &eval_y_masked.as_view(), 
-                &eval_alpha.as_view(), 
-                &mut ref_eval_second_half_out.as_view_mut(), 
-                ref_chunk_levels, 
-                ref_chunk_cts, 
-                cipher
-            );
-        
-        // Now setup using refactored code with the SAME inputs
-        let pre_gen = crate::tensor_pre::TensorProductPreGen::new(
-            cipher, 6, n, m, delta, 
-            gen_x.clone(), gen_y.clone(),
-            alpha.clone(), beta.clone()
-        );
-        let pre_eval = crate::tensor_pre::TensorProductPreEval::new(
-            cipher, 6, n, m, 
-            (&eval_x ^ &alpha).clone(), (&eval_y ^ &beta).clone()
-        );
-        let mut gar = TensorProductGen::new(pre_gen);
-        let mut eval = TensorProductEval::new(pre_eval);
-        
-        // Execute first half to set up the phase
-        let (gen_chunk_levels, gen_chunk_cts) = gar.execute_first_half_outer_product();
-        eval.execute_first_half_outer_product(gen_chunk_levels, gen_chunk_cts);
-        
-        // Execute second half using refactored code
-        let (gen_chunk_levels, gen_chunk_cts) = gar.execute_second_half_outer_product();
-        eval.execute_second_half_outer_product(gen_chunk_levels, gen_chunk_cts);
-        
-        let refactored_gen_result = gar.second_half_out.clone();
-        let refactored_eval_result = eval.second_half_out.clone();
-        
-        // Compare results
-        println!("=== SECOND HALF COMPARISON ===");
-        println!("Inputs used:");
-        println!("  clear_x: {}, clear_y: {}", clear_x, clear_y);
-        println!("  delta: {:?}", delta);
-        println!("  gen_y_masked clear value: {}", gen_y_masked.get_clear_value());
-        println!("  eval_y_masked clear value: {}", eval_y_masked.get_clear_value());
-        println!("  gen_alpha clear value: {}", gen_alpha.get_clear_value());
-        println!("  eval_alpha clear value: {}", eval_alpha.get_clear_value());
-        println!();
-        println!("Reference gen result:");
-        for i in 0..m {
-            for j in 0..n {
-                print!("{:02x} ", ref_gen_second_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Reference eval result:");
-        for i in 0..m {
-            for j in 0..n {
-                print!("{:02x} ", ref_eval_second_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Refactored gen result:");
-        for i in 0..m {
-            for j in 0..n {
-                print!("{:02x} ", refactored_gen_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Refactored eval result:");
-        for i in 0..m {
-            for j in 0..n {
-                print!("{:02x} ", refactored_eval_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        
-        // Check if results match element-wise
-        for i in 0..m {
-            for j in 0..n {
-                assert_eq!(refactored_gen_result[(i,j)], ref_gen_second_half_out[(i,j)], 
-                    "Generator second half results differ at position ({},{})", i, j);
-                assert_eq!(refactored_eval_result[(i,j)], ref_eval_second_half_out[(i,j)],
-                    "Evaluator second half results differ at position ({},{})", i, j); 
-            }
-        }
-        println!("Second half outer product test PASSED!");
-    }
 
     fn verify_vector_sharing(
         clear_val: usize,
@@ -523,102 +517,175 @@ mod tests {
         true
     }
 
-    use crate::tensor_pre::TensorProductPreGen;
-    use crate::tensor_pre::TensorProductPreEval;
+    // For the first-half outer product: gb vs ev differ by delta solely based on y's column bit
+    fn verify_tensor_output_first_half_y(
+        clear_y: usize,
+        n: usize,
+        m: usize,
+        gb_out: &BlockMatrix,
+        ev_out: &BlockMatrix,
+        delta: &Delta,
+    ) -> bool {
+        for j in 0..m {
+            let y_bit = ((clear_y >> j) & 1) != 0;
+            for i in 0..n {
+                if y_bit {
+                    if gb_out[(i, j)] != ev_out[(i, j)] ^ delta.as_block() {
+                        return false;
+                    }
+                } else {
+                    if gb_out[(i, j)] != ev_out[(i, j)] {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    fn print_expected_bits_matrix(label: &str, x_bits: usize, y_bits: usize, n: usize, m: usize) {
+        println!("{} (n={} x m={}):", label, n, m);
+        for i in 0..n {
+            for j in 0..m {
+                let b = (((x_bits >> i) & 1) & ((y_bits >> j) & 1)) != 0;
+                print!("{} ", if b {1} else {0});
+            }
+            println!("");
+        }
+    }
+
+    fn print_gb_ev_relation(label: &str, n: usize, m: usize, gb: &BlockMatrix, ev: &BlockMatrix, delta: &Delta) {
+        println!("{} (=:equal, ^:ev^Δ, !:mismatch)", label);
+        for i in 0..n {
+            for j in 0..m {
+                let c = if gb[(i,j)] == ev[(i,j)] { '=' }
+                        else if gb[(i,j)] == ev[(i,j)] ^ delta.as_block() { '^' }
+                        else { '!' };
+                print!("{} ", c);
+            }
+            println!("");
+        }
+    }
+
+    use crate::tensor_pre::SemiHonestTensorPre;
 
     #[test]
     fn test_semihonest_tensor_product() {
-        let cipher = &FIXED_KEY_AES;
         
         let mut rng = rand::rng();
         let delta = Delta::random(&mut rng);
 
         let n = 2;
         let m = 3;
-        let clear_x = 3;  // Fixed value instead of random
-        let clear_y = 6;  // Fixed value instead of random
+        let clear_x = 0b011;  // Fixed value instead of random
+        let clear_y = 0b110;  // Fixed value instead of random
 
-        // Setup using reference implementation first to get the exact inputs
-        let (gen_x, eval_x) = get_gen_eval_vecs(delta, n, clear_x);
-        let (gen_y, eval_y) = get_gen_eval_vecs(delta, m, clear_y);
-        let (alpha, beta) = gen_masks(n, m, &delta);
-
-        let pre_gen = TensorProductPreGen::new(
-            cipher, 6, n, m, delta, 
-            gen_x.clone(), gen_y.clone(), 
-            alpha.clone(), beta.clone()
+        let mut pre = SemiHonestTensorPre::new_with_delta(3, n, m, 6, delta);
+        pre.gen_inputs(clear_x, clear_y);
+        assert!(
+            verify_vector_sharing(clear_x, &pre.x_labels.iter().map(|share| share.gen_share).collect(), &pre.x_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
         );
-        let pre_eval = TensorProductPreEval::new(
-            cipher, 6, n, m, 
-            (&eval_x ^ &alpha).clone(), (&eval_y ^ &beta).clone()
+        assert!(
+            verify_vector_sharing(clear_y, &pre.y_labels.iter().map(|share| share.gen_share).collect(), &pre.y_labels.iter().map(|share| share.eval_share).collect(), &delta, m)
+        );
+        let (alpha, beta) = pre.gen_masks();
+        assert!(
+            verify_vector_sharing(alpha, &pre.alpha_labels.iter().map(|share| share.gen_share).collect(), &pre.alpha_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
+        );
+        assert!(
+            verify_vector_sharing(beta, &pre.beta_labels.iter().map(|share| share.gen_share).collect(), &pre.beta_labels.iter().map(|share| share.eval_share).collect(), &delta, m)
+        );
+        let (masked_x, masked_y) = pre.mask_inputs();
+        assert!(
+            verify_vector_sharing(masked_x, &pre.x_labels.iter().map(|share| share.gen_share).collect(), &pre.x_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
+        );
+        assert!(
+            verify_vector_sharing(masked_y, &pre.y_labels.iter().map(|share| share.gen_share).collect(), &pre.y_labels.iter().map(|share| share.eval_share).collect(), &delta, m)
         );
 
-        let mut tensor_gen = TensorProductGen::new(pre_gen);
-        let mut tensor_eval = TensorProductEval::new(pre_eval);
 
-        // first half outer product: H(blinded_x) (x) y
-        let (gen_levels, gen_cts) = tensor_gen.execute_first_half_outer_product();
-        tensor_eval.execute_first_half_outer_product(gen_levels, gen_cts);
+
+        let n_bitmask = (1<<n)-1;
+        let m_bitmask = (1<<m)-1;
+
+        assert_eq!(masked_x, (clear_x ^ alpha) & n_bitmask);
+        assert_eq!(masked_y, (clear_y ^ beta) & m_bitmask);
+        println!("masked_x: {}, masked_y: {}", masked_x, masked_y);
+        println!("clear_x: {}, clear_y: {}", clear_x, clear_y);
+        println!("alpha: {}, beta: {}", alpha, beta);
+
+
+
+        let (pre_gen, pre_eval) = pre.into_gen_eval();
+
+        let mut gb = TensorProductGen::new_from_fpre_gen(pre_gen);
+        let mut ev = TensorProductEval::new_from_fpre_eval(pre_eval);
+
+        assert!(
+            verify_vector_sharing(masked_x, &gb.x_labels, &ev.x_labels, &delta, n)
+        );
+        assert!(
+            verify_vector_sharing(masked_y, &gb.y_labels, &ev.y_labels, &delta, m)
+        );
+
+
+
+        //check the inputs to the first half outer product: masked_x (x) beta
+        let (gen_x, gen_y) = gb.get_first_inputs();
+        let (eval_x, eval_y) = ev.get_first_inputs();
+
+        assert!(
+            verify_column_matrix_sharing(masked_x & n_bitmask, &gen_x, &eval_x, &delta, n)
+        );
+        assert!(
+            verify_column_matrix_sharing(clear_y & m_bitmask, &gen_y, &eval_y, &delta, m)
+        );
+
+
+
+        let (gen_levels, gen_cts) = gb.garble_first_half_outer_product();
+        ev.evaluate_first_half_outer_product(gen_levels, gen_cts);
+
+
+        assert!(
+            verify_tensor_output(masked_x & n_bitmask, clear_y & m_bitmask, n, m, &gb.first_half_out, &ev.first_half_out, &delta)
+        );
+
+
+
+        let (gen_x, gen_y) = gb.get_second_inputs();
+        let (eval_x, eval_y) = ev.get_second_inputs();
+
+        assert!(
+            verify_column_matrix_sharing(masked_y & m_bitmask, &gen_x, &eval_x, &delta, m)
+        );
+        assert!(
+            verify_column_matrix_sharing(alpha & n_bitmask, &gen_y, &eval_y, &delta, n)
+        );
+
+
 
         // second half outer product: (y ^ beta) (x) alpha
-        let (gen_levels, gen_cts) = tensor_gen.execute_second_half_outer_product();
-        tensor_eval.execute_second_half_outer_product(gen_levels, gen_cts);
+        let (gen_levels, gen_cts) = gb.garble_second_half_outer_product();
+        ev.evaluate_second_half_outer_product(gen_levels, gen_cts);
 
-        // final outer product
-        let gen_result = tensor_gen.execute_final_outer_product();
-        let eval_result = tensor_eval.execute_final_outer_product();
+        // check that first_out has the correct value
+        // first_out should be masked_x (tensor) input_y
+        assert!(
+            verify_tensor_output(masked_y & m_bitmask, alpha & n_bitmask, m, n, &gb.second_half_out, &ev.second_half_out, &delta)
+        );
+
+
         
-        // Debug: print the results
-        println!("Gen result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", gen_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("Eval result:");
-        for i in 0..n {
-            for j in 0..m {
-                print!("{:02x} ", eval_result[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
+        // final outer product
+        let gen_result = gb.garble_final_outer_product();
+        let eval_result = ev.evaluate_final_outer_product();
 
-        let mut expected_result = vec![vec![false; m]; n];
-        for i in 0..n {
-            print!("[ ");
-            for j in 0..m {
-                let x_bit = ((clear_x >> i) & 1) == 1;
-                let y_bit = ((clear_y >> j) & 1) == 1;
-                expected_result[i][j] = x_bit & y_bit;
-                print!("{} ", expected_result[i][j] as usize);
-            }
-            println!("]");
-        }
-
-        for k in 0..n {
-            print!("[ ");
-            for j in 0..m {
-                let gen_val = gen_result[(k, j)];
-                let eval_val = eval_result[(k, j)];
-                let expected_bit = expected_result[k][j];
-                
-                if expected_bit {
-                    // Where expected_result = 1, they should differ by delta
-                    let expected_eval = gen_val ^ delta;
-                    assert_eq!(eval_val, expected_eval, 
-                               "At position ({},{}): eval_out should equal gen_out ^ delta when expected=1", k, j);
-                    print!("{} ", 1);
-                } else {
-                    // Where expected_result = 0, they should be identical
-                    assert_eq!(gen_val, eval_val, 
-                               "At position ({},{}): gen_out should equal eval_out when expected=0", k, j);
-                    print!("{} ", 0);
-                }
-                
-            }
-            println!("]");
-        }
+        // check that final_out has the correct value
+        // final_out should be masked_x (tensor) input_y (tensor) alpha
+        assert!(
+            verify_tensor_output(clear_x, clear_y, n, m, &gen_result, &eval_result, &delta)
+        );
     }
 
     use crate::auth_tensor_fpre::TensorFpre;
@@ -651,7 +718,7 @@ mod tests {
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 
-        let mut gb = AuthTensorGen::new_from_fpre_gen(1, fpre_gen);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(1, fpre_eval);
 
         // check that gb and ev have correct masks

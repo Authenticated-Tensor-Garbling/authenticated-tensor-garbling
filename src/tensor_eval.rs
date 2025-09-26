@@ -1,12 +1,15 @@
-use crate::{aes::FixedKeyAes, block::Block, matrix::{BlockMatrix, MatrixViewMut, MatrixViewRef}, tensor_pre::TensorProductPreEval};
-
-#[derive(PartialEq, Clone, Copy)]
-enum ProtocolPhase {
-    Setup,
-    FirstHalf,
-    SecondHalf,
-    Final,
-}
+use crate::{
+    aes::{
+        FixedKeyAes,
+        FIXED_KEY_AES
+    },
+    block::Block,
+    matrix::{
+        BlockMatrix,
+        MatrixViewMut,
+        MatrixViewRef
+    }, tensor_pre::SemiHonestTensorPreEval
+};
 
 pub struct TensorProductEval {
     pub cipher: &'static FixedKeyAes,
@@ -14,29 +17,46 @@ pub struct TensorProductEval {
     pub n: usize,
     pub m: usize,
 
-    pub x: BlockMatrix,
-    pub y: BlockMatrix,
+    pub x_labels: Vec<Block>,
+    pub y_labels: Vec<Block>,
+    
+    pub alpha_labels: BlockMatrix,
+    pub beta_labels: BlockMatrix,
+
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
-
-    phase: ProtocolPhase,
 }
 
 impl TensorProductEval {
-    pub fn new(tensor_eval: TensorProductPreEval) -> Self {
+    pub fn new(tensor_eval: SemiHonestTensorPreEval) -> Self {
         Self {
-            cipher: tensor_eval.cipher,
+            cipher: &(*FIXED_KEY_AES),
             chunking_factor: tensor_eval.chunking_factor,
             n: tensor_eval.n,
             m: tensor_eval.m,
-            x: tensor_eval.x,
-            y: tensor_eval.y,
+            x_labels: tensor_eval.x_labels,
+            y_labels: tensor_eval.y_labels,
+            alpha_labels: BlockMatrix::constant(tensor_eval.n, 1, Block::default()),
+            beta_labels: BlockMatrix::constant(tensor_eval.m, 1, Block::default()),
             first_half_out: BlockMatrix::new(tensor_eval.n, tensor_eval.m),
             second_half_out: BlockMatrix::new(tensor_eval.m, tensor_eval.n),
-            phase: ProtocolPhase::Setup,
         }
     }
 
+    pub fn new_from_fpre_eval(fpre_eval: SemiHonestTensorPreEval) -> Self {
+        Self {
+            cipher: &(*FIXED_KEY_AES),
+            chunking_factor: fpre_eval.chunking_factor,
+            n: fpre_eval.n,
+            m: fpre_eval.m,
+            x_labels: fpre_eval.x_labels,
+            y_labels: fpre_eval.y_labels,
+            alpha_labels: BlockMatrix::constant(fpre_eval.n, 1, Block::default()),
+            beta_labels: BlockMatrix::constant(fpre_eval.m, 1, Block::default()),
+            first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
+            second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
+        }
+    }
 
     fn eval_populate_seeds_mem_optimized(
         x: &MatrixViewRef<Block>,
@@ -160,6 +180,7 @@ impl TensorProductEval {
         y: &MatrixViewRef<Block>,
         chunk_levels: Vec<Vec<(Block, Block)>>,
         chunk_cts: Vec<Vec<Block>>,
+        first_half: bool,
     ) {
     
         let chunking_factor = self.chunking_factor;
@@ -176,10 +197,10 @@ impl TensorProductEval {
             let slice_clear = slice.get_clear_value();
 
             // IMPORTANT: transpose the out matrix before calling with_subrows for the second half
-            let mut out = if self.phase == ProtocolPhase::SecondHalf {
-                self.second_half_out.as_view_mut()
-            } else {
+            let mut out = if first_half {
                 self.first_half_out.as_view_mut()
+            } else {
+                self.second_half_out.as_view_mut()
             };
             
 
@@ -198,101 +219,66 @@ impl TensorProductEval {
         }
     }
 
-    pub fn execute_first_half_outer_product(
-        &mut self,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
-        chunk_cts: Vec<Vec<Block>>,
-    ) {
-        assert!(self.phase == ProtocolPhase::Setup);
-        self.phase = ProtocolPhase::FirstHalf;
-
-        let x = self.x.clone();
-        let y = self.y.clone();
-
-        // Debug: Print first half inputs
-        println!("=== FIRST HALF DEBUG (EVAL) ===");
-        println!("eval_x clear value: {}", x.get_clear_value());
-        println!("eval_y clear value: {}", y.get_clear_value());
-        println!("===============================");
-
-        self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), chunk_levels, chunk_cts);
-
-        // Debug: Print intermediate result after first half
-        println!("=== AFTER FIRST HALF (EVAL) ===");
-        println!("out matrix after first half:");
+    pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+        let mut eval_x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            for j in 0..self.m {
-                print!("{:02x} ", self.first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
+            eval_x[i] = self.x_labels[i];
         }
-        println!("==============================");
+        let mut eval_y = BlockMatrix::new(self.m, 1);
+        for j in 0..self.m {
+            eval_y[j] = self.y_labels[j];
+        }
 
-
+        (eval_x, eval_y)
     }
 
-    pub fn execute_second_half_outer_product(
+    pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+        let mut eval_x = BlockMatrix::new(self.m, 1);
+        for j in 0..self.m {
+            eval_x[j] = self.y_labels[j];
+        }
+        // TODO: unnecessary copy, can just set all zeros at evaluation
+        let mut eval_y = BlockMatrix::new(self.n, 1);
+        for i in 0..self.n {
+            eval_y[i] = self.alpha_labels[i];
+        }
+
+        (eval_x, eval_y)
+    }
+
+    pub fn evaluate_first_half_outer_product(
         &mut self,
         chunk_levels: Vec<Vec<(Block, Block)>>,
         chunk_cts: Vec<Vec<Block>>,
     ) {
-        assert!(self.phase == ProtocolPhase::FirstHalf);
-        self.phase = ProtocolPhase::SecondHalf;
+        let (eval_x, eval_y) = self.get_first_inputs();
+        self.eval_chunked_half_outer_product(&eval_x.as_view(), &eval_y.as_view(), chunk_levels, chunk_cts, true);
+    }
 
-        let y = self.y.clone();
-        let zeros = BlockMatrix::constant(self.n, 1, Block::default());
-
-        // Debug: Print second half inputs
-        println!("=== SECOND HALF DEBUG (EVAL) ===");
-        println!("eval_x (self.y) clear value: {}", y.get_clear_value());
-        println!("eval_y (zeros) clear value: {}", zeros.get_clear_value());
-        println!("self.y LSBs: {:?}", (0..self.m).map(|i| self.y[i].lsb()).collect::<Vec<_>>());
-        println!("y LSBs: {:?}", (0..y.rows()).map(|i| y[i].lsb()).collect::<Vec<_>>());
-        println!("=================================");
-
-        self.eval_chunked_half_outer_product(&y.as_view(), &zeros.as_view(), chunk_levels, chunk_cts);
-
-        // Debug: Print intermediate result after second half
-        println!("=== AFTER SECOND HALF (EVAL) ===");
-        println!("out matrix after second half:");
-        for i in 0..self.m {
-            for j in 0..self.n {
-                print!("{:02x} ", self.second_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("===============================");
+    pub fn evaluate_second_half_outer_product(
+        &mut self,
+        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_cts: Vec<Vec<Block>>,
+    ) {
+        let (eval_x, eval_y) = self.get_second_inputs();
+        self.eval_chunked_half_outer_product(&eval_x.as_view(), &eval_y.as_view(), chunk_levels, chunk_cts, false);
 
     }
 
-    pub fn execute_final_outer_product(
+    pub fn evaluate_final_outer_product(
         &mut self,
     ) -> BlockMatrix {
-        assert!(self.phase == ProtocolPhase::SecondHalf);
-        self.phase = ProtocolPhase::Final;
-
+       
         let eval_alpha_beta = BlockMatrix::constant(self.n, self.m, Block::default());
         
+        // TODO: also unnecessary copy, can just set all zeros and avoid completely.
         // accumulate the results into the first matrix
         for i in 0..self.n {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ eval_alpha_beta[(i, j)];
             }
         }
-        
-        // Debug: Print final phase
-        println!("=== FINAL PHASE DEBUG (EVAL) ===");
-        println!("out matrix (no final correction needed):");
-        for i in 0..self.n {
-            for j in 0..self.m {
-                print!("{:02x} ", self.first_half_out[(i, j)].as_bytes()[0]);
-            }
-            println!();
-        }
-        println!("=================================");
-        
-        // The result is already accumulated in self.out from both halves
-        // No additional computation needed - just return the accumulated result
+
         self.first_half_out.clone()
     }
 

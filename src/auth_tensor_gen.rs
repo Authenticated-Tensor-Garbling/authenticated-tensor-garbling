@@ -12,7 +12,6 @@ use crate::{
 
 pub struct AuthTensorGen {
     cipher: &'static FixedKeyAes,
-    seed: u64,
     chunking_factor: usize,
     
     n: usize,
@@ -33,10 +32,9 @@ pub struct AuthTensorGen {
 }
 
 impl AuthTensorGen {
-    pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize) -> Self {
+    pub fn new(n: usize, m: usize, chunking_factor: usize) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
-            seed,
             n,
             m,
             chunking_factor,
@@ -52,10 +50,9 @@ impl AuthTensorGen {
         }
     }
 
-    pub fn new_from_fpre_gen(seed: u64, fpre_gen: TensorFpreGen) -> Self {
+    pub fn new_from_fpre_gen(fpre_gen: TensorFpreGen) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
-            seed,
             n: fpre_gen.n,
             m: fpre_gen.m,
             chunking_factor: fpre_gen.chunking_factor,
@@ -344,7 +341,7 @@ mod tests {
         assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
         assert_eq!(fpre_gen.gamma_auth_bit_shares.len(), n * m);
         
-        let mut gar = AuthTensorGen::new_from_fpre_gen(1, fpre_gen);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
 
         assert_eq!(gar.x_labels.len(), n);
         assert_eq!(gar.y_labels.len(), m);

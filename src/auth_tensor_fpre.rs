@@ -1,5 +1,5 @@
 // TODO refactor authbit from fpre to a common module, or redefine with new name.
-use crate::{block::Block, delta::Delta, fpre::{AuthBit, build_share, AuthBitShare}};
+use crate::{block::Block, delta::Delta, fpre::{AuthBit, build_share, AuthBitShare}, sharing::InputSharing};
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
@@ -44,21 +44,6 @@ pub struct TensorFpreEval {
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
     pub gamma_auth_bit_shares: Vec<AuthBitShare>,
-}
-
-struct InputSharing {
-    pub gen_share: Block,
-    pub eval_share: Block,
-}
-
-impl InputSharing {
-    pub fn bit(&self) -> bool {
-        if self.gen_share == self.eval_share {
-            false
-        } else {
-            true
-        }
-    }
 }
 
 impl TensorFpre {

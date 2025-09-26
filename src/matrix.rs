@@ -146,19 +146,6 @@ impl BlockMatrix {
             elements,
         }
     }
-
-    pub fn color_cross_product(&self, other: &Self, delta: Delta) -> Self {
-        assert!(self.cols == 1 && other.cols == 1, "Color cross product only works for column vectors");
-
-        let mut out = Self::new(self.rows, other.rows);
-        for i in 0..self.rows {
-            for j in 0..other.rows {
-                let idx = j * self.rows + i;  // Use column-major indexing: j*rows + i
-                out.elements[idx] = if self.elements[i].lsb() & other.elements[j].lsb() {*delta.as_block()} else {Block::ZERO};
-            }
-        }
-        out
-    }
 }
 
 
