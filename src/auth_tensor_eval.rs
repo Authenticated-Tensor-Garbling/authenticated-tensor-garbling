@@ -8,7 +8,6 @@ use crate::matrix::MatrixViewMut;
 pub struct AuthTensorEval {
     cipher: &'static FixedKeyAes,
     chunking_factor: usize,
-    seed: u64,
 
     n: usize,
     m: usize,
@@ -32,7 +31,6 @@ impl AuthTensorEval {
         Self {
             cipher: &(*FIXED_KEY_AES),
             chunking_factor,
-            seed,
             n,
             m,
             delta_b: Delta::random(&mut rand::rng()),
@@ -51,7 +49,6 @@ impl AuthTensorEval {
         Self {
             cipher: &(*FIXED_KEY_AES),
             chunking_factor: fpre_eval.chunking_factor,
-            seed,
             n: fpre_eval.n,
             m: fpre_eval.m,
             delta_b: fpre_eval.delta_b,

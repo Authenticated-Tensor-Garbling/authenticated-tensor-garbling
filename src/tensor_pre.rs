@@ -1,8 +1,6 @@
 use crate::{
-    aes::FixedKeyAes,
     block::Block,
     delta::Delta,
-    matrix::{BlockMatrix},
     sharing::InputSharing,
 };
 

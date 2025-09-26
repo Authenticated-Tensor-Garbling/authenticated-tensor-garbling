@@ -34,3 +34,4 @@ once_cell = "1.21.3"
 
 # circuits dependency
 mpz-circuits = { path = "circuits" }
+criterion = "0.7.0"
