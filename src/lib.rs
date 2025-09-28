@@ -19,9 +19,9 @@ pub mod tensor_gen;
 pub mod tensor_eval;
 pub mod tensor_ops;
 
-mod auth_tensor_fpre;
-mod auth_tensor_gen;
-mod auth_tensor_eval;
+pub mod auth_tensor_fpre;
+pub mod auth_tensor_gen;
+pub mod auth_tensor_eval;
 
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
 use crate::block::Block;
@@ -276,58 +276,8 @@ mod tests {
         true
     }
 
-    // For the first-half outer product: gb vs ev differ by delta solely based on y's column bit
-    fn verify_tensor_output_first_half_y(
-        clear_y: usize,
-        n: usize,
-        m: usize,
-        gb_out: &BlockMatrix,
-        ev_out: &BlockMatrix,
-        delta: &Delta,
-    ) -> bool {
-        for j in 0..m {
-            let y_bit = ((clear_y >> j) & 1) != 0;
-            for i in 0..n {
-                if y_bit {
-                    if gb_out[(i, j)] != ev_out[(i, j)] ^ delta.as_block() {
-                        return false;
-                    }
-                } else {
-                    if gb_out[(i, j)] != ev_out[(i, j)] {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    }
-
-    fn print_expected_bits_matrix(label: &str, x_bits: usize, y_bits: usize, n: usize, m: usize) {
-        println!("{} (n={} x m={}):", label, n, m);
-        for i in 0..n {
-            for j in 0..m {
-                let b = (((x_bits >> i) & 1) & ((y_bits >> j) & 1)) != 0;
-                print!("{} ", if b {1} else {0});
-            }
-            println!("");
-        }
-    }
-
-    fn print_gb_ev_relation(label: &str, n: usize, m: usize, gb: &BlockMatrix, ev: &BlockMatrix, delta: &Delta) {
-        println!("{} (=:equal, ^:ev^Δ, !:mismatch)", label);
-        for i in 0..n {
-            for j in 0..m {
-                let c = if gb[(i,j)] == ev[(i,j)] { '=' }
-                        else if gb[(i,j)] == ev[(i,j)] ^ delta.as_block() { '^' }
-                        else { '!' };
-                print!("{} ", c);
-            }
-            println!("");
-        }
-    }
-
     use crate::tensor_pre::SemiHonestTensorPre;
-
+    
     #[test]
     fn test_semihonest_tensor_product() {
         
@@ -341,20 +291,29 @@ mod tests {
 
         let mut pre = SemiHonestTensorPre::new_with_delta(3, n, m, 6, delta);
         pre.gen_inputs(clear_x, clear_y);
+
         assert!(
             verify_vector_sharing(clear_x, &pre.x_labels.iter().map(|share| share.gen_share).collect(), &pre.x_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
         );
         assert!(
             verify_vector_sharing(clear_y, &pre.y_labels.iter().map(|share| share.gen_share).collect(), &pre.y_labels.iter().map(|share| share.eval_share).collect(), &delta, m)
         );
+
+
         let (alpha, beta) = pre.gen_masks();
+
+
         assert!(
             verify_vector_sharing(alpha, &pre.alpha_labels.iter().map(|share| share.gen_share).collect(), &pre.alpha_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
         );
         assert!(
             verify_vector_sharing(beta, &pre.beta_labels.iter().map(|share| share.gen_share).collect(), &pre.beta_labels.iter().map(|share| share.eval_share).collect(), &delta, m)
         );
+
+
         let (masked_x, masked_y) = pre.mask_inputs();
+        
+        
         assert!(
             verify_vector_sharing(masked_x, &pre.x_labels.iter().map(|share| share.gen_share).collect(), &pre.x_labels.iter().map(|share| share.eval_share).collect(), &delta, n)
         );
@@ -363,16 +322,11 @@ mod tests {
         );
 
 
-
         let n_bitmask = (1<<n)-1;
         let m_bitmask = (1<<m)-1;
 
         assert_eq!(masked_x, (clear_x ^ alpha) & n_bitmask);
         assert_eq!(masked_y, (clear_y ^ beta) & m_bitmask);
-        println!("masked_x: {}, masked_y: {}", masked_x, masked_y);
-        println!("clear_x: {}, clear_y: {}", clear_x, clear_y);
-        println!("alpha: {}, beta: {}", alpha, beta);
-
 
 
         let (pre_gen, pre_eval) = pre.into_gen_eval();
@@ -465,6 +419,7 @@ mod tests {
 
         let mut fpre = TensorFpre::new_with_delta(54, n, m, 6, delta_a, delta_b);
         fpre.generate_with_input_values(input_x, input_y);
+
         let (clear_x, clear_y, alpha, beta) = fpre.get_clear_values();
         let masked_x = clear_x ^ alpha;
         let masked_y = clear_y ^ beta;
@@ -478,7 +433,7 @@ mod tests {
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-        let mut ev = AuthTensorEval::new_from_fpre_eval(1, fpre_eval);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
         // check that gb and ev have correct masks
         // x_labels should be masked_x ^ alpha

@@ -404,7 +404,6 @@ impl FpreGen {
                 z: auth_bits[3 * i + 2].clone(),
             });
         }
-        println!("leaky triples: {:?}", self.leaky_shares[42]);
     }
 
     fn _triple_check_1(&mut self) -> (Vec<Block>, Vec<Block>) {
@@ -693,91 +692,6 @@ impl FpreEval {
         }
     }
 }
-
-/// Generate Fpre data
-// pub fn fpre(
-//     num_wires: usize,
-//     num_and: usize,
-//     bucket_size: usize,
-//     _seed: u64,
-//     rng: &mut StdRng,
-// ) -> (FpreGen, FpreEval) {
-
-//     // need to set LSB of deltas to XOR to 1 for an optimization
-//     let delta_a = Delta::random(rng).set_lsb(true);
-//     let delta_b = Delta::random(rng).set_lsb(false);
-
-//     println!("delta_a: {:?}", delta_a);
-//     println!("delta_b: {:?}", delta_b);
-
-//     let mut fpre_gen = FpreGen::new(num_wires, num_and, delta_a);
-//     let mut fpre_eval = FpreEval::new(num_wires, num_and, delta_b);
-
-//     // Calculate total number of shares needed
-//     let num_wires_shares = num_wires + num_and;
-//     let num_and_shares = num_and*(3*bucket_size);
-//     let total_shares = num_wires_shares + num_and_shares;
-
-//     // Get all shares in one call
-//     let (gen_all_shares, eval_all_shares) = 
-//         bit_shares_from_cot(total_shares, delta_a, delta_b)
-//         .unwrap();
-
-//     // Split into input and AND shares
-//     let (gen_wire_shares, gen_and_shares) = {
-//         let (wire, and) = gen_all_shares.split_at(num_wires_shares);
-//         (wire.to_vec(), and.to_vec())
-//     };
-//     let (eval_wire_shares, eval_and_shares) = {
-//         let (wire, and) = eval_all_shares.split_at(num_wires_shares);
-//         (wire.to_vec(), and.to_vec())
-//     };
-
-//     println!("gen wire shares: {:?}", gen_wire_shares[42]);
-
-//     fpre_gen.set_bits(gen_wire_shares);
-//     fpre_eval.set_bits(eval_wire_shares);
-
-//     fpre_gen.set_faulty_triples(gen_and_shares);
-//     fpre_eval.set_faulty_triples(eval_and_shares);
-
-//     let (c_gen, mut g_gen) = fpre_gen.triple_check_1();
-//     let (c_eval, mut g_eval) = fpre_eval.triple_check_1();
-
-//     // Comm 1
-//     let gr_gen = g_eval.clone();
-//     let gr_eval = g_gen.clone();
-
-//     let d_gen = fpre_gen.triple_check_2(c_gen, &mut g_gen, gr_gen);
-//     let d_eval = fpre_eval.triple_check_2(c_eval, &mut g_eval, gr_eval);
-
-//     // Comm 2
-//     let dr_gen = d_eval.clone();    
-//     let dr_eval = d_gen.clone();
-
-//     fpre_gen.triple_check_3(&mut g_gen, d_gen, dr_gen);
-//     fpre_eval.triple_check_3(&mut g_eval, d_eval, dr_eval);
-
-//     // Comm 3
-//     for (g_gen, g_eval) in zip(g_gen, g_eval) {
-//         assert_eq!(g_gen, g_eval);
-//     }
-
-//     // Comm 4: coin-tossing to agree on a seed
-//     let seed = 0;
-
-//     let data_gen = fpre_gen.triple_combine_1(seed, bucket_size);
-//     let data_eval = fpre_eval.triple_combine_1(seed, bucket_size);
-
-//     // Comm 5
-//     let data_recv_gen = data_eval.clone();
-//     let data_recv_eval = data_gen.clone();
-
-//     fpre_gen.triple_combine_2(seed, bucket_size, data_gen, data_recv_gen);
-//     fpre_eval.triple_combine_2(seed, bucket_size, data_eval, data_recv_eval);
-
-//     (fpre_gen, fpre_eval)
-// }
 
 fn _verify_fpre(fpre_gen: FpreGen, fpre_eval: FpreEval){
     for (gen_share, eval_share) in zip(fpre_gen.wire_shares, fpre_eval.wire_shares) {

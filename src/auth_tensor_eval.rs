@@ -27,7 +27,7 @@ pub struct AuthTensorEval {
 }
 
 impl AuthTensorEval {
-    pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize) -> Self {
+    pub fn new(n: usize, m: usize, chunking_factor: usize) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
             chunking_factor,
@@ -45,7 +45,7 @@ impl AuthTensorEval {
         }
     }
 
-    pub fn new_from_fpre_eval(seed: u64, fpre_eval: TensorFpreEval) -> Self {
+    pub fn new_from_fpre_eval(fpre_eval: TensorFpreEval) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
             chunking_factor: fpre_eval.chunking_factor,
@@ -143,9 +143,6 @@ impl AuthTensorEval {
         gen_cts: &Vec<Block>,
     ) -> Vec<Block> {
         let m = y.len();
-        
-        println!("DEBUG: eval_unary_outer_product - seeds len: {}, missing: {}, gen_cts len: {}", 
-                 seeds.len(), missing, gen_cts.len());
     
         let mut eval_cts: Vec<Block> = Vec::new();
     
@@ -210,14 +207,7 @@ impl AuthTensorEval {
             
 
             out.with_subrows(chunking_factor * s, slice_size, |part| {
-                
-                println!("DEBUG: chunk {} - slice_clear: {}, slice LSBs: {:?}", s, slice_clear, 
-                         (0..slice_size).map(|i| slice[i].lsb()).collect::<Vec<_>>());
-                println!("DEBUG: chunk {} - chunk_levels[{}] len: {}", s, s, chunk_levels[s].len());
-                println!("DEBUG: chunk {} - chunk_cts[{}] len: {}", s, s, chunk_cts[s].len());
-                
                 let eval_seeds = Self::eval_populate_seeds_mem_optimized(&slice.as_view(), chunk_levels[s].clone(), &slice_clear, cipher);
-                println!("DEBUG: chunk {} - eval_seeds len: {}", s, eval_seeds.len());
                 let _eval_cts = Self::eval_unary_outer_product(&eval_seeds, &y, part, cipher, slice_clear, &chunk_cts[s]);
 
             });

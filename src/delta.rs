@@ -1,6 +1,6 @@
 use crate::block::Block;
 
-use rand::{Rng, distr::StandardUniform, prelude::Distribution};
+use rand::Rng;
 use std::ops::{BitXor, BitXorAssign};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

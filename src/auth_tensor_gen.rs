@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(gar.correlated_auth_bit_shares.len(), n * m);
         assert_eq!(gar.gamma_auth_bit_shares.len(), n * m);
 
-        let (chunk_levels, chunk_cts) = gar.garble_first_half();
+        let (_chunk_levels, _chunk_cts) = gar.garble_first_half();
 
     }
 }

@@ -3,7 +3,6 @@ use std::ops::{BitXor, BitXorAssign, Index, IndexMut};
 
 use crate::keys::Key;
 use crate::block::Block;
-use crate::delta::Delta;
 
 mod sealed {
     pub trait Sealed {}
@@ -65,11 +64,11 @@ impl<T: MatrixElement> TypedMatrix<T> {
         self.cols
     }
 
-    pub fn as_view(&self) -> MatrixViewRef<T> {
+    pub fn as_view(&self) -> MatrixViewRef<'_, T> {
         MatrixViewRef::new(&self.elements[..], self.rows, self.cols)
     }
 
-    pub fn as_view_mut(&mut self) -> MatrixViewMut<T> {
+    pub fn as_view_mut(&mut self) -> MatrixViewMut<'_, T> {
         MatrixViewMut::new(&mut self.elements[..], self.rows, self.cols)
     }
 

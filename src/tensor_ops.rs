@@ -15,9 +15,6 @@ pub fn gen_populate_seeds_mem_optimized(
     let mut odd_evens: Vec<(Block, Block)> = Vec::new();
 
     let n: usize = x.len();
-    
-    println!("DEBUG: gen_populate_seeds_mem_optimized - n: {}, x LSBs: {:?}", n, 
-             (0..n).map(|i| x[i].lsb()).collect::<Vec<_>>());
 
     // Seed buffer for level-by-level computation
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
@@ -73,7 +70,6 @@ pub fn gen_populate_seeds_mem_optimized(
         odds ^= cipher.tccr(Block::from(1 as u128), key1);
         
         odd_evens.push((evens, odds));
-        println!("DEBUG: gen_populate_seeds_mem_optimized - level {}: added (evens, odds) to odd_evens", i);
         
         // Add all non-default seeds from this level to the tree
         for idx in 0..(1 << (i+1)) {
