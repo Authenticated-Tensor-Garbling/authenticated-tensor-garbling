@@ -50,6 +50,7 @@ pub(crate) const MAC_ONE: Block = Block::new([
 #[cfg(test)]
 mod tests {
 
+    use mpz_circuits::CircuitBuilder;
     use rand::Rng;
     use itybity::FromBitIterator;
     use itybity::IntoBitIterator;
@@ -67,6 +68,148 @@ mod tests {
         auth_eval::AuthEvalOutput
     };
     
+    #[test]
+    fn test_tensor_and() {
+        
+        const N: usize = 8;
+        let x_input = [2u8; 1];
+        let y_input = [3u8; 1];
+        
+        let mut builder = CircuitBuilder::new();
+        let x: [_; N] = std::array::from_fn(|_| builder.add_input()); // any way to denote constexpr to set the size like in C++?
+        let y: [_; N] = std::array::from_fn(|_| builder.add_input());
+        
+        let mut outputs = Vec::new();
+        
+        for i in 0..4 {
+            for j in 0..4 {
+                outputs.push(builder.add_and_gate(x[i], y[j]));
+            }
+        }
+        
+        for out in outputs {
+            builder.add_output(out);
+        }
+        
+        let circ = builder.build().unwrap();
+        
+        
+        // no need for expected; who cares about correctness?
+        
+        // set up the protocol
+        
+        // Set up fpre and get AuthBit shares
+        let mut rng = rand::rng();
+        
+        let delta_a = Delta::random(&mut rng).set_lsb(true);
+        let delta_b = Delta::random(&mut rng).set_lsb(false);
+
+        let num_input_shares = circ.inputs().len();
+        let num_and_shares = circ.and_count();
+        let total_number_shares = num_input_shares + num_and_shares;
+
+        // Generate Fpre
+        let mut fpre = Fpre::new_with_delta(0, num_input_shares, num_and_shares, delta_a, delta_b);
+        fpre.generate();
+
+        let seed = 5;
+
+        let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
+
+        let mut gb = AuthGen::new(seed, 0);
+        let mut ev = AuthEval::new(seed, 0);
+
+        // Set up inputs
+        let input_keys = (0..circ.inputs().len())
+        .map(|_| Key::from(rng.random::<[u8; 16]>()))
+        .collect::<Vec<Key>>();
+
+        if fpre_gen.wire_shares.len() != total_number_shares {
+            panic!("fpre_gen.wire_shares.len() != total_number_shares");
+        }
+
+        if fpre_eval.wire_shares.len() != total_number_shares {
+            panic!("fpre_eval.wire_shares.len() != total_number_shares");
+        }
+
+        let (gen_input_shares, gen_and_shares) = fpre_gen.wire_shares.split_at(num_input_shares);
+        let (eval_input_shares, eval_and_shares) = fpre_eval.wire_shares.split_at(num_input_shares);
+
+        let masked_inputs = x_input.iter().copied().chain(y_input).into_iter_lsb0()
+        .enumerate()
+        .map(|(i, b)| {b ^ gen_input_shares[i].bit() ^ eval_input_shares[i].bit()})
+        .collect::<Vec<bool>>();
+
+        let input_macs = masked_inputs.iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if *b {
+                    Mac::from(input_keys[i].as_block().clone()) + Mac::from(delta_a.as_block().clone())
+                } else {
+                    Mac::from(input_keys[i].as_block().clone())
+                }
+            })
+            .collect::<Vec<Mac>>();
+
+        gb.generate_pre_ideal(&circ, gen_input_shares, gen_and_shares, fpre_gen.triple_shares.as_slice()).unwrap();
+        ev.generate_pre_ideal(&circ, eval_input_shares, eval_and_shares, fpre_eval.triple_shares.as_slice()).unwrap();
+
+        gb.generate_free(&circ).unwrap();
+        ev.evaluate_free(&circ).unwrap();
+        
+        let (px_gen, py_gen) = gb.generate_de(&circ).unwrap();
+        let (px_eval, py_eval) = ev.evaluate_de(&circ).unwrap();
+
+        // apply the corrections to shares
+        let _ = gb.generate_batched(&circ, delta_a, &input_keys, px_eval, py_eval).unwrap();
+        let _ = ev.evaluate_batched(&circ, delta_b, &input_macs, masked_inputs, px_gen, py_gen).unwrap();
+
+        let half_gates = gb.garble(&circ, delta_a).unwrap();
+        let _ = ev.process(&circ, delta_b, half_gates);
+        
+        let AuthEvalOutput {
+            output_labels: eval_output_labels,
+            output_auth_bits: eval_output_auth_bits,
+            auth_hash: eval_auth_hash,
+            masked_output_values,
+            masked_values,
+        } = ev.finish(&circ, delta_b).unwrap();
+
+        let AuthGenOutput {
+            output_labels: gen_output_labels,
+            output_auth_bits: gen_output_auth_bits,
+            auth_hash: gen_auth_hash,
+        } = gb.finish(&circ, delta_a, masked_values).unwrap();
+
+        // authentication check
+        assert_eq!(gen_auth_hash, eval_auth_hash, "auth hash mismatch");
+
+        let masks = gen_output_auth_bits.iter()
+            .zip(eval_output_auth_bits.iter())
+            .map(|(gen_auth_bit, eval_auth_bit)| gen_auth_bit.bit() ^ eval_auth_bit.bit())
+            .collect::<Vec<bool>>();
+        
+        // Unmask the output
+        let output: Vec<u8> = Vec::from_lsb0_iter(
+            masked_output_values
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(i, masked_value)| masked_value ^ masks[i]),
+        );
+
+        // assert_eq!(output, expected, "output mismatch");
+
+        // Check output labels
+        // for (i, (gen_label, eval_label)) in gen_output_labels.iter().zip(eval_output_labels.iter()).enumerate() {
+        //     let xor = gen_label.as_block() ^ eval_label.as_block();
+        //     let masked_value = masked_output_values[i];
+        //     let expected = delta_a.mul_bool(masked_value);
+        //     assert_eq!(xor, expected, "output label mismatch");
+        // }
+
+    }
+
     #[test]
     fn test_auth_garble() {
         let mut rng = rand::rng();
