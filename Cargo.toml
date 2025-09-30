@@ -36,8 +36,11 @@ once_cell = "1.21.3"
 mpz-circuits = { path = "circuits" }
 criterion = "0.7.0"
 
+# async for network simulator
+tokio = { version = "1.47.1", features = ["full"] }
+
 [dev-dependencies]
-criterion = "0.7.0"
+criterion = { version = "0.7", features = ["async_tokio"] }
 
 [[bench]]
 name = "benchmarks"

@@ -1,16 +1,29 @@
-use std::{fmt::format, panic::panic_any};
+use std::time::Duration;
+use std::mem::size_of;
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput, BatchSize};
 
 use authenticated_tensor_garbling::{
+    block::Block,
     tensor_gen::TensorProductGen,
     tensor_eval::TensorProductEval,
     tensor_pre::SemiHonestTensorPre,
     auth_tensor_gen::AuthTensorGen,
     auth_tensor_eval::AuthTensorEval,
     auth_tensor_fpre::TensorFpre,
+    network_simulator::SimpleNetworkSimulator
 };
+
 use mpz_circuits::{Circuit, CircuitBuilder};
+
+use once_cell::sync::Lazy;
+
+static RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+});
 
 // Benchmark parameters - different (n, m) combinations
 const BENCHMARK_PARAMS: &[(usize, usize)] = &[
@@ -89,199 +102,394 @@ fn _tensor_and_circuit<const N: usize>() -> Circuit {
     builder.build().unwrap()
 }
 
-// Benchmark full protocol (first + second + final)
-fn bench_full_protocol_garbling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("full_protocol_garbling");
+// // Benchmark full protocol (first + second + final)
+// fn bench_full_protocol_garbling(c: &mut Criterion) {
+//     let mut group = c.benchmark_group("full_protocol_garbling");
     
-    for &(n, m) in BENCHMARK_PARAMS {
-        group.throughput(Throughput::Elements((n * m) as u64));
+//     for &(n, m) in BENCHMARK_PARAMS {
+//         group.throughput(Throughput::Elements((n * m) as u64));
         
-        // Authenticated full protocol evaluation
-        group.bench_with_input(
-            BenchmarkId::new("1", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 1);
-                
-                b.iter(|| {
-                    let (_first_levels, _first_cts) = generator.garble_first_half();
-                    let (_second_levels, _second_cts) = generator.garble_second_half();
-                    generator.garble_final();
-                })
-            },
-        );
+        
+//         // Authenticated full protocol evaluation
+//         let mut generator = setup_auth_gen(n, m, 1);
+//         group.bench_with_input(
+//             BenchmarkId::new("1", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                     let (_first_levels, _first_cts) = generator.garble_first_half();
+//                     let (_second_levels, _second_cts) = generator.garble_second_half();
+//                     generator.garble_final();
+//                 })
+//             },
+//         );
 
-        group.bench_with_input(
-            BenchmarkId::new("2", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 2);
-                
-                b.iter(|| {
-                    let (_first_levels, _first_cts) = generator.garble_first_half();
-                    let (_second_levels, _second_cts) = generator.garble_second_half();
-                    generator.garble_final();
-                })
-            },
-        );
+//         let mut generator = setup_auth_gen(n, m, 2);
+//         group.bench_with_input(
+//             BenchmarkId::new("2", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                     let (_first_levels, _first_cts) = generator.garble_first_half();
+//                     let (_second_levels, _second_cts) = generator.garble_second_half();
+//                     generator.garble_final();
+//                 })
+//             },
+//         );
 
-        group.bench_with_input(
-            BenchmarkId::new("4", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 4);
-                
-                b.iter(|| {
-                    let (_first_levels, _first_cts) = generator.garble_first_half();
-                    let (_second_levels, _second_cts) = generator.garble_second_half();
-                    generator.garble_final();
-                })
-            },
-        );
+//         let mut generator = setup_auth_gen(n, m, 4);
+//         group.bench_with_input(
+//             BenchmarkId::new("4", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                     let (_first_levels, _first_cts) = generator.garble_first_half();
+//                     let (_second_levels, _second_cts) = generator.garble_second_half();
+//                     generator.garble_final();
+//                 })
+//             },
+//         );
 
-        group.bench_with_input(
-            BenchmarkId::new("6", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 6);
-                
-                b.iter(|| {
-                    let (_first_levels, _first_cts) = generator.garble_first_half();
-                    let (_second_levels, _second_cts) = generator.garble_second_half();
-                    generator.garble_final();
-                })
-            },
-        );
+//         let mut generator = setup_auth_gen(n, m, 6);
+//         group.bench_with_input(
+//             BenchmarkId::new("6", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                     let (_first_levels, _first_cts) = generator.garble_first_half();
+//                     let (_second_levels, _second_cts) = generator.garble_second_half();
+//                     generator.garble_final();
+//                 })
+//             },
+//         );
 
 
-        group.bench_with_input(
-            BenchmarkId::new("8", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 8);
+//         let mut generator = setup_auth_gen(n, m, 8);
+//         group.bench_with_input(
+//             BenchmarkId::new("8", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                     let (_first_levels, _first_cts) = generator.garble_first_half();
+//                     let (_second_levels, _second_cts) = generator.garble_second_half();
+//                     generator.garble_final();
+//                 })
+//             },
+//         );
+//     }
+//     group.finish();
+// }
+
+// // Benchmark full protocol evaluation
+// fn bench_full_protocol_evaluation(c: &mut Criterion) {
+//     let mut group = c.benchmark_group("full_protocol_evaluation");
+    
+//     for &(n, m) in BENCHMARK_PARAMS {
+//         group.throughput(Throughput::Elements((n * m) as u64));
+        
+//         let mut generator = setup_auth_gen(n, m, 1);
+//         let (first_levels, first_cts) = generator.garble_first_half();
+//         let (second_levels, second_cts) = generator.garble_second_half();
+//         generator.garble_final();
+//         let mut evaluator = setup_auth_eval(n, m, 1);
+        
+//         group.bench_with_input(
+//             BenchmarkId::new("1", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
                 
-                b.iter(|| {
-                    let (_first_levels, _first_cts) = generator.garble_first_half();
-                    let (_second_levels, _second_cts) = generator.garble_second_half();
-                    generator.garble_final();
-                })
-            },
-        );
-    }
-    group.finish();
-}
+//                 b.iter(|| {
+//                         evaluator.evaluate_first_half(first_levels, first_cts);
+//                         evaluator.evaluate_second_half(second_levels, second_cts);
+//                         evaluator.evaluate_final();
+//                 })
+//             },
+//         );
+
+//         let mut generator = setup_auth_gen(n, m, 2);
+//         let (first_levels, first_cts) = generator.garble_first_half();
+//         let (second_levels, second_cts) = generator.garble_second_half();
+//         generator.garble_final();
+//         let mut evaluator = setup_auth_eval(n, m, 2);
+        
+//         group.bench_with_input(
+//             BenchmarkId::new("2", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+//                 b.iter(|| {
+//                         evaluator.evaluate_first_half(first_levels, first_cts);
+//                         evaluator.evaluate_second_half(second_levels, second_cts);
+//                         evaluator.evaluate_final();
+//                 })
+//             },
+//         );
+
+//         let mut generator = setup_auth_gen(n, m, 4);
+//         let (first_levels, first_cts) = generator.garble_first_half();
+//         let (second_levels, second_cts) = generator.garble_second_half();
+//         generator.garble_final();
+//         let mut evaluator = setup_auth_eval(n, m, 4);
+//         group.bench_with_input(
+//             BenchmarkId::new("4", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+                
+//                 b.iter(|| {
+//                         evaluator.evaluate_first_half(first_levels, first_cts);
+//                         evaluator.evaluate_second_half(second_levels, second_cts);
+//                         evaluator.evaluate_final();
+//                 })
+//             },
+//         );
+
+//         let mut generator = setup_auth_gen(n, m, 6);
+//         let (first_levels, first_cts) = generator.garble_first_half();
+//         let (second_levels, second_cts) = generator.garble_second_half();
+//         generator.garble_final();
+//         let mut evaluator = setup_auth_eval(n, m, 6);
+//         group.bench_with_input(
+//             BenchmarkId::new("6", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+
+//                 b.iter(|| {
+//                         evaluator.evaluate_first_half(first_levels, first_cts);
+//                         evaluator.evaluate_second_half(second_levels, second_cts);
+//                         evaluator.evaluate_final();
+//                 })
+//             },
+//         );
+
+
+//         let mut generator = setup_auth_gen(n, m, 8);
+//         let (first_levels, first_cts) = generator.garble_first_half();
+//         let (second_levels, second_cts) = generator.garble_second_half();
+//         generator.garble_final();
+//         group.bench_with_input(
+//             BenchmarkId::new("8", format!("{}x{}", n, m)),
+//             &(n, m),
+//             |b, &(n, m)| {
+
+//                 let mut evaluator = setup_auth_eval(n, m, 8);
+                
+//                 b.iter(|| {
+//                         evaluator.evaluate_first_half(first_levels, first_cts);
+//                         evaluator.evaluate_second_half(second_levels, second_cts);
+//                         evaluator.evaluate_final();
+//                 })
+//             },
+//         );
+//     }
+//     group.finish();
+// }
 
 // Benchmark full protocol evaluation
-fn bench_full_protocol_evaluation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("full_protocol_evaluation");
+fn bench_full_protocol_with_networking(c: &mut Criterion) {
+    let mut group = c.benchmark_group("full_protocol_with_networking");
+    group.warm_up_time(Duration::from_secs(10));
+    group.measurement_time(Duration::from_secs(30));
+
+    let block_sz = size_of::<Block>();
     
     for &(n, m) in BENCHMARK_PARAMS {
-        group.throughput(Throughput::Elements((n * m) as u64));
         
-        // Authenticated full protocol evaluation
+        let chunking_factor = 1;
+
+        let mut generator = setup_auth_gen(n, m, chunking_factor);
+
+        let (first_levels, first_cts) = generator.garble_first_half();
+        let (second_levels, second_cts) = generator.garble_second_half();
+        generator.garble_final();
+        
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
+                        
+        let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
+
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+        
         group.bench_with_input(
             BenchmarkId::new("1", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 1);
-                let (first_levels, first_cts) = generator.garble_first_half();
-                let (second_levels, second_cts) = generator.garble_second_half();
-                generator.garble_final();
-                let mut evaluator = setup_auth_eval(n, m, 1);
-                
-                b.iter(|| {
-                        evaluator.evaluate_first_half(first_levels.clone(), first_cts.clone());
-                        evaluator.evaluate_second_half(second_levels.clone(), second_cts.clone());
+                b.to_async(&*RT)
+                .iter_batched(
+                    || (
+                        setup_auth_gen(n, m, chunking_factor), 
+                        setup_auth_eval(n, m, chunking_factor), 
+                        SimpleNetworkSimulator::new(100.0, 0)
+                    ),
+                    |(mut generator, mut evaluator, network)| async move {
+                        let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                        let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
+                        generator.garble_final();
+                        
+                        network.send_size_with_metrics(total_bytes).await;
+                    
+                        evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
+                        evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
                         evaluator.evaluate_final();
-                })
-            },
+                },
+                BatchSize::SmallInput
+            )},
         );
+
+        let chunking_factor = 2;
+
+        let mut generator = setup_auth_gen(n, m, chunking_factor);
+
+        let (first_levels, first_cts) = generator.garble_first_half();
+        let (second_levels, second_cts) = generator.garble_second_half();
+        generator.garble_final();
+        
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
+                        
+        let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
+
+        group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
             BenchmarkId::new("2", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 2);
-                let (first_levels, first_cts) = generator.garble_first_half();
-                let (second_levels, second_cts) = generator.garble_second_half();
-                generator.garble_final();
+                b.to_async(&*RT)
+                .iter_batched(
+                    || (setup_auth_gen(n, m, chunking_factor), setup_auth_eval(n, m, chunking_factor), SimpleNetworkSimulator::new(100.0, 0)),
+                    |(mut generator, mut evaluator, network)| async move {
+                    let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                    let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
+                    generator.garble_final();
 
-                let mut evaluator = setup_auth_eval(n, m, 2);
-                
-                b.iter(|| {
-                        evaluator.evaluate_first_half(first_levels.clone(), first_cts.clone());
-                        evaluator.evaluate_second_half(second_levels.clone(), second_cts.clone());
-                        evaluator.evaluate_final();
-                })
-            },
+                    network.send_size_with_metrics(total_bytes).await;
+                    
+                    evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
+                    evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
+                    evaluator.evaluate_final();
+                },
+                BatchSize::SmallInput
+            )},
         );
+
+        let chunking_factor = 4;
+
+        let mut generator = setup_auth_gen(n, m, chunking_factor);
+
+        let (first_levels, first_cts) = generator.garble_first_half();
+        let (second_levels, second_cts) = generator.garble_second_half();
+        generator.garble_final();
+        
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
+                        
+        let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
+
+        group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
             BenchmarkId::new("4", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 4);
-                let (first_levels, first_cts) = generator.garble_first_half();
-                let (second_levels, second_cts) = generator.garble_second_half();
-                generator.garble_final();
+                b.to_async(&*RT)
+                .iter_batched(
+                    || (setup_auth_gen(n, m, chunking_factor), setup_auth_eval(n, m, chunking_factor), SimpleNetworkSimulator::new(100.0, 0)),
+                    |(mut generator, mut evaluator, network)| async move {
+                    let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                    let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
+                    generator.garble_final();
 
-                let mut evaluator = setup_auth_eval(n, m, 4);
-                
-                b.iter(|| {
-                        evaluator.evaluate_first_half(first_levels.clone(), first_cts.clone());
-                        evaluator.evaluate_second_half(second_levels.clone(), second_cts.clone());
-                        evaluator.evaluate_final();
-                })
-            },
+                    network.send_size_with_metrics(total_bytes).await;
+                    
+                    evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
+                    evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
+                    evaluator.evaluate_final();
+                },
+                BatchSize::SmallInput
+            )},
         );
+
+        let chunking_factor = 6;
+
+        let mut generator = setup_auth_gen(n, m, chunking_factor);
+
+        let (first_levels, first_cts) = generator.garble_first_half();
+        let (second_levels, second_cts) = generator.garble_second_half();
+        generator.garble_final();
+        
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
+
+        let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
+
+        group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
             BenchmarkId::new("6", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 6);
-                let (first_levels, first_cts) = generator.garble_first_half();
-                let (second_levels, second_cts) = generator.garble_second_half();
-                generator.garble_final();
-                
-                let mut evaluator = setup_auth_eval(n, m, 6);
+                b.to_async(&*RT)
+                .iter_batched(
+                    || (setup_auth_gen(n, m, chunking_factor), setup_auth_eval(n, m, chunking_factor), SimpleNetworkSimulator::new(100.0, 0)),
+                    |(mut generator, mut evaluator, network)| async move {
+                    let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                    let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
+                    generator.garble_final();
 
-                b.iter(|| {
-                        evaluator.evaluate_first_half(first_levels.clone(), first_cts.clone());
-                        evaluator.evaluate_second_half(second_levels.clone(), second_cts.clone());
-                        evaluator.evaluate_final();
-                })
-            },
+                    network.send_size_with_metrics(total_bytes).await;
+                    
+                    evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
+                    evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
+                    evaluator.evaluate_final();
+                },
+                BatchSize::SmallInput
+            )},
         );
 
+        let chunking_factor = 8;
+
+        let mut generator = setup_auth_gen(n, m, chunking_factor);
+
+        let (first_levels, first_cts) = generator.garble_first_half();
+        let (second_levels, second_cts) = generator.garble_second_half();
+        generator.garble_final();
+        
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
+                        
+        let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
+
+        group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
             BenchmarkId::new("8", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
-                // Setup generator to get garbled data
-                let mut generator = setup_auth_gen(n, m, 8);
-                let (first_levels, first_cts) = generator.garble_first_half();
-                let (second_levels, second_cts) = generator.garble_second_half();
-                generator.garble_final();
+                b.to_async(&*RT)
+                .iter_batched(
+                    || (setup_auth_gen(n, m, chunking_factor), setup_auth_eval(n, m, chunking_factor), SimpleNetworkSimulator::new(100.0, 0)),
+                    |(mut generator, mut evaluator, network)| async move {
+                    let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                    let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
+                    generator.garble_final();
 
-                let mut evaluator = setup_auth_eval(n, m, 8);
-                
-                b.iter(|| {
-                        evaluator.evaluate_first_half(first_levels.clone(), first_cts.clone());
-                        evaluator.evaluate_second_half(second_levels.clone(), second_cts.clone());
-                        evaluator.evaluate_final();
-                })
-            },
+                    network.send_size_with_metrics(total_bytes).await;
+                    
+                    evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
+                    evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
+                    evaluator.evaluate_final();
+                },
+                BatchSize::SmallInput
+            )},
         );
     }
     group.finish();
@@ -289,8 +497,9 @@ fn bench_full_protocol_evaluation(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_full_protocol_garbling,
-    bench_full_protocol_evaluation,
+    // bench_full_protocol_garbling,
+    // bench_full_protocol_evaluation,
+    bench_full_protocol_with_networking,
 );
 
 criterion_main!(benches);

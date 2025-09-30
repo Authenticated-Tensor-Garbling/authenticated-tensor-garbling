@@ -23,6 +23,8 @@ pub mod auth_tensor_fpre;
 pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
 
+pub mod network_simulator;
+
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
 use crate::block::Block;
 
@@ -168,7 +170,7 @@ mod tests {
         let _ = ev.process(&circ, delta_b, half_gates);
         
         let AuthEvalOutput {
-            output_labels: eval_output_labels,
+            output_labels: _eval_output_labels,
             output_auth_bits: eval_output_auth_bits,
             auth_hash: eval_auth_hash,
             masked_output_values,
@@ -176,7 +178,7 @@ mod tests {
         } = ev.finish(&circ, delta_b).unwrap();
 
         let AuthGenOutput {
-            output_labels: gen_output_labels,
+            output_labels: _gen_output_labels,
             output_auth_bits: gen_output_auth_bits,
             auth_hash: gen_auth_hash,
         } = gb.finish(&circ, delta_a, masked_values).unwrap();
@@ -190,7 +192,7 @@ mod tests {
             .collect::<Vec<bool>>();
         
         // Unmask the output
-        let output: Vec<u8> = Vec::from_lsb0_iter(
+        let _output: Vec<u8> = Vec::from_lsb0_iter(
             masked_output_values
                 .clone()
                 .into_iter()
@@ -554,13 +556,13 @@ mod tests {
         let delta_a = Delta::random(&mut rng);
         let delta_b = Delta::random(&mut rng);
 
-        let n = 2;
-        let m = 3;
+        let n = 16;
+        let m = 16;
 
         let input_x = 0b101;
         let input_y = 0b110;
 
-        let mut fpre = TensorFpre::new_with_delta(54, n, m, 6, delta_a, delta_b);
+        let mut fpre = TensorFpre::new_with_delta(54, n, m, 8, delta_a, delta_b);
         fpre.generate_with_input_values(input_x, input_y);
 
         let (clear_x, clear_y, alpha, beta) = fpre.get_clear_values();
@@ -624,6 +626,10 @@ mod tests {
 
 
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_second_half();
+        println!("gen_chunk_levels: {:?}", gen_chunk_levels.len());
+        println!("gen_chunk_levels[0] (each hold 2 blocks): {:?}", gen_chunk_levels[0].len());
+        println!("gen_chunk_cts: {:?}", gen_chunk_cts.len());
+        println!("gen_chunk_cts[0] (ecah hold one block): {:?}", gen_chunk_cts[0].len());
         ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
 
         // check that second_out has the correct value
