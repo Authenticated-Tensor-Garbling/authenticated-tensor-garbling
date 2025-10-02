@@ -1,5 +1,5 @@
 // TODO refactor authbit from fpre to a common module, or redefine with new name.
-use crate::{block::Block, delta::Delta, fpre::{AuthBit, build_share, AuthBitShare}, sharing::InputSharing};
+use crate::{block::Block, delta::Delta, sharing::{AuthBit, build_share, AuthBitShare, InputSharing}};
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;

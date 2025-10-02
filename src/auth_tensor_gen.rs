@@ -4,7 +4,7 @@ use crate::{
         FIXED_KEY_AES
     },
     delta::Delta,
-    fpre::AuthBitShare,
+    sharing::AuthBitShare,
     auth_tensor_fpre::TensorFpreGen,
     block::Block,
     matrix::{BlockMatrix, MatrixViewRef},
@@ -193,8 +193,7 @@ impl AuthTensorGen {
 
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
-                    correlated_share;// ^
-                    // gamma_share;
+                    correlated_share;
             }
         }
     }

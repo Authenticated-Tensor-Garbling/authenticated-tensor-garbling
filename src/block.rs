@@ -1,7 +1,6 @@
 //! A block of 128 bits and its operations.
 
 use bytemuck::{Pod, Zeroable};
-// use clmul::Clmul;
 use core::ops::{BitAnd, BitAndAssign, BitXor, BitXorAssign};
 use hybrid_array::{Array, typenum::consts::U16};
 use itybity::{BitIterable, BitLength, FromBitIterator, GetBit, Lsb0, Msb0};
@@ -74,49 +73,6 @@ impl Block {
     pub fn random_vec<R: Rng + CryptoRng + ?Sized>(rng: &mut R, n: usize) -> Vec<Self> {
         (0..n).map(|_| rng.random::<[u8; 16]>().into()).collect()
     }
-
-    // /// Carry-less multiplication of two blocks, without the reduction step.
-    // #[inline]
-    // pub fn clmul(self, other: Self) -> (Self, Self) {
-    //     let (a, b) = Clmul::new(&self.0).clmul(Clmul::new(&other.0));
-    //     (Self::new(a.into()), Self::new(b.into()))
-    // }
-
-    // #[inline]
-    // /// Reduces the polynomial represented in bits modulo the GCM polynomial
-    // /// x^128 + x^7 + x^2 + x + 1. `x` and `y` are resp. upper and lower
-    // /// bits of the polynomial.
-    // pub fn reduce_gcm(x: Self, y: Self) -> Self {
-    //     let r = Clmul::reduce_gcm(Clmul::new(&x.0), Clmul::new(&y.0));
-    //     Self::new(r.into())
-    // }
-
-    // /// The multiplication of two Galois field elements.
-    // #[inline]
-    // pub fn gfmul(self, x: Self) -> Self {
-    //     let (a, b) = self.clmul(x);
-    //     Block::reduce_gcm(a, b)
-    // }
-
-    // /// Compute the inner product of two block vectors, without reducing the
-    // /// polynomial.
-    // #[inline]
-    // pub fn inn_prdt_no_red(a: &[Block], b: &[Block]) -> (Block, Block) {
-    //     assert_eq!(a.len(), b.len());
-    //     a.iter()
-    //         .zip(b.iter())
-    //         .fold((Block::ZERO, Block::ZERO), |acc, (x, y)| {
-    //             let t = x.clmul(*y);
-    //             (t.0 ^ acc.0, t.1 ^ acc.1)
-    //         })
-    // }
-
-    // /// Compute the inner product of two block vectors.
-    // #[inline]
-    // pub fn inn_prdt_red(a: &[Block], b: &[Block]) -> Block {
-    //     let (x, y) = Block::inn_prdt_no_red(a, b);
-    //     Block::reduce_gcm(x, y)
-    // }
 
     /// Reverses the bits of the block
     #[inline]
@@ -230,15 +186,11 @@ impl AsRef<[u8]> for Block {
     }
 }
 
-/// A trait for converting a type to blocks
 pub trait BlockSerialize {
-    /// The block representation of the type
     type Serialized: std::fmt::Debug + Clone + Copy + Send + Sync + 'static;
 
-    /// Convert the type to blocks
     fn to_blocks(self) -> Self::Serialized;
 
-    /// Convert the blocks to the type
     fn from_blocks(blocks: Self::Serialized) -> Self;
 }
 
@@ -502,35 +454,6 @@ mod tests {
 
         assert_eq!(a.reverse_bits().to_lsb0_vec(), expected_bits);
     }
-
-    // #[test]
-    // fn inn_prdt_test() {
-    //     use rand::{Rng, SeedableRng};
-    //     use rand_chacha::ChaCha12Rng;
-    //     let mut rng = ChaCha12Rng::from_seed([0; 32]);
-
-    //     const SIZE: usize = 1000;
-    //     let mut a = Vec::new();
-    //     let mut b = Vec::new();
-    //     let mut c = (Block::ZERO, Block::ZERO);
-    //     let mut d = Block::ZERO;
-    //     for i in 0..SIZE {
-    //         let r: [u8; 16] = rng.random();
-    //         a.push(Block::from(r));
-    //         let r: [u8; 16] = rng.random();
-    //         b.push(Block::from(r));
-
-    //         let z = a[i].clmul(b[i]);
-    //         c.0 ^= z.0;
-    //         c.1 ^= z.1;
-
-    //         let x = a[i].gfmul(b[i]);
-    //         d ^= x;
-    //     }
-
-    //     assert_eq!(c, Block::inn_prdt_no_red(&a, &b));
-    //     assert_eq!(d, Block::inn_prdt_red(&a, &b));
-    // }
 
     #[test]
     fn sigma_test() {

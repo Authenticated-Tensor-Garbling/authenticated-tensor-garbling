@@ -1,5 +1,5 @@
 use crate::{aes::FixedKeyAes, block::Block, delta::Delta, matrix::BlockMatrix};
-use crate::fpre::AuthBitShare;
+use crate::sharing::AuthBitShare;
 use crate::aes::FIXED_KEY_AES;
 use crate::auth_tensor_fpre::TensorFpreEval;
 use crate::matrix::MatrixViewRef;
@@ -257,19 +257,8 @@ impl AuthTensorEval {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^= 
                     self.second_half_out[(j, i)] ^
-                    self.correlated_auth_bit_shares[j * self.n + i].mac.as_block(); //^
-                    // self.gamma_auth_bit_shares[j * self.n + i].mac.as_block()
+                    self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
             }
         }
-    }
-
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test_auth_tensor_eval() {
-        unimplemented!();
     }
 }

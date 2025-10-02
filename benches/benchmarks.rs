@@ -16,8 +16,6 @@ use authenticated_tensor_garbling::{
     auth_tensor_fpre::TensorFpre,
 };
 
-use mpz_circuits::{Circuit, CircuitBuilder};
-
 use once_cell::sync::Lazy;
 
 static RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
@@ -81,27 +79,6 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
     fpre.generate_with_input_values(X_INPUT, Y_INPUT); // Example input values
     let (_, fpre_eval) = fpre.into_gen_eval();
     AuthTensorEval::new_from_fpre_eval(fpre_eval)
-}
-
-fn _tensor_and_circuit<const N: usize>() -> Circuit {
-
-    let mut builder = CircuitBuilder::new();
-    let x: [_; N] = std::array::from_fn(|_| builder.add_input()); // any way to denote constexpr to set the size like in C++?
-    let y: [_; N] = std::array::from_fn(|_| builder.add_input());
-
-    let mut outputs = Vec::new();
-
-    for i in 0..N {
-        for j in 0..N {
-            outputs.push(builder.add_and_gate(x[i], y[j]));
-        }
-    }
-
-    for out in outputs {
-        builder.add_output(out);
-    }
-
-    builder.build().unwrap()
 }
 
 // Benchmark full protocol (first + second + final)
