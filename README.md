@@ -17,6 +17,5 @@ This will execute all benchmark suites including:
 
 ## Project Structure
 
-- `src/` - Core implementation of authenticated tensor garbling protocols
+- `src/` - Core implementation of semihonest and authenticated garbled tensor protocols
 - `benches/` - Benchmark suites and network simulation
-- `circuits/` - Circuit implementation and parsing utilities
