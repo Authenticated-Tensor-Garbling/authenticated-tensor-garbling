@@ -3,6 +3,9 @@ use std::mem::size_of;
 
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput, BatchSize};
 
+mod network_simulator;
+use network_simulator::SimpleNetworkSimulator;
+
 use authenticated_tensor_garbling::{
     block::Block,
     tensor_gen::TensorProductGen,
@@ -11,7 +14,6 @@ use authenticated_tensor_garbling::{
     auth_tensor_gen::AuthTensorGen,
     auth_tensor_eval::AuthTensorEval,
     auth_tensor_fpre::TensorFpre,
-    network_simulator::SimpleNetworkSimulator
 };
 
 use mpz_circuits::{Circuit, CircuitBuilder};
@@ -102,7 +104,7 @@ fn _tensor_and_circuit<const N: usize>() -> Circuit {
     builder.build().unwrap()
 }
 
-// // Benchmark full protocol (first + second + final)
+// Benchmark full protocol (first + second + final)
 fn bench_full_protocol_garbling(c: &mut Criterion) {
     let mut group = c.benchmark_group("full_protocol_garbling");
     
@@ -179,109 +181,6 @@ fn bench_full_protocol_garbling(c: &mut Criterion) {
     }
     group.finish();
 }
-
-// // Benchmark full protocol evaluation
-// fn bench_full_protocol_evaluation(c: &mut Criterion) {
-//     let mut group = c.benchmark_group("full_protocol_evaluation");
-    
-//     for &(n, m) in BENCHMARK_PARAMS {
-//         group.throughput(Throughput::Elements((n * m) as u64));
-        
-//         let mut generator = setup_auth_gen(n, m, 1);
-//         let (first_levels, first_cts) = generator.garble_first_half();
-//         let (second_levels, second_cts) = generator.garble_second_half();
-//         generator.garble_final();
-//         let mut evaluator = setup_auth_eval(n, m, 1);
-        
-//         group.bench_with_input(
-//             BenchmarkId::new("1", format!("{}x{}", n, m)),
-//             &(n, m),
-//             |b, &(n, m)| {
-                
-//                 b.iter(|| {
-//                         evaluator.evaluate_first_half(first_levels, first_cts);
-//                         evaluator.evaluate_second_half(second_levels, second_cts);
-//                         evaluator.evaluate_final();
-//                 })
-//             },
-//         );
-
-//         let mut generator = setup_auth_gen(n, m, 2);
-//         let (first_levels, first_cts) = generator.garble_first_half();
-//         let (second_levels, second_cts) = generator.garble_second_half();
-//         generator.garble_final();
-//         let mut evaluator = setup_auth_eval(n, m, 2);
-        
-//         group.bench_with_input(
-//             BenchmarkId::new("2", format!("{}x{}", n, m)),
-//             &(n, m),
-//             |b, &(n, m)| {
-//                 b.iter(|| {
-//                         evaluator.evaluate_first_half(first_levels, first_cts);
-//                         evaluator.evaluate_second_half(second_levels, second_cts);
-//                         evaluator.evaluate_final();
-//                 })
-//             },
-//         );
-
-//         let mut generator = setup_auth_gen(n, m, 4);
-//         let (first_levels, first_cts) = generator.garble_first_half();
-//         let (second_levels, second_cts) = generator.garble_second_half();
-//         generator.garble_final();
-//         let mut evaluator = setup_auth_eval(n, m, 4);
-//         group.bench_with_input(
-//             BenchmarkId::new("4", format!("{}x{}", n, m)),
-//             &(n, m),
-//             |b, &(n, m)| {
-                
-//                 b.iter(|| {
-//                         evaluator.evaluate_first_half(first_levels, first_cts);
-//                         evaluator.evaluate_second_half(second_levels, second_cts);
-//                         evaluator.evaluate_final();
-//                 })
-//             },
-//         );
-
-//         let mut generator = setup_auth_gen(n, m, 6);
-//         let (first_levels, first_cts) = generator.garble_first_half();
-//         let (second_levels, second_cts) = generator.garble_second_half();
-//         generator.garble_final();
-//         let mut evaluator = setup_auth_eval(n, m, 6);
-//         group.bench_with_input(
-//             BenchmarkId::new("6", format!("{}x{}", n, m)),
-//             &(n, m),
-//             |b, &(n, m)| {
-
-//                 b.iter(|| {
-//                         evaluator.evaluate_first_half(first_levels, first_cts);
-//                         evaluator.evaluate_second_half(second_levels, second_cts);
-//                         evaluator.evaluate_final();
-//                 })
-//             },
-//         );
-
-
-//         let mut generator = setup_auth_gen(n, m, 8);
-//         let (first_levels, first_cts) = generator.garble_first_half();
-//         let (second_levels, second_cts) = generator.garble_second_half();
-//         generator.garble_final();
-//         group.bench_with_input(
-//             BenchmarkId::new("8", format!("{}x{}", n, m)),
-//             &(n, m),
-//             |b, &(n, m)| {
-
-//                 let mut evaluator = setup_auth_eval(n, m, 8);
-                
-//                 b.iter(|| {
-//                         evaluator.evaluate_first_half(first_levels, first_cts);
-//                         evaluator.evaluate_second_half(second_levels, second_cts);
-//                         evaluator.evaluate_final();
-//                 })
-//             },
-//         );
-//     }
-//     group.finish();
-// }
 
 // Benchmark full protocol evaluation
 fn bench_full_protocol_with_networking(c: &mut Criterion) {
@@ -519,8 +418,6 @@ fn bench_4x4_runtime_with_networking(c: &mut Criterion) {
                         
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
-
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -575,8 +472,6 @@ fn bench_8x8_runtime_with_networking(c: &mut Criterion) {
                         
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
-
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -609,8 +504,6 @@ fn bench_8x8_runtime_with_networking(c: &mut Criterion) {
 
 fn bench_16x16_runtime_with_networking(c: &mut Criterion) {
     let mut group = c.benchmark_group("Runtime with networking for 16x16");
-    // group.warm_up_time(Duration::from_secs(10));
-    // group.measurement_time(Duration::from_secs(30));
 
     let block_sz = size_of::<Block>();
 
@@ -631,8 +524,6 @@ fn bench_16x16_runtime_with_networking(c: &mut Criterion) {
                         
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
-
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -665,8 +556,6 @@ fn bench_16x16_runtime_with_networking(c: &mut Criterion) {
 
 fn bench_32x32_runtime_with_networking(c: &mut Criterion) {
     let mut group = c.benchmark_group("Runtime with networking for 32x32");
-    // group.warm_up_time(Duration::from_secs(10));
-    // group.measurement_time(Duration::from_secs(30));
 
     let block_sz = size_of::<Block>();
 
@@ -688,7 +577,6 @@ fn bench_32x32_runtime_with_networking(c: &mut Criterion) {
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
 
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -721,8 +609,6 @@ fn bench_32x32_runtime_with_networking(c: &mut Criterion) {
 
 fn bench_64x64_runtime_with_networking(c: &mut Criterion) {
     let mut group = c.benchmark_group("Runtime with networking for 64x64");
-    // group.warm_up_time(Duration::from_secs(10));
-    // group.measurement_time(Duration::from_secs(30));
 
     let block_sz = size_of::<Block>();
 
@@ -744,7 +630,6 @@ fn bench_64x64_runtime_with_networking(c: &mut Criterion) {
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
 
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -777,8 +662,6 @@ fn bench_64x64_runtime_with_networking(c: &mut Criterion) {
 
 fn bench_128x128_runtime_with_networking(c: &mut Criterion) {
     let mut group = c.benchmark_group("Runtime with networking for 128x128");
-    // group.warm_up_time(Duration::from_secs(10));
-    // group.measurement_time(Duration::from_secs(30));
 
     let block_sz = size_of::<Block>();
 
@@ -800,7 +683,6 @@ fn bench_128x128_runtime_with_networking(c: &mut Criterion) {
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
 
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
         
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
@@ -833,8 +715,6 @@ fn bench_128x128_runtime_with_networking(c: &mut Criterion) {
 
 fn bench_256x256_runtime_with_networking(c: &mut Criterion) {
     let mut group = c.benchmark_group("Runtime with networking for 256x256");
-    // group.warm_up_time(Duration::from_secs(10));
-    // group.measurement_time(Duration::from_secs(30));
 
     let block_sz = size_of::<Block>();
 
@@ -856,8 +736,6 @@ fn bench_256x256_runtime_with_networking(c: &mut Criterion) {
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
         println!("Total bytes for input size {}x{} with chunking factor {} is {}", n, m, chunking_factor, total_bytes);
 
-        // group.throughput(Throughput::Bytes(total_bytes as u64));
-        
         group.bench_with_input(
             BenchmarkId::new("Chunking factor", format!("{}", chunking_factor)),
             &(chunking_factor),

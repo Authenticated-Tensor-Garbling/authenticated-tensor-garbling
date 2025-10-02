@@ -552,14 +552,6 @@ impl AuthGen {
                     gid += 2;
                     counter += 1;
 
-                    // If we have generated all AND gates, we can compute
-                    // the rest of the "free" gates.
-                    // if !self.has_gates() {
-                    //     assert!(self.next().is_none());
-
-                    //     self.complete = true;
-                    // }
-
                     half_gates.push(half_gate);
                 }
             }

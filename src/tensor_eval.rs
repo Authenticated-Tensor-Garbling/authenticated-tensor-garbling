@@ -228,7 +228,7 @@ impl TensorProductEval {
         for j in 0..self.m {
             eval_x[j] = self.y_labels[j];
         }
-        // TODO: unnecessary copy, can just set all zeros at evaluation
+
         let mut eval_y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
             eval_y[i] = self.alpha_labels[i];
@@ -262,8 +262,6 @@ impl TensorProductEval {
        
         let eval_alpha_beta = BlockMatrix::constant(self.n, self.m, Block::default());
         
-        // TODO: also unnecessary copy, can just set all zeros and avoid completely.
-        // accumulate the results into the first matrix
         for i in 0..self.n {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ eval_alpha_beta[(i, j)];

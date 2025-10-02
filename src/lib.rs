@@ -23,8 +23,6 @@ pub mod auth_tensor_fpre;
 pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
 
-pub mod network_simulator;
-
 pub use mpz_circuits::{Circuit, CircuitBuilder, CircuitError, Gate, GateType, evaluate};
 use crate::block::Block;
 
