@@ -17,6 +17,8 @@ pub mod auth_tensor_fpre;
 pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
 
+pub mod bcot;
+
 use crate::block::Block;
 
 #[allow(dead_code)]
