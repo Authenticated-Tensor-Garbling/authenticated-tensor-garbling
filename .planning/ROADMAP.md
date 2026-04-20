@@ -15,9 +15,9 @@
 | Wave | Plan | Status |
 |------|------|--------|
 | 1 | 01-PLAN-cot — IdealBCot (boolean correlated OT) | complete |
-| 2 | 01-PLAN-leaky-tensor — Pi_LeakyTensor + Pi_aTensor bucketing | pending |
-| 3 | 01-PLAN-fpre-replace — run_preprocessing entry point | pending |
-| 4 | 01-PLAN-benchmarks — bench_preprocessing benchmark | pending |
+| 2 | 01-PLAN-leaky-tensor — Pi_LeakyTensor + Pi_aTensor bucketing | complete |
+| 3 | 01-PLAN-fpre-replace — run_preprocessing entry point | complete |
+| 4 | 01-PLAN-benchmarks — bench_preprocessing benchmark | complete |
 
 **References:**
 - `references/appendix_krrw_pre.tex` — protocol specification
