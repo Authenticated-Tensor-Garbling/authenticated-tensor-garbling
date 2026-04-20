@@ -18,6 +18,7 @@ pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
 
 pub mod bcot;
+pub mod leaky_tensor_pre;
 
 use crate::block::Block;
 
