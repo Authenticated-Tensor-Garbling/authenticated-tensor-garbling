@@ -13,7 +13,7 @@ use authenticated_tensor_garbling::{
     tensor_pre::SemiHonestTensorPre,
     auth_tensor_gen::AuthTensorGen,
     auth_tensor_eval::AuthTensorEval,
-    auth_tensor_fpre::TensorFpre,
+    auth_tensor_fpre::{TensorFpre, run_preprocessing},
 };
 
 use once_cell::sync::Lazy;
@@ -36,6 +36,7 @@ const BENCHMARK_PARAMS: &[(usize, usize)] = &[
     (64, 64),
     (96, 96),
     (128, 128),
+    (256, 256),
 ];
 
 const X_INPUT: usize = 0b1101;
@@ -742,6 +743,51 @@ fn bench_256x256_runtime_with_networking(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_preprocessing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("preprocessing");
+    group.warm_up_time(Duration::from_secs(5));
+    group.measurement_time(Duration::from_secs(20));
+
+    let block_sz = size_of::<Block>();
+    let chunking_factor = 1;
+
+    for &(n, m) in BENCHMARK_PARAMS {
+        // Throughput: total authenticated bits produced per preprocessing call.
+        // n alpha_bits + m beta_bits + n*m correlated_bits + n*m gamma_bits = n + m + 2*n*m
+        let n_auth_bits = n + m + 2 * n * m;
+        group.throughput(Throughput::Elements(n_auth_bits as u64));
+
+        // Communication estimate for benchmark annotation:
+        //   bCOT phase: 2 rounds * (n + m + 2*n*m) authenticated bits * 16 bytes per Block
+        let bcot_bytes = 2 * (n + m + 2 * n * m) * block_sz;
+        let total_comm_bytes = bcot_bytes;
+
+        if n * m > 4096 {
+            group.sample_size(10);
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("real_preprocessing", format!("{}x{}", n, m)),
+            &(n, m),
+            |b, &(n, m)| {
+                b.to_async(&*RT)
+                .iter_batched(
+                    || SimpleNetworkSimulator::new(100.0, 0),
+                    |network| async move {
+                        // run_preprocessing is the measured operation
+                        let (_fpre_gen, _fpre_eval) = run_preprocessing(n, m, 1, chunking_factor);
+                        // Simulate the communication cost of bCOT (recorded for bandwidth
+                        // accounting; not measured in wall time)
+                        network.send_size_with_metrics(total_comm_bytes).await;
+                    },
+                    BatchSize::SmallInput
+                )
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_4x4_runtime_with_networking,
@@ -751,6 +797,7 @@ criterion_group!(
     bench_64x64_runtime_with_networking,
     bench_128x128_runtime_with_networking,
     bench_256x256_runtime_with_networking,
+    bench_preprocessing,
 );
 
 criterion_main!(benches);
