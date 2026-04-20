@@ -3,20 +3,20 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "01-PLAN-cot complete — IdealBCot implemented, 6 tests pass, Key LSB=0 invariant enforced"
-last_updated: "2026-04-20T08:39:58Z"
+stopped_at: Completed 01-PLAN-leaky-tensor — LeakyTensorPre + Pi_aTensor bucketing implemented, 12 tests pass
+last_updated: "2026-04-20T08:52:44.794Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 1
   completed_phases: 0
-  total_plans: 4
-  completed_plans: 1
+  total_plans: 0
+  completed_plans: 2
 ---
 
 # Project State
 
 **Project:** authenticated-tensor-garbling
-**Status:** Executing Phase 01
+**Status:** Ready to execute
 **Last Activity:** 2026-04-20
 
 ## Active Phase
@@ -26,7 +26,7 @@ Phase 1: Uncompressed Preprocessing Protocol
 ## Current Position
 
 Phase: 01 — EXECUTING
-Plan: 2 of 4 (01-PLAN-leaky-tensor next)
+Plan: 3 of 4 (01-PLAN-leaky-tensor next)
 
 - Phase: 1 of 1
 - Plans: 4 planned, 1 executed
@@ -51,15 +51,19 @@ Rust implementation of authenticated tensor garbling for secure two-party comput
 2. Key LSB=0 enforced via `set_lsb(false)` immediately after random key generation
 3. `output_to_auth_bit_shares_b_holds_key` intentionally omitted — casting receiver_macs to Key violates Key LSB=0 invariant (I-05 fix)
 4. When B needs to hold the key for a share, use a separate `transfer_b_to_a` call where B is sender
+- LeakyTensorPre borrows &mut IdealBCot (not owns) — shared delta_a/delta_b invariant required for Pi_aTensor XOR-combination MAC correctness
+- gen is a reserved keyword in Rust 2024 edition — parameter renamed from gen to gen_share in verify_cross_party helpers
+- Two COT calls per bit batch: transfer_a_to_b gives eval_share.key (A's key); transfer_b_to_a gives gen_share.key (B's key) — matches gen_auth_bit canonical layout
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 01 | cot | 709s | 2 | 2 |
+| Phase 01 Pleaky-tensor | 570 | 3 tasks | 3 files |
 
 ## Session Continuity
 
-Last session: 2026-04-20
-Stopped at: 01-PLAN-cot complete — IdealBCot implemented, 6 tests pass, Key LSB=0 invariant enforced
-Resume file: none
+Last session: 2026-04-20T08:52:44.791Z
+Stopped at: Completed 01-PLAN-leaky-tensor — LeakyTensorPre + Pi_aTensor bucketing implemented, 12 tests pass
+Resume file: None
