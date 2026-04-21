@@ -11,7 +11,28 @@ pub const FIXED_KEY: [u8; 16] = [
     69, 42, 69, 42, 69, 42, 69, 42, 69, 42, 69, 42, 69, 42, 69, 42,
 ];
 
-/// Fixed-key AES cipher
+/// Global fixed-key AES cipher used by the TCCR / CCR / CR hash constructions
+/// throughout the protocol (GGM seed expansion, outer-product correction
+/// ciphertexts, etc.).
+///
+/// # Why `once_cell::sync::Lazy`
+///
+/// `FixedKeyAes` wraps `aes::Aes128Enc`, which performs AES key expansion once
+/// when constructed. `Lazy` defers that one-time construction until first use
+/// and then caches the result for the lifetime of the process. `Lazy<T>` is
+/// `Send + Sync` whenever `T: Send + Sync`, which `Aes128Enc` is, so this
+/// static can be read from any thread (test threads, async runtime worker
+/// threads, benchmark threads) without synchronization. Internally `Lazy`
+/// uses a once-lock to serialize the first-initialization race.
+///
+/// # Why a fixed key
+///
+/// The value in `FIXED_KEY` is a **protocol constant**, not a secret. The
+/// security of the TCCR / CCR / CR constructions (see Guo et al., eprint
+/// 2019/074) depends on fixed-key AES being correlation-robust, not on the
+/// key being hidden. Any constant key works; the specific bytes are
+/// arbitrary. Do not replace this with a per-session key — doing so would
+/// break interoperability between garbler and evaluator.
 pub static FIXED_KEY_AES: Lazy<FixedKeyAes> = Lazy::new(|| FixedKeyAes {
     aes: Aes128Enc::new_from_slice(&FIXED_KEY).unwrap(),
 });
