@@ -135,8 +135,8 @@ mod tests {
     }
 
     /// Cross-party verify helper (same logic as in leaky_tensor_pre tests).
-    /// gen_share.key = B's key, eval_share.key = A's key.
-    /// Direct s.verify(&delta) WILL PANIC — use this helper.
+    /// gen_share.key = A's sender key; eval_share.key = B's sender key.
+    /// Gen commits under delta_b; eval commits under delta_a.
     fn verify_cross_party(
         gen_share: &AuthBitShare,
         eval_share: &AuthBitShare,

@@ -59,11 +59,12 @@ impl<'a> LeakyTensorPre<'a> {
 
     /// Generate one leaky tensor triple for inputs x_clear (n-bit) and y_clear (m-bit).
     ///
-    /// Layout invariant (matches gen_auth_bit canonical layout from auth_tensor_fpre.rs):
-    ///   gen_share.key  = cot_b_to_a.sender_keys[i]   (A holds B's key, LSB=0)
-    ///   gen_share.mac  = cot_a_to_b.receiver_macs[i] (A's MAC under delta_b)
-    ///   eval_share.key = cot_a_to_b.sender_keys[i]   (B holds A's key, LSB=0)
-    ///   eval_share.mac = cot_b_to_a.receiver_macs[i] (B's MAC under delta_a)
+    /// Layout invariant (matches gen_auth_bit canonical layout from auth_tensor_fpre.rs,
+    /// and the paper's convention [x_pa]^{Δ_b}, [x_pb]^{Δ_a} — verifier's delta):
+    ///   gen_share.key  = cot_a_to_b.sender_keys[i]   (A's sender key from A→B COT, LSB=0)
+    ///   gen_share.mac  = cot_b_to_a.receiver_macs[i] (A's MAC on A's bit under delta_b)
+    ///   eval_share.key = cot_b_to_a.sender_keys[i]   (B's sender key from B→A COT, LSB=0)
+    ///   eval_share.mac = cot_a_to_b.receiver_macs[i] (B's MAC on B's bit under delta_a)
     pub fn generate(&mut self, x_clear: usize, y_clear: usize) -> LeakyTriple {
         // ---- Step 1: Random full alpha and beta bits ----
         let alpha_bits: Vec<bool> = (0..self.n).map(|_| self.rng.random_bool(0.5)).collect();
@@ -78,23 +79,23 @@ impl<'a> LeakyTensorPre<'a> {
             .map(|(&g, &full)| g ^ full)
             .collect();
 
-        // COT A→B: A is sender with delta_b. A's sender_keys become eval_share.key.
-        let cot_alpha_a_to_b = self.bcot.transfer_a_to_b(&gen_alpha_portions);
-        // COT B→A: B is sender with delta_a. B's sender_keys become gen_share.key.
-        let cot_alpha_b_to_a = self.bcot.transfer_b_to_a(&eval_alpha_portions);
+        // COT A→B: A is sender with delta_a. Eval's bits as choice → [x_pb]^{Δ_a}.
+        let cot_alpha_a_to_b = self.bcot.transfer_a_to_b(&eval_alpha_portions);
+        // COT B→A: B is sender with delta_b. Gen's bits as choice → [x_pa]^{Δ_b}.
+        let cot_alpha_b_to_a = self.bcot.transfer_b_to_a(&gen_alpha_portions);
 
         let gen_alpha_shares: Vec<AuthBitShare> = (0..self.n)
             .map(|i| AuthBitShare {
-                key: cot_alpha_b_to_a.sender_keys[i], // A holds B's key (B→A sender, LSB=0)
-                mac: Mac::new(*cot_alpha_a_to_b.receiver_macs[i].as_block()), // A's MAC under delta_b
+                key: cot_alpha_a_to_b.sender_keys[i], // A's sender key (A→B, LSB=0)
+                mac: Mac::new(*cot_alpha_b_to_a.receiver_macs[i].as_block()), // A's MAC under delta_b
                 value: gen_alpha_portions[i],
             })
             .collect();
 
         let eval_alpha_shares: Vec<AuthBitShare> = (0..self.n)
             .map(|i| AuthBitShare {
-                key: cot_alpha_a_to_b.sender_keys[i], // B holds A's key (A→B sender, LSB=0)
-                mac: Mac::new(*cot_alpha_b_to_a.receiver_macs[i].as_block()), // B's MAC under delta_a
+                key: cot_alpha_b_to_a.sender_keys[i], // B's sender key (B→A, LSB=0)
+                mac: Mac::new(*cot_alpha_a_to_b.receiver_macs[i].as_block()), // B's MAC under delta_a
                 value: eval_alpha_portions[i],
             })
             .collect();
@@ -108,21 +109,21 @@ impl<'a> LeakyTensorPre<'a> {
             .map(|(&g, &full)| g ^ full)
             .collect();
 
-        let cot_beta_a_to_b = self.bcot.transfer_a_to_b(&gen_beta_portions);
-        let cot_beta_b_to_a = self.bcot.transfer_b_to_a(&eval_beta_portions);
+        let cot_beta_a_to_b = self.bcot.transfer_a_to_b(&eval_beta_portions);
+        let cot_beta_b_to_a = self.bcot.transfer_b_to_a(&gen_beta_portions);
 
         let gen_beta_shares: Vec<AuthBitShare> = (0..self.m)
             .map(|i| AuthBitShare {
-                key: cot_beta_b_to_a.sender_keys[i],
-                mac: Mac::new(*cot_beta_a_to_b.receiver_macs[i].as_block()),
+                key: cot_beta_a_to_b.sender_keys[i],
+                mac: Mac::new(*cot_beta_b_to_a.receiver_macs[i].as_block()),
                 value: gen_beta_portions[i],
             })
             .collect();
 
         let eval_beta_shares: Vec<AuthBitShare> = (0..self.m)
             .map(|i| AuthBitShare {
-                key: cot_beta_a_to_b.sender_keys[i],
-                mac: Mac::new(*cot_beta_b_to_a.receiver_macs[i].as_block()),
+                key: cot_beta_b_to_a.sender_keys[i],
+                mac: Mac::new(*cot_beta_a_to_b.receiver_macs[i].as_block()),
                 value: eval_beta_portions[i],
             })
             .collect();
@@ -175,21 +176,21 @@ impl<'a> LeakyTensorPre<'a> {
             .map(|(&g, &full)| g ^ full)
             .collect();
 
-        let cot_corr_a_to_b = self.bcot.transfer_a_to_b(&gen_corr_portions);
-        let cot_corr_b_to_a = self.bcot.transfer_b_to_a(&eval_corr_portions);
+        let cot_corr_a_to_b = self.bcot.transfer_a_to_b(&eval_corr_portions);
+        let cot_corr_b_to_a = self.bcot.transfer_b_to_a(&gen_corr_portions);
 
         let gen_correlated_shares: Vec<AuthBitShare> = (0..self.n * self.m)
             .map(|k| AuthBitShare {
-                key: cot_corr_b_to_a.sender_keys[k], // A holds B's key (B→A sender, LSB=0)
-                mac: Mac::new(*cot_corr_a_to_b.receiver_macs[k].as_block()),
+                key: cot_corr_a_to_b.sender_keys[k],
+                mac: Mac::new(*cot_corr_b_to_a.receiver_macs[k].as_block()),
                 value: gen_corr_portions[k],
             })
             .collect();
 
         let eval_correlated_shares: Vec<AuthBitShare> = (0..self.n * self.m)
             .map(|k| AuthBitShare {
-                key: cot_corr_a_to_b.sender_keys[k], // B holds A's key (A→B sender, LSB=0)
-                mac: Mac::new(*cot_corr_b_to_a.receiver_macs[k].as_block()),
+                key: cot_corr_b_to_a.sender_keys[k],
+                mac: Mac::new(*cot_corr_a_to_b.receiver_macs[k].as_block()),
                 value: eval_corr_portions[k],
             })
             .collect();
@@ -207,21 +208,21 @@ impl<'a> LeakyTensorPre<'a> {
             .map(|(&g, &full)| g ^ full)
             .collect();
 
-        let cot_gamma_a_to_b = self.bcot.transfer_a_to_b(&gen_gamma_portions);
-        let cot_gamma_b_to_a = self.bcot.transfer_b_to_a(&eval_gamma_portions);
+        let cot_gamma_a_to_b = self.bcot.transfer_a_to_b(&eval_gamma_portions);
+        let cot_gamma_b_to_a = self.bcot.transfer_b_to_a(&gen_gamma_portions);
 
         let gen_gamma_shares: Vec<AuthBitShare> = (0..self.n * self.m)
             .map(|k| AuthBitShare {
-                key: cot_gamma_b_to_a.sender_keys[k],
-                mac: Mac::new(*cot_gamma_a_to_b.receiver_macs[k].as_block()),
+                key: cot_gamma_a_to_b.sender_keys[k],
+                mac: Mac::new(*cot_gamma_b_to_a.receiver_macs[k].as_block()),
                 value: gen_gamma_portions[k],
             })
             .collect();
 
         let eval_gamma_shares: Vec<AuthBitShare> = (0..self.n * self.m)
             .map(|k| AuthBitShare {
-                key: cot_gamma_a_to_b.sender_keys[k],
-                mac: Mac::new(*cot_gamma_b_to_a.receiver_macs[k].as_block()),
+                key: cot_gamma_b_to_a.sender_keys[k],
+                mac: Mac::new(*cot_gamma_a_to_b.receiver_macs[k].as_block()),
                 value: eval_gamma_portions[k],
             })
             .collect();
@@ -257,30 +258,32 @@ mod tests {
         IdealBCot::new(42, 99)
     }
 
-    /// Cross-party verify helper.
-    /// The layout is cross-party (gen_share.key = B's key, eval_share.key = A's key).
-    /// Direct gen_share.verify(&delta_b) PANICS because gen_share.key is B's key but
-    /// gen_share.mac was produced by A's key. Use this helper instead.
+    /// Cross-party MAC consistency check (Pa = garbler, Pb = evaluator).
+    ///
+    /// Each AuthBitShare is a cross-party struct mixing fields from both COT calls.
+    /// "pa_share" means the struct whose .value is Pa's committed bit (not "what Pa holds").
+    /// "pb_share" means the struct whose .value is Pb's committed bit (not "what Pb holds").
+    ///
+    /// Field ownership in the real protocol:
+    ///   pa_share.value = Pa's bit                                   (Pa commits to this)
+    ///   pa_share.mac   = K_Pa XOR Pa's_bit * delta_b               (Pa holds this MAC, under B's delta)
+    ///   pa_share.key   = K_Pb  (Pb's sender key from cot_a_to_b)   (Pb holds this key)
+    ///
+    ///   pb_share.value = Pb's bit                                   (Pb commits to this)
+    ///   pb_share.mac   = K_Pb XOR Pb's_bit * delta_a               (Pb holds this MAC, under A's delta)
+    ///   pb_share.key   = K_Pa  (Pa's sender key from cot_b_to_a)   (Pa holds this key)
     fn verify_cross_party(
-        gen_share: &AuthBitShare,
-        eval_share: &AuthBitShare,
+        pa_share: &AuthBitShare,
+        pb_share: &AuthBitShare,
         delta_a: &Delta,
         delta_b: &Delta,
     ) {
-        // r: eval_share.key (A's key) authenticates gen_share.value under delta_b
-        AuthBitShare {
-            key: eval_share.key,
-            mac: gen_share.mac,
-            value: gen_share.value,
-        }
-        .verify(delta_b);
-        // s: gen_share.key (B's key) authenticates eval_share.value under delta_a
-        AuthBitShare {
-            key: gen_share.key,
-            mac: eval_share.mac,
-            value: eval_share.value,
-        }
-        .verify(delta_a);
+        // Verify Pa's commitment: pa's bit under delta_b (verifier B's key)
+        AuthBitShare { key: pb_share.key, mac: pa_share.mac, value: pa_share.value }
+            .verify(delta_b);
+        // Verify Pb's commitment: pb's bit under delta_a (verifier A's key)
+        AuthBitShare { key: pa_share.key, mac: pb_share.mac, value: pb_share.value }
+            .verify(delta_a);
     }
 
     // ---- Task 1a tests ----
@@ -300,8 +303,7 @@ mod tests {
         let mut bcot = make_bcot();
         let mut ltp = LeakyTensorPre::new(1, 4, 4, &mut bcot);
         let t = ltp.generate(0b1010, 0b1100);
-        // Cross-party verify: gen_share.key = B's key, eval_share.key = A's key.
-        // Direct s.verify(&delta) WILL PANIC — use verify_cross_party helper.
+        // Pa's share is first arg, Pb's share is second. Use verify_cross_party — direct verify panics.
         for i in 0..4 {
             verify_cross_party(
                 &t.gen_alpha_shares[i],
@@ -389,8 +391,7 @@ mod tests {
         let mut bcot = make_bcot();
         let mut ltp = LeakyTensorPre::new(6, 4, 4, &mut bcot);
         let t = ltp.generate(0b1010, 0b1100);
-        // Cross-party verify: gen_share.key = B's key, eval_share.key = A's key.
-        // Direct s.verify(&delta) WILL PANIC — use verify_cross_party helper.
+        // Pa's share is first arg, Pb's share is second. Use verify_cross_party — direct verify panics.
         for k in 0..16 {
             verify_cross_party(
                 &t.gen_correlated_shares[k],

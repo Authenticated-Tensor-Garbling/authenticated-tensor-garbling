@@ -414,8 +414,8 @@ mod tests {
     fn test_run_preprocessing_mac_invariants() {
         use crate::sharing::AuthBitShare;
         let (gen_out, eval_out) = super::run_preprocessing(4, 4, 1, 1);
-        // Cross-party layout: gen_share.key = K_B (B's sender key), eval_share.key = K_A (A's sender key).
-        // Direct gen_share.verify(&eval.delta_b) PANICS because K_B != K_A. Use cross-party construction.
+        // gen_share.key = A's sender key; eval_share.key = B's sender key.
+        // Gen commits under delta_b; eval commits under delta_a.
         let verify_pair = |g: &AuthBitShare, e: &AuthBitShare| {
             AuthBitShare { key: e.key, mac: g.mac, value: g.value }.verify(&eval_out.delta_b);
             AuthBitShare { key: g.key, mac: e.mac, value: e.value }.verify(&gen_out.delta_a);
