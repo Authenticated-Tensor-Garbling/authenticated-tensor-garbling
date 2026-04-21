@@ -5,7 +5,6 @@ use crate::delta::Delta;
 
 use std::ops::Add;
 use rand_chacha::ChaCha12Rng;
-use rand::Rng;
 
 #[derive(Debug, Clone, Copy)]
 
@@ -15,16 +14,31 @@ pub struct InputSharing {
 }
 
 impl InputSharing {
-    pub fn bit(&self) -> bool {
-        if self.gen_share == self.eval_share {
-            false
-        } else {
-            true
-        }
+    /// Returns whether the two parties' share blocks differ.
+    ///
+    /// Under the BDOZ-style XOR sharing used here, a bit `b` is encoded as
+    /// `gen_share XOR eval_share`. This method returns `gen_share != eval_share`
+    /// — it does **not** recover the underlying input bit of a masked wire
+    /// (which would require knowing both parties' deltas). Historical name
+    /// `bit()` was ambiguous; use this instead.
+    #[inline]
+    pub fn shares_differ(&self) -> bool {
+        self.gen_share != self.eval_share
     }
 }
 
-/// AuthBitShare consisting of a bool and a (key, mac) pair
+/// One party's view of an authenticated bit.
+///
+/// In the two-party BDOZ-style IT-MAC sharing, each bit `b` is held by two
+/// parties simultaneously. This struct holds **one party's** view:
+/// - `key`: the bCOT sender's key for this position (`lsb() == 0` invariant)
+/// - `mac`: the bCOT receiver's chosen MAC, authenticating `value` under the
+///          **verifying party's** delta
+/// - `value`: the committed bit the holder claims
+///
+/// Invariant: `mac == key.auth(value, verifier_delta)` where `verifier_delta`
+/// is the other party's global correlation key. `AuthBitShare::verify(&delta)`
+/// checks this equation.
 #[derive(Debug, Clone, Default, Copy)]
 pub struct AuthBitShare {
     /// Key
@@ -101,18 +115,32 @@ impl Add<&AuthBitShare> for &AuthBitShare {
     }
 }
 
-/// Builds one `AuthBitShare` from a bit and delta, ensuring `key.lsb()==false`.
+/// Builds one `AuthBitShare` for the given `bit` under the verifying party's `delta`.
+///
+/// `delta` is the **verifying party's** global correlation key (for example,
+/// when A holds the key and B holds the MAC, `delta` is B's delta). The returned
+/// share satisfies the IT-MAC invariant `mac == key.auth(bit, delta)` and its
+/// `key` has `lsb() == 0` (enforced by `Key::new`).
 pub fn build_share(rng: &mut ChaCha12Rng, bit: bool, delta: &Delta) -> AuthBitShare {
-    let key: Key = Key::from(rng.random::<[u8; 16]>());
+    let key: Key = Key::new(Block::random(rng));
     let mac: Mac = key.auth(bit, delta);
     AuthBitShare { key, mac, value: bit }
 }
 
-/// Represents an auth bit [x] = [r]+[s] where [r] is known to gen, auth by eval and [s] is known to eval, auth by gen.
+/// Both parties' views of an authenticated bit, paired together.
+///
+/// `AuthBit` holds an `AuthBitShare` for each party (gen and eval) and is
+/// used in the ideal trusted-dealer `TensorFpre` and in tests that need to
+/// reconstruct the full two-party state. Compare with `AuthBitShare`, which
+/// holds only one party's view.
+///
+/// The additive-sharing relation is `[x] = gen_share.value XOR eval_share.value`
+/// (see `full_bit()`); MAC invariants are verified under each party's delta by
+/// `verify(&delta_a, &delta_b)`.
 #[derive(Debug, Clone)]
 pub struct AuthBit {
     /// Generator's share of the auth bit
-    pub gen_share: AuthBitShare,  
+    pub gen_share: AuthBitShare,
     /// Evaluator's share of the auth bit
     pub eval_share: AuthBitShare,
 }
@@ -138,5 +166,43 @@ impl AuthBit {
         };
         r.verify(delta_b);
         s.verify(delta_a);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::Block;
+    use rand_chacha::ChaCha12Rng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn test_build_share_key_lsb_is_zero() {
+        let mut rng = ChaCha12Rng::seed_from_u64(7);
+        let delta = Delta::random(&mut rng);
+        for bit in [false, true] {
+            let share = build_share(&mut rng, bit, &delta);
+            assert!(!share.key.as_block().lsb(),
+                "build_share must clear Key LSB (bit={})", bit);
+        }
+    }
+
+    #[test]
+    fn test_build_share_mac_invariant_holds() {
+        let mut rng = ChaCha12Rng::seed_from_u64(11);
+        let delta = Delta::random(&mut rng);
+        for bit in [false, true] {
+            let share = build_share(&mut rng, bit, &delta);
+            share.verify(&delta);   // panics on mismatch
+        }
+    }
+
+    #[test]
+    fn test_input_sharing_shares_differ() {
+        let a = Block::new([1u8; 16]);
+        let b = Block::new([1u8; 16]);
+        let c = Block::new([2u8; 16]);
+        assert_eq!(InputSharing { gen_share: a, eval_share: b }.shares_differ(), false);
+        assert_eq!(InputSharing { gen_share: a, eval_share: c }.shares_differ(), true);
     }
 }
