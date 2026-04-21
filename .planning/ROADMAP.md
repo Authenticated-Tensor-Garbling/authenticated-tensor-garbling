@@ -34,7 +34,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. `InputSharing.bit()` is either renamed or documented so its return value (XOR of shares, not the underlying input bit) is unambiguous
   4. `matrix` and `tensor_ops` have doc comments on column-major indexing and public API, with unused APIs removed or marked `pub(crate)`
   5. `cargo build` and the full existing test suite pass unchanged after cleanup
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ### Phase 2: M1 Online + Ideal Fpre + Benches Cleanup
 **Goal**: Online garbling (`auth_tensor_gen`, `auth_tensor_eval`), ideal `TensorFpre`, and benchmarks are refactored so the ideal trusted-dealer path is separated from real-protocol output structs, dead code is removed, and benchmark setup is deduplicated — with zero algorithmic changes.
@@ -46,7 +49,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. `auth_tensor_gen.rs` / `auth_tensor_eval.rs` have no dead code, magic constants are named or commented, and `auth_gen.rs` / `auth_eval.rs` are removed if unused
   4. `benches/benchmarks.rs` has shared setup helpers (no duplicated scaffolding) and each benchmark identifies the paper protocol it measures
   5. `cargo build`, full test suite, and `cargo bench` all run green after cleanup
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ### Phase 3: M2 Generalized Tensor Macro (Construction 1)
 **Goal**: The Generalized Tensor Macro from paper Construction 1 exists as a reusable Rust primitive: garbler builds a GGM tree of depth n, produces ciphertexts G, and outputs `Z_garbler`; evaluator reproduces the untraversed subtree, recovers leaves, and outputs `Z_evaluator` such that `Z_garbler XOR Z_evaluator = a ⊗ T`.
@@ -57,7 +63,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   2. `tensor_evaluator(n, m, G, itmac{A}{Δ}^eval, T^eval)` reproduces the untraversed subtree from `A_i ⊕ a_i·Δ`, recovers `X_{a,k}` using `G`, and returns `Z_evaluator`
   3. `Z_garbler XOR Z_evaluator == a ⊗ T` holds across a battery of `(n, m, T)` test vectors including edge cases (n=1, small m, large m)
   4. Macro primitive is module-scoped with clear input/output types and no dependency on LeakyTriple state
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ### Phase 4: M2 Pi_LeakyTensor + F_eq (Construction 2)
 **Goal**: `Pi_LeakyTensor` is implemented per paper Construction 2: consume correlated randomness from `IdealBCot`, run two tensor-macro calls (A and B as garblers under their own Δ), XOR results, execute masked reveal, verify consistency via in-process `F_eq`, and output a leaky triple whose shape is exactly `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})` — no gamma, no wire labels.
@@ -69,7 +78,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. In-process `F_eq` receives `L_1 = S_1 ⊕ D·Δ_A` and `L_2 = S_2 ⊕ D·Δ_B`; matching inputs pass, mismatched inputs abort — verified by test
   4. `LeakyTriple` struct contains exactly `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})`; gamma bits and wire labels are removed
   5. Tests verify paper invariants: IT-MAC equation `mac = key XOR bit·Δ` holds on every share, and `XOR(gen, eval)` of `Z` equals tensor product of `XOR(gen, eval)` of `x` and `y`
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ### Phase 5: M2 Pi_aTensor Correct Combining (Construction 3)
 **Goal**: `Pi_aTensor` combines B leaky triples into one authenticated tensor triple using the paper's two-to-one procedure (keep `x = x'`, `y = y'`, reveal `d = y' ⊕ y''`, compute `Z = Z' ⊕ Z'' ⊕ x'' ⊗ d`) with MAC verification on `d`, and the bucket size formula uses the correct `ℓ` (number of output triples).
@@ -80,7 +92,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   2. Bucket size computation uses `B = floor(SSP / log2(ℓ)) + 1` with `ℓ` = number of output authenticated tensor triples (not `n·m`)
   3. Iterative combining folds B leaky triples one at a time into a single authenticated triple
   4. Test verifies `Z_combined = Z' ⊕ Z'' ⊕ x'' ⊗ d` on two concrete leaky triples and confirms MAC on `d` rejects tampered values
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ### Phase 6: M2 Pi_aTensor' Permutation Bucketing (Construction 4) + Benches
 **Goal**: `Pi_aTensor'` is implemented per paper Construction 4 with uniform row-permutation bucketing and the improved bucket size `B = 1 + ceil(SSP / log2(n·ℓ))`; the end-to-end preprocessing pipeline produces a valid authenticated tensor triple, and benchmarks run after the full restructure.
@@ -92,7 +107,10 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. Bucket size is `B = 1 + ceil(SSP / log2(n·ℓ))` and matches the paper's Construction 4 formula
   4. End-to-end test: output authenticated tensor triple satisfies `itmac{Z}{Δ}` with `Z = x ⊗ y` where `x, y, Z` are the XOR of both parties' shares
   5. `cargo bench` runs the preprocessing benchmark successfully after the restructure is complete
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
+  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
+  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
 
 ## Progress
 
@@ -101,7 +119,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. M1 Primitives & Sharing Cleanup | 0/TBD | Not started | - |
+| 1. M1 Primitives & Sharing Cleanup | 0/3 | Not started | - |
 | 2. M1 Online + Ideal Fpre + Benches Cleanup | 0/TBD | Not started | - |
 | 3. M2 Generalized Tensor Macro | 0/TBD | Not started | - |
 | 4. M2 Pi_LeakyTensor + F_eq | 0/TBD | Not started | - |
