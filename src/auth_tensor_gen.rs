@@ -5,7 +5,7 @@ use crate::{
     },
     delta::Delta,
     sharing::AuthBitShare,
-    auth_tensor_fpre::TensorFpreGen,
+    preprocessing::TensorFpreGen,
     block::Block,
     matrix::{BlockMatrix, MatrixViewRef},
     tensor_ops::{gen_populate_seeds_mem_optimized, gen_unary_outer_product},
@@ -26,7 +26,6 @@ pub struct AuthTensorGen {
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -45,7 +44,6 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
-            gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
         }
@@ -63,7 +61,6 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
-            gamma_auth_bit_shares: fpre_gen.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
         }
@@ -185,12 +182,6 @@ impl AuthTensorGen {
                     *self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
                 };
 
-                let _gamma_share = if self.gamma_auth_bit_shares[j * self.n + i].bit() {
-                    self.delta_a.as_block() ^ self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
-                } else {
-                    *self.gamma_auth_bit_shares[j * self.n + i].key.as_block()
-                };
-
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
                     correlated_share;
@@ -210,10 +201,10 @@ mod tests {
         let m = 3;
 
         let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_with_input_values(0b1101, 0b110);
+        fpre.generate_for_ideal_trusted_dealer(0b1101, 0b110);
 
         let (fpre_gen, _) = fpre.into_gen_eval();
-        
+
         assert_eq!(fpre_gen.alpha_labels.len(), n);
         assert_eq!(fpre_gen.beta_labels.len(), m);
 
@@ -221,8 +212,7 @@ mod tests {
         assert_eq!(fpre_gen.beta_auth_bit_shares.len(), m);
 
         assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
-        assert_eq!(fpre_gen.gamma_auth_bit_shares.len(), n * m);
-        
+
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
 
         assert_eq!(gar.x_labels.len(), n);
@@ -232,7 +222,6 @@ mod tests {
         assert_eq!(gar.beta_auth_bit_shares.len(), m);
 
         assert_eq!(gar.correlated_auth_bit_shares.len(), n * m);
-        assert_eq!(gar.gamma_auth_bit_shares.len(), n * m);
 
         let (_chunk_levels, _chunk_cts) = gar.garble_first_half();
 
