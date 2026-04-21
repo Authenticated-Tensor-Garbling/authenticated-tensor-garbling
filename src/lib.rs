@@ -20,6 +20,7 @@ pub mod auth_tensor_eval;
 pub mod bcot;
 pub mod leaky_tensor_pre;
 pub mod auth_tensor_pre;
+pub mod preprocessing;
 
 use crate::block::Block;
 
