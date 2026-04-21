@@ -1,72 +1,85 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
-status: milestone_complete
-stopped_at: Phase 01 UAT complete — 5/5 tests passed, milestone complete
-last_updated: "2026-04-20T00:00:00.000Z"
-last_activity: 2026-04-20
+milestone_name: preprocessing-fix
+status: ready_to_plan
+stopped_at: roadmap created (2026-04-21)
+last_updated: "2026-04-21"
+last_activity: 2026-04-21
 progress:
-  total_phases: 1
-  completed_phases: 1
+  total_phases: 6
+  completed_phases: 0
   total_plans: 0
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # Project State
 
-**Project:** authenticated-tensor-garbling
-**Status:** Milestone complete
-**Last Activity:** 2026-04-20
+## Project Reference
 
-## Active Phase
+See: .planning/PROJECT.md (updated 2026-04-21)
 
-Phase 1: Uncompressed Preprocessing Protocol
+**Core value:** Correct paper-faithful implementation of Pi_LeakyTensor and Pi_aTensor — both the protocol mechanics (GGM tree macro, F_eq, correct combining) and the security properties (triple structure, combining correctness, bucket size formula).
+**Current focus:** Phase 1 — M1 Primitives & Sharing Cleanup
 
 ## Current Position
 
-Phase: 01
+Phase: 1 of 6 (M1 Primitives & Sharing Cleanup)
 Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-21 — Roadmap created; M1+M2 split across 6 phases with full coverage of 34 v1 requirements
 
-- Phase: 1 of 1
-- Plans: 4 planned, 1 executed
-- Status: In Progress
-
-## Summary
-
-Rust implementation of authenticated tensor garbling for secure two-party computation. Currently implements the online phase (garbling/evaluation) with an ideal-functionality placeholder for preprocessing. Goal: replace the placeholder with a real KRRW-style uncompressed preprocessing protocol.
-
-## Plans (Wave Order)
-
-| Wave | Plan | Status |
-|------|------|--------|
-| 1 | 01-PLAN-cot — IdealBCot (boolean correlated OT) | ✓ complete |
-| 2 | 01-PLAN-leaky-tensor — Pi_LeakyTensor + Pi_aTensor bucketing | ✓ complete |
-| 3 | 01-PLAN-fpre-replace — run_preprocessing entry point | ✓ complete |
-| 4 | 01-PLAN-benchmarks — bench_preprocessing benchmark | ✓ complete |
-
-## Decisions Made
-
-1. Use in-process ideal bCOT functionality (no networking), matching TensorFpre trusted-dealer pattern
-2. Key LSB=0 enforced via `set_lsb(false)` immediately after random key generation
-3. `output_to_auth_bit_shares_b_holds_key` intentionally omitted — casting receiver_macs to Key violates Key LSB=0 invariant (I-05 fix)
-4. When B needs to hold the key for a share, use a separate `transfer_b_to_a` call where B is sender
-- LeakyTensorPre borrows &mut IdealBCot (not owns) — shared delta_a/delta_b invariant required for Pi_aTensor XOR-combination MAC correctness
-- gen is a reserved keyword in Rust 2024 edition — parameter renamed from gen to gen_share in verify_cross_party helpers
-- Two COT calls per bit batch: transfer_a_to_b gives eval_share.key (A's key); transfer_b_to_a gives gen_share.key (B's key) — matches gen_auth_bit canonical layout
-- gen renamed to gen_out in new tests — gen is a reserved keyword in Rust 2024 edition
-- run_preprocessing asserts count=1 — Phase 1 single-triple only; Vec return requires separate design
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
-| Phase | Plan | Duration | Tasks | Files |
-|-------|------|----------|-------|-------|
-| 01 | cot | 709s | 2 | 2 |
-| Phase 01 Pleaky-tensor | 570 | 3 tasks | 3 files |
-| Phase 01 Pfpre-replace | 5min | 1 tasks | 1 files |
+**Velocity:**
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: —
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: —
+- Trend: —
+
+*Updated after each plan completion*
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- Initial: Implement Pi_LeakyTensor via GGM tree macro (paper spec; current direct-AND approach is not the protocol)
+- Initial: In-process F_eq (ideal), matching IdealBCot pattern; no networking needed
+- Initial: Pi_aTensor' (permutation bucketing) over Pi_aTensor — better bucket size log(nℓ) vs log(ℓ)
+- Initial: Keep TensorFpreGen/Eval interface — online phase already correct; minimize scope
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- Prior phase 1 implementation (pre-April-10 rewrite) is known-broken per 8 paper-review bugs — full rewrite planned for Phases 3-6, preserved until then behind the existing ideal TensorFpre path
+
+## Deferred Items
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Protocol | Real OT (Ferret/IKNP) replacing ideal F_bCOT | v2 | init |
+| Infra | Network communication layer | v2 | init |
+| Proof | Malicious security simulation proof | v2 | init |
 
 ## Session Continuity
 
-Last session: 2026-04-20
-Stopped at: Phase 01 UAT complete — 5/5 tests passed, milestone v1.0 complete
+Last session: 2026-04-21
+Stopped at: Roadmap created — 6 phases, 34/34 requirements mapped, ready for `/gsd-plan-phase 1`
 Resume file: None

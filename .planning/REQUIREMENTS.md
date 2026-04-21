@@ -88,8 +88,41 @@ Two milestones. Milestone 1 (this document) covers M1 + M2 together, split into 
 
 ## Traceability
 
-| Req | Phase |
-|-----|-------|
-| CLEAN-01 to CLEAN-12 | Phase 1 (M1 cleanup) |
-| PROTO-01 to PROTO-15 | Phase 2–5 (M2 implementation) |
-| TEST-01 to TEST-07 | Distributed across M2 phases |
+| Req      | Phase   | Status  |
+|----------|---------|---------|
+| CLEAN-01 | Phase 1 | Pending |
+| CLEAN-02 | Phase 1 | Pending |
+| CLEAN-03 | Phase 1 | Pending |
+| CLEAN-04 | Phase 1 | Pending |
+| CLEAN-05 | Phase 1 | Pending |
+| CLEAN-06 | Phase 1 | Pending |
+| CLEAN-07 | Phase 2 | Pending |
+| CLEAN-08 | Phase 2 | Pending |
+| CLEAN-09 | Phase 2 | Pending |
+| CLEAN-10 | Phase 2 | Pending |
+| CLEAN-11 | Phase 2 | Pending |
+| CLEAN-12 | Phase 2 | Pending |
+| PROTO-01 | Phase 3 | Pending |
+| PROTO-02 | Phase 3 | Pending |
+| PROTO-03 | Phase 3 | Pending |
+| PROTO-04 | Phase 4 | Pending |
+| PROTO-05 | Phase 4 | Pending |
+| PROTO-06 | Phase 4 | Pending |
+| PROTO-07 | Phase 4 | Pending |
+| PROTO-08 | Phase 4 | Pending |
+| PROTO-09 | Phase 4 | Pending |
+| PROTO-10 | Phase 5 | Pending |
+| PROTO-11 | Phase 5 | Pending |
+| PROTO-12 | Phase 5 | Pending |
+| PROTO-13 | Phase 6 | Pending |
+| PROTO-14 | Phase 6 | Pending |
+| PROTO-15 | Phase 6 | Pending |
+| TEST-01  | Phase 3 | Pending |
+| TEST-02  | Phase 4 | Pending |
+| TEST-03  | Phase 4 | Pending |
+| TEST-04  | Phase 4 | Pending |
+| TEST-05  | Phase 5 | Pending |
+| TEST-06  | Phase 6 | Pending |
+| TEST-07  | Phase 6 | Pending |
+
+**Coverage:** 34 / 34 v1 requirements mapped (100%)
