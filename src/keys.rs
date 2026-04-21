@@ -12,6 +12,20 @@ use rand::Rng;
 pub struct Key(Block);
 
 impl Key {
+    /// Safe constructor that enforces the `Key.lsb() == 0` invariant at construction time.
+    ///
+    /// The LSB of a `Key` must be zero so the prover can store the authenticated bit in
+    /// `LSB(MAC)` (see `auth`). This constructor clears the LSB before wrapping the block.
+    ///
+    /// Prefer `Key::new` over `Key::from(block)` whenever the caller has not already
+    /// cleared the LSB. `From<Block>` is retained as a zero-cost cast for callers that
+    /// have already enforced the invariant themselves (for example via `Key::adjust`).
+    #[inline]
+    pub fn new(mut block: Block) -> Self {
+        block.set_lsb(false);
+        Self(block)
+    }
+
     /// Returns the pointer bit.
     #[inline]
     pub fn pointer(&self) -> bool {
@@ -85,7 +99,7 @@ impl Key {
 
     #[inline]
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        Self(Block::random(rng))
+        Self::new(Block::random(rng))
     }
 }
 
@@ -206,5 +220,47 @@ impl BitXor<&Key> for &Key {
 impl Display for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::Block;
+    use rand_chacha::ChaCha12Rng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn test_key_new_clears_lsb_when_set() {
+        let b = Block::new([0xFF; 16]);
+        assert!(b.lsb());
+        let k = Key::new(b);
+        assert!(!k.as_block().lsb(), "Key::new must clear LSB");
+    }
+
+    #[test]
+    fn test_key_new_idempotent_when_already_cleared() {
+        let mut b = Block::new([0xFF; 16]);
+        b.set_lsb(false);
+        let k = Key::new(b);
+        assert!(!k.as_block().lsb());
+    }
+
+    #[test]
+    fn test_key_random_lsb_is_zero() {
+        let mut rng = ChaCha12Rng::seed_from_u64(0xC0FFEE);
+        for _ in 0..64 {
+            let k = Key::random(&mut rng);
+            assert!(!k.as_block().lsb(), "Key::random must produce lsb==0");
+        }
+    }
+
+    #[test]
+    fn test_key_from_block_preserves_lsb_for_backward_compat() {
+        // From<Block> is documented as zero-cost cast; it must NOT clear LSB.
+        let mut b = Block::new([0xFF; 16]);
+        b.set_lsb(true);
+        let k = Key::from(b);
+        assert!(k.as_block().lsb(), "Key::from<Block> must not clear LSB (zero-cost cast)");
     }
 }
