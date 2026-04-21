@@ -1,7 +1,7 @@
 use crate::{aes::FixedKeyAes, block::Block, delta::Delta, matrix::BlockMatrix};
 use crate::sharing::AuthBitShare;
 use crate::aes::FIXED_KEY_AES;
-use crate::auth_tensor_fpre::TensorFpreEval;
+use crate::preprocessing::TensorFpreEval;
 use crate::matrix::MatrixViewRef;
 use crate::matrix::MatrixViewMut;
 
@@ -20,7 +20,6 @@ pub struct AuthTensorEval {
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -39,7 +38,6 @@ impl AuthTensorEval {
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
-            gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
         }
@@ -57,7 +55,6 @@ impl AuthTensorEval {
             alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,
-            gamma_auth_bit_shares: fpre_eval.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
         }

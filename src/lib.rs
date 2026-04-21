@@ -260,7 +260,7 @@ mod tests {
         let input_y = 0b110;
 
         let mut fpre = TensorFpre::new_with_delta(54, n, m, 8, delta_a, delta_b);
-        fpre.generate_with_input_values(input_x, input_y);
+        fpre.generate_for_ideal_trusted_dealer(input_x, input_y);
 
         let (clear_x, clear_y, alpha, beta) = fpre.get_clear_values();
         let masked_x = clear_x ^ alpha;
