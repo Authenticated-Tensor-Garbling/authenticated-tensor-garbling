@@ -232,11 +232,11 @@ impl TensorFpre {
         let mut alpha: usize = 0;
         let mut beta: usize = 0;
         for i in 0..self.n {
-            x |= (self.x_labels[i].bit() as usize) << i;
+            x |= (self.x_labels[i].shares_differ() as usize) << i;
             alpha |= (self.alpha_auth_bits[i].full_bit() as usize) << i;
         }
         for j in 0..self.m {
-            y |= (self.y_labels[j].bit() as usize) << j;
+            y |= (self.y_labels[j].shares_differ() as usize) << j;
             beta |= (self.beta_auth_bits[j].full_bit() as usize) << j;
         }
 

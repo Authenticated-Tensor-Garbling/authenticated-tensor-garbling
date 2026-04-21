@@ -106,7 +106,7 @@ impl SemiHonestTensorPre {
 
         let mut masked_x = 0;
         for i in 0..self.n {
-            masked_x |= (self.x_labels[i].bit() as usize ^ self.alpha_labels[i].bit() as usize) << i;
+            masked_x |= (self.x_labels[i].shares_differ() as usize ^ self.alpha_labels[i].shares_differ() as usize) << i;
 
             self.x_labels[i] = InputSharing {
                 gen_share: self.x_labels[i].gen_share ^ self.alpha_labels[i].eval_share,
@@ -116,7 +116,7 @@ impl SemiHonestTensorPre {
 
         let mut masked_y = 0;
         for j in 0..self.m {
-            masked_y |= (self.y_labels[j].bit() as usize ^ self.beta_labels[j].bit() as usize) << j;
+            masked_y |= (self.y_labels[j].shares_differ() as usize ^ self.beta_labels[j].shares_differ() as usize) << j;
 
             self.y_labels[j] = InputSharing {
                 gen_share: self.y_labels[j].gen_share ^ self.beta_labels[j].eval_share,
