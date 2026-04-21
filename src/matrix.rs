@@ -16,6 +16,14 @@ impl MatrixElement for crate::keys::Key {}
 impl MatrixElement for crate::block::Block {}
 
 
+/// A dense two-dimensional matrix over a `MatrixElement` (currently `Key` or `Block`).
+///
+/// **Storage is column-major**: element `(i, j)` (row `i`, column `j`) is stored at
+/// linear index `j * rows + i` in the underlying `Vec<T>`. The same convention is
+/// used by `MatrixViewRef` / `MatrixViewMut` and by every consumer of the auth-bit
+/// `n*m` vectors in the protocol (for example `correlated_auth_bit_shares[j*n+i]`
+/// in `auth_tensor_gen` / `auth_tensor_eval`). Do not change the convention without
+/// auditing every consumer.
 #[derive(Debug, Clone)]
 pub struct TypedMatrix<T: MatrixElement> {
     rows: usize,
@@ -28,7 +36,7 @@ pub type KeyMatrix = TypedMatrix<Key>;
 pub type BlockMatrix = TypedMatrix<Block>;
 
 
-pub struct MatrixViewRef<'a, T: MatrixElement> {
+pub(crate) struct MatrixViewRef<'a, T: MatrixElement> {
     data: &'a [T],          // The actual data (immutable reference)
     total_rows: usize,      // Total rows in the original matrix
     total_cols: usize,      // Total columns in the original matrix
@@ -39,7 +47,7 @@ pub struct MatrixViewRef<'a, T: MatrixElement> {
 }
 
 
-pub struct MatrixViewMut<'a, T: MatrixElement> {
+pub(crate) struct MatrixViewMut<'a, T: MatrixElement> {
     data: &'a mut [T],      // The actual data (mutable reference)
     total_rows: usize,      // Total rows in the original matrix
     total_cols: usize,      // Total columns in the original matrix
@@ -51,6 +59,9 @@ pub struct MatrixViewMut<'a, T: MatrixElement> {
 
 
 impl<T: MatrixElement> TypedMatrix<T> {
+    /// Converts a 2-D `(row, column)` pair to a linear index in the underlying
+    /// column-major storage: `index = j * rows + i` where `i` is the row and
+    /// `j` is the column.
     #[inline]
     fn flat_index(&self, i: usize, j: usize) -> usize {
         j*self.rows + i

@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// Generates seeds for tensor operations using memory-optimized approach
-pub fn gen_populate_seeds_mem_optimized(
+pub(crate) fn gen_populate_seeds_mem_optimized(
     x: &MatrixViewRef<Block>,
     cipher: &FixedKeyAes,
     delta: Delta,
@@ -85,7 +85,7 @@ pub fn gen_populate_seeds_mem_optimized(
 }
 
 /// Generates unary outer product using seeds
-pub fn gen_unary_outer_product(
+pub(crate) fn gen_unary_outer_product(
     seeds: &Vec<Block>,
     y: &MatrixViewRef<Block>,
     out: &mut MatrixViewMut<Block>,
