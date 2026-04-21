@@ -49,10 +49,11 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. `auth_tensor_gen.rs` / `auth_tensor_eval.rs` have no dead code, magic constants are named or commented, and `auth_gen.rs` / `auth_eval.rs` are removed if unused
   4. `benches/benchmarks.rs` has shared setup helpers (no duplicated scaffolding) and each benchmark identifies the paper protocol it measures
   5. `cargo build`, full test suite, and `cargo bench` all run green after cleanup
-**Plans**: 3 plans
-  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
-  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
-  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
+**Plans**: 4 plans
+  - [ ] 02-01-PLAN.md — Wave 0 prerequisites: baseline test snapshot, empty src/preprocessing.rs skeleton + lib.rs module decl; CLEAN-11 trivially satisfied (auth_gen.rs / auth_eval.rs confirmed absent)
+  - [ ] 02-02-PLAN.md — Module migration + generate rename + gamma cascade end-to-end: move TensorFpreGen/Eval + run_preprocessing to preprocessing.rs; rename generate_with_input_values -> generate_for_ideal_trusted_dealer; remove gamma_* fields and populators across TensorFpre, TensorFpreGen/Eval, AuthTensorGen/Eval, combine_leaky_triples; add /// field docs (CLEAN-07, CLEAN-08, CLEAN-09, CLEAN-10 partial)
+  - [ ] 02-03-PLAN.md — Benchmark deduplication + rename follow-through + paper-protocol header comments: collapse bench_full_protocol_garbling (and _with_networking where structurally identical) into a single loop over [1, 2, 4, 6, 8] preserving Criterion BenchmarkIds; redirect run_preprocessing import (CLEAN-12)
+  - [ ] 02-04-PLAN.md — auth_tensor_gen/eval doc + comment audit (runs parallel with 02-03): /// doc on garble_final + evaluate_final; remove 'awful return type' comment; add GGM tweak domain-separation comment (CLEAN-10 completion)
 
 ### Phase 3: M2 Generalized Tensor Macro (Construction 1)
 **Goal**: The Generalized Tensor Macro from paper Construction 1 exists as a reusable Rust primitive: garbler builds a GGM tree of depth n, produces ciphertexts G, and outputs `Z_garbler`; evaluator reproduces the untraversed subtree, recovers leaves, and outputs `Z_evaluator` such that `Z_garbler XOR Z_evaluator = a ⊗ T`.
