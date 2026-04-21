@@ -65,9 +65,7 @@ impl IdealBCot {
         let mut receiver_macs = Vec::with_capacity(choices.len());
 
         for &b in choices {
-            let mut k0_block = Block::random(&mut self.rng);
-            k0_block.set_lsb(false);
-            let k0 = Key::from(k0_block);
+            let k0 = Key::new(Block::random(&mut self.rng));
             let mac = k0.auth(b, &self.delta_b);
             sender_keys.push(k0);
             receiver_macs.push(mac);
@@ -91,9 +89,7 @@ impl IdealBCot {
         let mut receiver_macs = Vec::with_capacity(choices.len());
 
         for &b in choices {
-            let mut k0_block = Block::random(&mut self.rng);
-            k0_block.set_lsb(false);
-            let k0 = Key::from(k0_block);
+            let k0 = Key::new(Block::random(&mut self.rng));
             let mac = k0.auth(b, &self.delta_a);
             sender_keys.push(k0);
             receiver_macs.push(mac);
