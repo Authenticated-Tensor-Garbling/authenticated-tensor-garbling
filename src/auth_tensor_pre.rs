@@ -1,5 +1,5 @@
 use crate::{
-    auth_tensor_fpre::{TensorFpreGen, TensorFpreEval},
+    preprocessing::{TensorFpreGen, TensorFpreEval},
     leaky_tensor_pre::LeakyTriple,
 };
 
@@ -29,7 +29,7 @@ pub fn bucket_size_for(n: usize, m: usize) -> usize {
 ///
 /// Algorithm (XOR combination):
 ///   Keep first triple's alpha/beta/labels.
-///   XOR-combine all B triples' correlated and gamma shares.
+///   XOR-combine all B triples' correlated shares.
 ///   The XOR of B independent AuthBitShares with the same delta preserves the MAC invariant.
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
@@ -67,19 +67,15 @@ pub fn combine_leaky_triples(
         );
     }
 
-    // XOR-combine correlated and gamma shares across all B triples
+    // XOR-combine correlated shares across all B triples
     let mut combined_gen_corr = triples[0].gen_correlated_shares.clone();
     let mut combined_eval_corr = triples[0].eval_correlated_shares.clone();
-    let mut combined_gen_gamma = triples[0].gen_gamma_shares.clone();
-    let mut combined_eval_gamma = triples[0].eval_gamma_shares.clone();
 
     for t in triples[1..].iter() {
         for k in 0..(n * m) {
             // column-major: index k = j*n+i
             combined_gen_corr[k] = combined_gen_corr[k] + t.gen_correlated_shares[k];
             combined_eval_corr[k] = combined_eval_corr[k] + t.eval_correlated_shares[k];
-            combined_gen_gamma[k] = combined_gen_gamma[k] + t.gen_gamma_shares[k];
-            combined_eval_gamma[k] = combined_eval_gamma[k] + t.eval_gamma_shares[k];
         }
     }
 
@@ -96,7 +92,6 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: t0.gen_alpha_shares.clone(),
             beta_auth_bit_shares: t0.gen_beta_shares.clone(),
             correlated_auth_bit_shares: combined_gen_corr,
-            gamma_auth_bit_shares: combined_gen_gamma,
         },
         TensorFpreEval {
             n,
@@ -108,7 +103,6 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: t0.eval_alpha_shares.clone(),
             beta_auth_bit_shares: t0.eval_beta_shares.clone(),
             correlated_auth_bit_shares: combined_eval_corr,
-            gamma_auth_bit_shares: combined_eval_gamma,
         },
     )
 }
@@ -173,7 +167,7 @@ mod tests {
         let (gen_out, eval_out) = combine_leaky_triples(triples, b, n, m, 1, 42);
         assert_eq!(gen_out.alpha_auth_bit_shares.len(), n);
         assert_eq!(gen_out.correlated_auth_bit_shares.len(), n * m);
-        assert_eq!(eval_out.gamma_auth_bit_shares.len(), n * m);
+        assert_eq!(eval_out.correlated_auth_bit_shares.len(), n * m);
     }
 
     #[test]
