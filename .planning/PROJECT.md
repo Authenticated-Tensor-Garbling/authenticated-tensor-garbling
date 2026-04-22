@@ -59,6 +59,14 @@ Tests like `test_correlated_bit_correctness` verify that `gen_corr XOR eval_corr
 - ✓ PROTO-03: `Z_garbler XOR Z_evaluator == a ⊗ T` verified by 10-test TDD battery (9 (n,m) tuples + fixed-seed regression)
 - ✓ TEST-01: Paper-invariant test battery in `tensor_macro::tests` — 10 passed / 0 failed
 
+### Validated
+
+**Phase 5 — Pi_aTensor Correct Combining (2026-04-22):**
+- ✓ PROTO-10: `two_to_one_combine` helper implements paper Construction 3 algebra (d assembly, MAC verify, x=x'⊕x'', Z=Z'⊕Z''⊕x''⊗d, y preserved from prime)
+- ✓ PROTO-11: `combine_leaky_triples` is a thin iterative fold over `two_to_one_combine`; output sources all share vectors from acc (fixes silent x-bug)
+- ✓ PROTO-12: `bucket_size_for(ell)` uses paper Theorem 1 formula with `ell<=1` SSP=40 fallback guard; all call sites updated
+- ✓ TEST-05: Three-test battery — happy-path product invariant (2 triples), tamper-path `#[should_panic]`, full B=40 bucket fold; 70/70 tests passing
+
 ### Active
 
 **Protocol Correctness:**
@@ -76,7 +84,6 @@ Tests like `test_correlated_bit_correctness` verify that `gen_corr XOR eval_corr
 - [ ] TEST-02: Tests verify Pi_aTensor combining: Z_combined = Z' ⊕ Z'' ⊕ x'' ⊗ d
 - [ ] TEST-03: Tests verify F_eq abort behavior
 - [ ] TEST-04: Tests verify GGM tree correctness (garbler/evaluator macro outputs XOR to x ⊗ T)
-- [ ] TEST-05: Benchmarks preserved and working after restructure
 
 ### Out of Scope
 
@@ -112,4 +119,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-22 after Phase 3 completion (M2 Generalized Tensor Macro — Construction 1)*
+*Last updated: 2026-04-22 after Phase 5 completion (Pi_aTensor Correct Combining — Construction 3)*
