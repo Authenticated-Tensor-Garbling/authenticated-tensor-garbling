@@ -310,6 +310,12 @@ where T: BitXor<Output = T> + Copy {
 impl<T: MatrixElement> BitXorAssign for TypedMatrix<T>
 where T: BitXorAssign + Copy {
     fn bitxor_assign(&mut self, rhs: Self) {
+        assert_eq!(
+            (self.rows, self.cols),
+            (rhs.rows, rhs.cols),
+            "BitXorAssign: matrix dimensions must match ({} x {} vs {} x {})",
+            self.rows, self.cols, rhs.rows, rhs.cols
+        );
         self.elements.iter_mut().zip(rhs.elements.iter()).for_each(|(a, b)| {
             *a ^= *b;
         });
