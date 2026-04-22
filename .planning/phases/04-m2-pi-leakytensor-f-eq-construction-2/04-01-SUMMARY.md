@@ -143,3 +143,9 @@ No blockers. All structural preconditions for Plan 2 are in place.
 ---
 *Phase: 04-m2-pi-leakytensor-f-eq-construction-2*
 *Completed: 2026-04-21*
+
+## Self-Check: PASSED
+
+- All 8 source files exist
+- All 3 task commits confirmed (45c15ab, 62bb8fb, 14b6c6b)
+- SUMMARY.md exists
