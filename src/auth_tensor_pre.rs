@@ -385,4 +385,26 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    #[should_panic(expected = "MAC mismatch in share")]
+    fn test_two_to_one_combine_tampered_d_panics() {
+        // TEST-05 tamper path: flip one y'' value bit on the eval side without touching
+        // the MAC. The assembled d[0] share (d = y' XOR y'') now has inconsistent
+        // (value, mac, key) and verify_cross_party inside two_to_one_combine Step B
+        // detects the mismatch and panics. Matches the paper's "publicly reveal with
+        // appropriate MACs" abort semantics.
+        let n = 2;
+        let m = 2;
+        let triples = make_triples(n, m, 2);
+        let t0 = triples[0].clone();
+        let mut t1 = triples[1].clone();
+
+        // Tamper: flip the value bit of eval_y_shares[0] without updating the MAC.
+        // The assembled d share for j=0 will fail verify_cross_party.
+        t1.eval_y_shares[0].value = !t1.eval_y_shares[0].value;
+
+        // Must panic with "MAC mismatch in share" inside two_to_one_combine Step B.
+        let _ = two_to_one_combine(t0, &t1);
+    }
 }
