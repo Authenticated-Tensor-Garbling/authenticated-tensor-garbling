@@ -282,25 +282,32 @@ impl<'a> LeakyTensorPre<'a> {
 
         // itmac{Z}{Δ} = itmac{R}{Δ} ⊕ itmac{D}{Δ}.
         // D is public ⇒ each party locally constructs a "trivial" share of D.
-        // Convention (RESEARCH.md Pattern 4 / A1): gen owns the bit value with
-        // ZERO key/mac; eval's mac absorbs the Δ_B mass so that the cross-party
-        // verify_cross_party predicate still holds after Add-combining with R.
-        // If TEST-02 (Plan 3) fails, revisit this convention — the swap is local
-        // to these two lines and does not ripple further.
+        //
+        // Corrected A1 convention (TEST-02 gate, Plan 3 fix):
+        //   gen_d: holds the bit value AND the Δ_B MAC mass (so verify_cross_party
+        //          step 1 sees: mac = gen_r.mac XOR d*Δ_B = K_B[0] XOR (r_a XOR d)*Δ_B ✓)
+        //   eval_d: zero key, zero mac, zero value (eval holds no Δ mass for D)
+        //
+        // Trace: verify_cross_party(gen_z, eval_z, Δ_A, Δ_B) step 1:
+        //   {key=eval_r.key, mac=gen_r.mac XOR d*Δ_B, value=r_a XOR d}.verify(Δ_B)
+        //   = K_B[0] XOR (r_a XOR d)*Δ_B == auth(r_a XOR d, Δ_B) ✓
+        // step 2:
+        //   {key=gen_r.key, mac=eval_r.mac, value=r_b}.verify(Δ_A)
+        //   = K_A[0] XOR r_b*Δ_A == auth(r_b, Δ_A) ✓
         let gen_z_shares: Vec<AuthBitShare> = (0..(self.n * self.m)).map(|k| {
+            let mac_block = if d_bits[k] { delta_b_block } else { Block::ZERO };
             let gen_d = AuthBitShare {
                 key:   Key::default(),
-                mac:   Mac::default(),
+                mac:   Mac::new(mac_block),
                 value: d_bits[k],
             };
             gen_r_shares[k] + gen_d
         }).collect();
 
         let eval_z_shares: Vec<AuthBitShare> = (0..(self.n * self.m)).map(|k| {
-            let mac_block = if d_bits[k] { delta_b_block } else { Block::ZERO };
             let eval_d = AuthBitShare {
                 key:   Key::default(),
-                mac:   Mac::new(mac_block),
+                mac:   Mac::default(),
                 value: false,
             };
             eval_r_shares[k] + eval_d
