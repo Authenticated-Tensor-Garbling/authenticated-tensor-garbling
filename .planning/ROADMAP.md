@@ -65,9 +65,9 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. `Z_garbler XOR Z_evaluator == a ⊗ T` holds across a battery of `(n, m, T)` test vectors including edge cases (n=1, small m, large m)
   4. Macro primitive is module-scoped with clear input/output types and no dependency on LeakyTriple state
 **Plans**: 3 plans
-  - [ ] 03-01-PLAN.md — Wave 0: capture test baseline; add BlockMatrix::elements_slice; generalize gen_populate_seeds_mem_optimized to &[Block]; hoist eval_populate_seeds_mem_optimized and eval_unary_outer_product into tensor_ops.rs; rewire tensor_gen/tensor_eval/auth_tensor_eval; create src/tensor_macro.rs skeleton + register in lib.rs (PROTO-01, PROTO-02 scaffolding)
-  - [ ] 03-02-PLAN.md — Implement tensor_garbler and tensor_evaluator bodies in src/tensor_macro.rs composing the tensor_ops kernels (PROTO-01, PROTO-02)
-  - [ ] 03-03-PLAN.md — Paper-invariant test battery verifying Z_gen XOR Z_eval == a ⊗ T across (n, m) edge cases (n=1, small m, large n/m) plus a deterministic regression seed (PROTO-03, TEST-01)
+  - [x] 03-01-PLAN.md — Wave 0: capture test baseline; add BlockMatrix::elements_slice; generalize gen_populate_seeds_mem_optimized to &[Block]; hoist eval_populate_seeds_mem_optimized and eval_unary_outer_product into tensor_ops.rs; rewire tensor_gen/tensor_eval/auth_tensor_eval; create src/tensor_macro.rs skeleton + register in lib.rs (PROTO-01, PROTO-02 scaffolding)
+  - [x] 03-02-PLAN.md — Implement tensor_garbler and tensor_evaluator bodies in src/tensor_macro.rs composing the tensor_ops kernels (PROTO-01, PROTO-02)
+  - [x] 03-03-PLAN.md — Paper-invariant test battery verifying Z_gen XOR Z_eval == a ⊗ T across (n, m) edge cases (n=1, small m, large n/m) plus a deterministic regression seed (PROTO-03, TEST-01)
 
 ### Phase 4: M2 Pi_LeakyTensor + F_eq (Construction 2)
 **Goal**: `Pi_LeakyTensor` is implemented per paper Construction 2: consume correlated randomness from `IdealBCot`, run two tensor-macro calls (A and B as garblers under their own Δ), XOR results, execute masked reveal, verify consistency via in-process `F_eq`, and output a leaky triple whose shape is exactly `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})` — no gamma, no wire labels.
