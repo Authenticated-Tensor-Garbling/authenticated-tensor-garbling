@@ -92,7 +92,7 @@ impl AuthTensorEval {
             out.with_subrows(chunking_factor * s, slice_size, |part| {
                 let (eval_seeds, _missing_derived) = crate::tensor_ops::eval_populate_seeds_mem_optimized(
                     slice.elements_slice(),
-                    chunk_levels[s].clone(),
+                    &chunk_levels[s],
                     cipher,
                 );
                 let _eval_cts = crate::tensor_ops::eval_unary_outer_product(

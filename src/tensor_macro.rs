@@ -158,7 +158,7 @@ pub(crate) fn tensor_evaluator(
     //     and returns it as the second tuple element.
     let (leaf_seeds, missing) = eval_populate_seeds_mem_optimized(
         a_blocks,
-        g.level_cts.clone(),
+        &g.level_cts,
         cipher,
     );
 

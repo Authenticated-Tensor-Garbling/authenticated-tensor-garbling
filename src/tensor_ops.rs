@@ -131,7 +131,7 @@ pub(crate) fn gen_unary_outer_product(
 /// Implements Step 2-3 of Construction 1's tensorev (paper Appendix F).
 pub(crate) fn eval_populate_seeds_mem_optimized(
     x: &[Block],
-    levels: Vec<(Block, Block)>,
+    levels: &[(Block, Block)],
     cipher: &FixedKeyAes,
 ) -> (Vec<Block>, usize) {
     let n: usize = x.len();
