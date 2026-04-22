@@ -180,5 +180,117 @@ pub(crate) fn tensor_evaluator(
 
 #[cfg(test)]
 mod tests {
-    // Tests delivered in Plan 03 (paper-invariant test battery).
+    use super::*;
+    use crate::bcot::IdealBCot;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha12Rng;
+
+    /// Paper-invariant oracle:
+    ///
+    /// 1. Produce matched `(a_keys: Vec<Key>, a_macs: Vec<Mac>)` from
+    ///    `IdealBCot::transfer_a_to_b(&choices)` — guaranteed to satisfy
+    ///    `mac = key XOR bit·delta_b` with `key.lsb() == 0` and
+    ///    `mac.lsb() == choice_bit`.
+    /// 2. Generate random T shares `t_gen`, `t_eval` (length-m column vectors).
+    /// 3. Run `tensor_garbler` and `tensor_evaluator`.
+    /// 4. Compute expected `a ⊗ T` using the same endianness convention the
+    ///    kernels use: `a[i] = a_macs[i].lsb()`, `T[k] = t_gen[k] XOR t_eval[k]`.
+    /// 5. Assert `z_gen XOR z_eval == a ⊗ T` entry-wise.
+    fn run_one_case(n: usize, m: usize, seed: u64) {
+        // ----- Set up bCOT and derive the macro's Δ -----
+        let mut bcot = IdealBCot::new(seed, seed ^ 0xDEAD_BEEF);
+
+        // A is sender; A's correlation key for this batch is delta_b
+        // (see src/bcot.rs transfer_a_to_b). So the garbler's "Δ" in the
+        // macro view equals bcot.delta_b.
+        let delta = bcot.delta_b;
+
+        // ----- Sample random choice bits -----
+        let mut rng = ChaCha12Rng::seed_from_u64(seed);
+        let choices: Vec<bool> = (0..n).map(|_| rng.random_bool(0.5)).collect();
+
+        // ----- Perform the batch bCOT -----
+        let cot = bcot.transfer_a_to_b(&choices);
+        let a_keys: Vec<Key> = cot.sender_keys;    // LSB = 0 invariant (Key::new)
+        let a_macs: Vec<Mac> = cot.receiver_macs;  // LSB = choices[i] by construction
+
+        // ----- Sample random T shares (each a length-m column vector) -----
+        let mut t_gen = BlockMatrix::new(m, 1);
+        let mut t_eval = BlockMatrix::new(m, 1);
+        for k in 0..m {
+            t_gen[k] = Block::random(&mut rng);
+            t_eval[k] = Block::random(&mut rng);
+        }
+
+        // ----- Run both sides of the macro -----
+        let (z_gen, g) = tensor_garbler(n, m, delta, &a_keys, &t_gen);
+        let z_eval = tensor_evaluator(n, m, &g, &a_macs, &t_eval);
+
+        // Sanity on dimensions
+        assert_eq!(z_gen.rows(), n, "z_gen rows mismatch");
+        assert_eq!(z_gen.cols(), m, "z_gen cols mismatch");
+        assert_eq!(z_eval.rows(), n, "z_eval rows mismatch");
+        assert_eq!(z_eval.cols(), m, "z_eval cols mismatch");
+        assert_eq!(g.level_cts.len(), n.saturating_sub(1), "G level_cts length");
+        assert_eq!(g.leaf_cts.len(), m, "G leaf_cts length");
+
+        // ----- Compute expected a ⊗ T -----
+        let a_bits: Vec<bool> = a_macs.iter().map(|mac| mac.as_block().lsb()).collect();
+        let t_full: Vec<Block> = (0..m).map(|k| t_gen[k] ^ t_eval[k]).collect();
+
+        // ----- Assert Z_gen XOR Z_eval == a ⊗ T -----
+        for i in 0..n {
+            for k in 0..m {
+                let expected = if a_bits[i] { t_full[k] } else { Block::ZERO };
+                let actual = z_gen[(i, k)] ^ z_eval[(i, k)];
+                assert_eq!(
+                    actual, expected,
+                    "paper invariant failed at (i={}, k={}) for n={} m={} seed={} a_bits[i]={}",
+                    i, k, n, m, seed, a_bits[i],
+                );
+            }
+        }
+    }
+
+    // Edge case: single wire, single column (degenerate tree).
+    #[test]
+    fn test_n1_m1() { run_one_case(1, 1, 1); }
+
+    // Edge case: single wire, multiple columns.
+    #[test]
+    fn test_n1_m4() { run_one_case(1, 4, 2); }
+
+    // Edge case: two wires, single column.
+    #[test]
+    fn test_n2_m1() { run_one_case(2, 1, 3); }
+
+    // Small non-power-of-2 m.
+    #[test]
+    fn test_n2_m3() { run_one_case(2, 3, 4); }
+
+    // Balanced case.
+    #[test]
+    fn test_n4_m4() { run_one_case(4, 4, 5); }
+
+    // m > n.
+    #[test]
+    fn test_n4_m8() { run_one_case(4, 8, 6); }
+
+    // Large m (exercises leaf-expansion loop bounds).
+    #[test]
+    fn test_n4_m64() { run_one_case(4, 64, 7); }
+
+    // Large n, tiny m (exercises tree depth).
+    #[test]
+    fn test_n8_m1() { run_one_case(8, 1, 8); }
+
+    // Both large.
+    #[test]
+    fn test_n8_m16() { run_one_case(8, 16, 9); }
+
+    /// Deterministic regression vector. Fixed seed keeps Δ, choices, and T
+    /// reproducible; any future change that silently breaks the invariant
+    /// will fail this test first.
+    #[test]
+    fn test_deterministic_seed_42() { run_one_case(4, 4, 42); }
 }
