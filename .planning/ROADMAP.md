@@ -94,9 +94,9 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. Iterative combining folds B leaky triples one at a time into a single authenticated triple
   4. Test verifies `Z_combined = Z' ⊕ Z'' ⊕ x'' ⊗ d` on two concrete leaky triples and confirms MAC on `d` rejects tampered values
 **Plans**: 3 plans
-  - [ ] 05-01-PLAN.md — Fix bucket_size_for signature (ell parameter) + add ell<=1 edge-case guard + update call sites in preprocessing.rs and tests (PROTO-12)
-  - [ ] 05-02-PLAN.md — Promote verify_cross_party to pub(crate); add two_to_one_combine helper implementing paper Construction 3 algebra; rewrite combine_leaky_triples as iterative fold (PROTO-10, PROTO-11)
-  - [ ] 05-03-PLAN.md — TEST-05 battery: happy-path product invariant on two triples, #[should_panic] tamper test on y'' flip, full-bucket B=40 product invariant (TEST-05)
+  - [x] 05-01-PLAN.md — Fix bucket_size_for signature (ell parameter) + add ell<=1 edge-case guard + update call sites in preprocessing.rs and tests (PROTO-12)
+  - [x] 05-02-PLAN.md — Promote verify_cross_party to pub(crate); add two_to_one_combine helper implementing paper Construction 3 algebra; rewrite combine_leaky_triples as iterative fold (PROTO-10, PROTO-11)
+  - [x] 05-03-PLAN.md — TEST-05 battery: happy-path product invariant on two triples, #[should_panic] tamper test on y'' flip, full-bucket B=40 product invariant (TEST-05)
 
 ### Phase 6: M2 Pi_aTensor' Permutation Bucketing (Construction 4) + Benches
 **Goal**: `Pi_aTensor'` is implemented per paper Construction 4 with uniform row-permutation bucketing and the improved bucket size `B = 1 + ceil(SSP / log2(n·ℓ))`; the end-to-end preprocessing pipeline produces a valid authenticated tensor triple, and benchmarks run after the full restructure.
