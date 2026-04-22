@@ -77,6 +77,11 @@ pub struct TensorFpreEval {
 ///
 /// Preprocessing is fully input-independent per paper Construction 2. Triples are
 /// sampled from LeakyTensorPre's internal ChaCha12Rng; no input values flow in here.
+///
+/// # Panics
+///
+/// Panics if `count != 1`. Batch output (count > 1) requires a Vec-returning
+/// variant that is not yet implemented.
 pub fn run_preprocessing(
     n: usize,
     m: usize,
