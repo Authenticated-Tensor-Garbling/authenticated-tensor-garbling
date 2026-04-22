@@ -110,7 +110,6 @@ mod tests {
     use crate::auth_tensor_eval::AuthTensorEval;
 
     #[test]
-    #[ignore = "Plan 2 — generate() body"]
     fn test_run_preprocessing_dimensions() {
         let (gen_out, eval_out) = super::run_preprocessing(4, 4, 1, 1);
         assert_eq!(gen_out.n, 4);
@@ -120,14 +119,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Plan 2 — generate() body"]
     fn test_run_preprocessing_delta_lsb() {
         let (gen_out, _eval_out) = super::run_preprocessing(4, 4, 1, 1);
         assert!(gen_out.delta_a.as_block().lsb(), "delta_a LSB must be 1");
     }
 
     #[test]
-    #[ignore = "Plan 2 — generate() body"]
     fn test_run_preprocessing_feeds_online_phase() {
         let (fpre_gen, fpre_eval) = super::run_preprocessing(4, 4, 1, 1);
         let _gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);

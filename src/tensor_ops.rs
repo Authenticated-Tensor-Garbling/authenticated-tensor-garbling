@@ -116,25 +116,31 @@ pub(crate) fn gen_unary_outer_product(
 /// Reconstructs the GGM seed tree on the evaluator side.
 ///
 /// Given the evaluator's auth-bit MAC values `x` (each `x[i]` equals
-/// `A_i XOR a_i*Delta` where `Delta.lsb() = 1`, so `x[i].lsb() = a_i`)
-/// and the level ciphertexts `levels` from the garbler, reconstruct the
-/// 2^n leaf seeds `Label_l` for l != missing. The seed at index `missing`
-/// (the clear integer value of the bit vector `a`) is set to
+/// `A_i XOR a_i*Delta` for the garbler's Delta), the evaluator's explicit
+/// choice bits `a_bits` (the evaluator knows their own bits independently of
+/// the MAC's LSB — this decouples the function from any constraint on
+/// Delta.lsb()), and the level ciphertexts `levels` from the garbler,
+/// reconstruct the 2^n leaf seeds `Label_l` for l != missing. The seed at
+/// index `missing` (the clear integer value of the bit vector `a`) is set to
 /// `Block::default()` as a sentinel for the downstream leaf-expansion step.
 ///
 /// Endianness: index 0 is LSB, index n-1 is MSB of the bit vector. The
-/// tree is traversed MSB-first, consuming `x[n-1]` at level 0.
+/// tree is traversed MSB-first, consuming `a_bits[n-1]` at level 0.
 ///
 /// Returns `(leaf_seeds, missing)` where `leaf_seeds.len() == 2^n` and
 /// `leaf_seeds[missing] == Block::default()`.
 ///
 /// Implements Step 2-3 of Construction 1's tensorev (paper Appendix F).
+/// The paper's evaluator knows its own choice bits `a` explicitly; this
+/// function uses `a_bits` directly rather than deducing from MAC LSBs.
 pub(crate) fn eval_populate_seeds_mem_optimized(
     x: &[Block],
+    a_bits: &[bool],
     levels: &[(Block, Block)],
     cipher: &FixedKeyAes,
 ) -> (Vec<Block>, usize) {
     let n: usize = x.len();
+    debug_assert_eq!(a_bits.len(), n, "a_bits must have same length as MAC blocks");
 
     // Seed buffer for level-by-level computation.
     // After all iterations seeds[0..2^n] holds the final leaves directly —
@@ -143,11 +149,14 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
     // Endianness note (little-endian vectors):
-    // Index 0 is LSB, index n-1 is MSB. Start from x[n-1] as the first branching bit.
-    seeds[!x[n-1].lsb() as usize] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1]);
+    // Index 0 is LSB, index n-1 is MSB. Start from a_bits[n-1] as the first branching bit.
+    // The evaluator's MAC x[n-1] = A_{n-1} XOR a_{n-1}*Delta is used as the PRF key
+    // for the non-missing subtree root. The missing index is a_bits[n-1].
+    let a0 = a_bits[n-1];
+    seeds[!a0 as usize] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1]);
 
-    // Missing path is constructed MSB-to-LSB by shifting in x[n-i-1].lsb() at each level.
-    let mut missing = x[n-1].lsb() as usize;
+    // Missing path is constructed MSB-to-LSB by shifting in a_bits[n-i-1] at each level.
+    let mut missing = a0 as usize;
 
     for i in 1..n {
         let g_evens = levels[i-1].0;
@@ -177,7 +186,8 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
         }
 
         // Endianness note (little-endian vectors): consume bit at position n-i-1.
-        let bit = x[n-i-1].lsb();
+        // Use the explicit choice bit, not the MAC LSB (which would require Delta.lsb()=1).
+        let bit = a_bits[n-i-1];
         missing = (missing << 1) | bit as usize;
 
         // Reconstruct the sibling of the missing node using the ciphertext

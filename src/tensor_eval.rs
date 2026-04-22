@@ -87,9 +87,13 @@ impl TensorProductEval {
             };
             
 
+            // Extract explicit choice bits from slice LSBs (index 0 = LSB of bit vector).
+            let slice_bits: Vec<bool> = slice.elements_slice().iter().map(|b| b.lsb()).collect();
+
             out.with_subrows(chunking_factor * s, slice_size, |part| {
                 let (eval_seeds, _missing_derived) = crate::tensor_ops::eval_populate_seeds_mem_optimized(
                     slice.elements_slice(),
+                    &slice_bits,
                     &chunk_levels[s],
                     cipher,
                 );

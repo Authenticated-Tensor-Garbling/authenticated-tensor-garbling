@@ -159,7 +159,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Plan 2 — generate() body"]
     fn test_combine_dimensions() {
         let n = 4;
         let m = 4;
@@ -172,7 +171,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Plan 2 — generate() body"]
     fn test_full_pipeline_no_panic() {
         let n = 4;
         let m = 4;

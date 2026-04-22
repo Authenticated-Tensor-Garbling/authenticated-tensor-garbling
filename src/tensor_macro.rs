@@ -122,8 +122,14 @@ pub(crate) fn tensor_garbler(
 /// ciphertexts `g`, then recovers the missing-leaf column and accumulates
 /// `Z_eval`.
 ///
+/// `a_bits` are the evaluator's explicit choice bits — index 0 is the LSB
+/// of the `a` vector, index `n-1` is the MSB. These are passed separately
+/// from `a_macs` to allow the tree traversal to work even when the garbler's
+/// Δ has `lsb == 0` (in which case `mac.lsb() != a_i`).
+///
 /// Preconditions (enforced via `assert_eq!`):
 /// - `a_macs.len() == n`
+/// - `a_bits.len() == n`
 /// - `t_eval.rows() == m` and `t_eval.cols() == 1`
 /// - `g.level_cts.len() == n - 1`
 /// - `g.leaf_cts.len() == m`
@@ -134,10 +140,12 @@ pub(crate) fn tensor_evaluator(
     m: usize,
     g: &TensorMacroCiphertexts,
     a_macs: &[Mac],
+    a_bits: &[bool],
     t_eval: &BlockMatrix,
 ) -> BlockMatrix {
     assert!(n > 0, "n must be at least 1 (degenerate n=0 is not supported)");
     assert_eq!(a_macs.len(), n, "a_macs length must equal n");
+    assert_eq!(a_bits.len(), n, "a_bits length must equal n");
     assert_eq!(t_eval.rows(), m, "t_eval must be a length-m column vector");
     assert_eq!(t_eval.cols(), 1, "t_eval must be a column vector (cols == 1)");
     assert_eq!(
@@ -149,15 +157,13 @@ pub(crate) fn tensor_evaluator(
 
     let cipher: &FixedKeyAes = &FIXED_KEY_AES;
 
-    // Clear bit vector `a` is encoded in LSBs of a_macs (IT-MAC invariant:
-    // mac = key XOR bit·delta with delta.lsb() = 1, so mac.lsb() = bit).
     let a_blocks: &[Block] = Mac::as_blocks(a_macs);
 
     // [5] Reconstruct all leaf seeds except seeds[missing] (= Block::default sentinel).
-    //     The hoisted kernel reconstructs `missing` internally via MSB-first traversal
-    //     and returns it as the second tuple element.
+    //     Explicit a_bits are passed so tree navigation works regardless of Δ.lsb().
     let (leaf_seeds, missing) = eval_populate_seeds_mem_optimized(
         a_blocks,
+        a_bits,
         &g.level_cts,
         cipher,
     );
@@ -202,21 +208,22 @@ mod tests {
         // ----- Set up bCOT and derive the macro's Δ -----
         let mut bcot = IdealBCot::new(seed, seed ^ 0xDEAD_BEEF);
 
-        // B is sender; B's correlation key for this batch is delta_a
-        // (see src/bcot.rs transfer_b_to_a). So the garbler's "Δ" in the
-        // macro view equals bcot.delta_a (LSB=1 invariant — required by the macro).
-        // Phase 4 change: delta_b now has LSB=0, so delta_a is the correct choice
-        // for a standalone macro test where mac.lsb() must encode the choice bit.
+        // Garbler uses delta_a (LSB=1). Same-delta convention: transfer_a_to_b uses
+        // delta_a, so receiver MACs have lsb = choice bit. The garbler holds the sender
+        // keys; the evaluator holds the receiver MACs. Explicit choice bits are passed
+        // separately to tensor_evaluator so tree navigation works for any delta.
         let delta = bcot.delta_a;
 
         // ----- Sample random choice bits -----
         let mut rng = ChaCha12Rng::seed_from_u64(seed);
         let choices: Vec<bool> = (0..n).map(|_| rng.random_bool(0.5)).collect();
 
-        // ----- Perform the batch bCOT -----
-        let cot = bcot.transfer_b_to_a(&choices);
+        // ----- Perform the batch bCOT (A sends, B evaluates with choices) -----
+        // transfer_a_to_b uses delta_a → mac = K[0] XOR choice * delta_a
+        // Garbler holds sender_keys; evaluator holds receiver_macs.
+        let cot = bcot.transfer_a_to_b(&choices);
         let a_keys: Vec<Key> = cot.sender_keys;    // LSB = 0 invariant (Key::new)
-        let a_macs: Vec<Mac> = cot.receiver_macs;  // LSB = choices[i] by construction (delta_a.lsb()==1)
+        let a_macs: Vec<Mac> = cot.receiver_macs;  // mac = K[0] XOR choice * delta_a
 
         // ----- Sample random T shares (each a length-m column vector) -----
         let mut t_gen = BlockMatrix::new(m, 1);
@@ -228,7 +235,8 @@ mod tests {
 
         // ----- Run both sides of the macro -----
         let (z_gen, g) = tensor_garbler(n, m, delta, &a_keys, &t_gen);
-        let z_eval = tensor_evaluator(n, m, &g, &a_macs, &t_eval);
+        // Pass explicit choices as a_bits — decoupled from mac.lsb().
+        let z_eval = tensor_evaluator(n, m, &g, &a_macs, &choices, &t_eval);
 
         // Sanity on dimensions
         assert_eq!(z_gen.rows(), n, "z_gen rows mismatch");
@@ -239,7 +247,8 @@ mod tests {
         assert_eq!(g.leaf_cts.len(), m, "G leaf_cts length");
 
         // ----- Compute expected a ⊗ T -----
-        let a_bits: Vec<bool> = a_macs.iter().map(|mac| mac.as_block().lsb()).collect();
+        // Use explicit choices (not mac.lsb()) for correctness with any delta convention.
+        let a_bits: Vec<bool> = choices.clone();
         let t_full: Vec<Block> = (0..m).map(|k| t_gen[k] ^ t_eval[k]).collect();
 
         // ----- Assert Z_gen XOR Z_eval == a ⊗ T -----
