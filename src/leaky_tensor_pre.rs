@@ -33,6 +33,7 @@ use rand_chacha::ChaCha12Rng;
 /// Never call `share.verify(&delta)` directly on a cross-party share —
 /// it panics. Use `verify_cross_party(gen, eval, &Δ_A, &Δ_B)` from the
 /// test module (preserved verbatim from the pre-rewrite file).
+#[derive(Clone)]
 pub struct LeakyTriple {
     pub n: usize,
     pub m: usize,
