@@ -1,6 +1,8 @@
 use crate::{
-    preprocessing::{TensorFpreGen, TensorFpreEval},
+    delta::Delta,
     leaky_tensor_pre::LeakyTriple,
+    preprocessing::{TensorFpreGen, TensorFpreEval},
+    sharing::AuthBitShare,
 };
 
 /// Compute the bucket size B for Pi_aTensor (Construction 3, Theorem 1).
@@ -114,6 +116,39 @@ pub fn combine_leaky_triples(
     )
 }
 
+/// Cross-party `AuthBitShare` MAC verification — the in-process substitute for the
+/// paper's "publicly reveal with appropriate MACs".
+///
+/// `gen_share.key` is A's sender key; `gen_share.mac` is A's sender MAC (committed
+/// under delta_b). `eval_share.key` is B's sender key; `eval_share.mac` is B's sender
+/// MAC (committed under delta_a). The two `.verify` calls below reassemble properly
+/// aligned IT-MAC pairs so that each side checks `mac == key XOR bit*delta` under
+/// the correct verifier's delta. Panics with "MAC mismatch in share" on tampered
+/// shares.
+///
+/// NOTE: do NOT call `share.verify(&delta)` directly on a raw cross-party
+/// AuthBitShare — it will panic even on correctly-formed shares because the key and
+/// MAC fields come from different bCOT directions and commit under different deltas.
+pub(crate) fn verify_cross_party(
+    gen_share: &AuthBitShare,
+    eval_share: &AuthBitShare,
+    delta_a: &Delta,
+    delta_b: &Delta,
+) {
+    AuthBitShare {
+        key: eval_share.key,
+        mac: gen_share.mac,
+        value: gen_share.value,
+    }
+    .verify(delta_b);
+    AuthBitShare {
+        key: gen_share.key,
+        mac: eval_share.mac,
+        value: eval_share.value,
+    }
+    .verify(delta_a);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,29 +168,6 @@ mod tests {
             triples.push(ltp.generate());
         }
         triples
-    }
-
-    /// Cross-party verify helper (same logic as in leaky_tensor_pre tests).
-    /// gen_share.key = A's sender key; eval_share.key = B's sender key.
-    /// Gen commits under delta_b; eval commits under delta_a.
-    fn verify_cross_party(
-        gen_share: &AuthBitShare,
-        eval_share: &AuthBitShare,
-        delta_a: &Delta,
-        delta_b: &Delta,
-    ) {
-        AuthBitShare {
-            key: eval_share.key,
-            mac: gen_share.mac,
-            value: gen_share.value,
-        }
-        .verify(delta_b);
-        AuthBitShare {
-            key: gen_share.key,
-            mac: eval_share.mac,
-            value: eval_share.value,
-        }
-        .verify(delta_a);
     }
 
     #[test]
