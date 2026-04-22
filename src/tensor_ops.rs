@@ -55,19 +55,24 @@ pub(crate) fn gen_populate_seeds_mem_optimized(
         let mut odds = Block::default();
         let mut evens = Block::default();
 
+        // Mix level index i into the tweak to prevent cross-level ciphertext collisions
+        // when the same parent seed value appears at multiple nodes (established GGM construction).
+        let tweak_even = Block::from(((i as u128) << 1) as u128);
+        let tweak_odd  = Block::from(((i as u128) << 1 | 1) as u128);
+
         // Iterate through the parent level to make seeds for the next level
         // Two seeds per parent: left child (even) and right child (odd)
         for j in (0..(1 << i)).rev() {
-            seeds[j * 2 + 1] = cipher.tccr(Block::from(0 as u128), seeds[j]);
-            seeds[j * 2] = cipher.tccr(Block::from(1 as u128), seeds[j]);
-            
+            seeds[j * 2 + 1] = cipher.tccr(tweak_odd,  seeds[j]);
+            seeds[j * 2]     = cipher.tccr(tweak_even, seeds[j]);
+
             evens ^= seeds[j * 2];
             odds ^= seeds[j * 2 + 1];
         }
-        
-        // Add the key contributions to the sums
-        evens ^= cipher.tccr(Block::from(0 as u128), key0);
-        odds ^= cipher.tccr(Block::from(1 as u128), key1);
+
+        // Add the key contributions to the sums (same level-indexed tweaks)
+        evens ^= cipher.tccr(tweak_even, key0);
+        odds  ^= cipher.tccr(tweak_odd,  key1);
         
         odd_evens.push((evens, odds));
         
@@ -166,17 +171,20 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
         let mut e_evens = Block::default();
         let mut e_odds = Block::default();
 
+        // Mirror the garbler's level-indexed tweaks to maintain consistency.
+        let tweak_even = Block::from(((i as u128) << 1) as u128);
+        let tweak_odd  = Block::from(((i as u128) << 1 | 1) as u128);
+
         // Compute seeds for the next level, skipping the missing node
         for j in (0..(1 << i)).rev() {
             if j == missing {
                 seeds[j * 2 + 1] = Block::default();
                 seeds[j * 2] = Block::default();
             } else {
-                // GGM tree tweak domain separation: distinct AES tweaks derive the two child
-                // seeds at each tree level (tweak=0 for odd-indexed sibling, tweak=1 for
-                // even-indexed).
-                seeds[j * 2 + 1] = cipher.tccr(Block::from(0 as u128), seeds[j]);
-                seeds[j * 2] = cipher.tccr(Block::from(1 as u128), seeds[j]);
+                // GGM tree tweak domain separation: level-indexed tweaks prevent cross-level
+                // ciphertext collisions (matches garbler's tweak assignment).
+                seeds[j * 2 + 1] = cipher.tccr(tweak_odd,  seeds[j]);
+                seeds[j * 2]     = cipher.tccr(tweak_even, seeds[j]);
 
                 e_evens ^= seeds[j * 2];
                 e_odds ^= seeds[j * 2 + 1];
@@ -189,9 +197,9 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
 
         // Reconstruct the sibling of the missing node using the ciphertext
         let (tweak, mask) = if bit {
-            (Block::from(0 as u128), g_evens ^ e_evens)
+            (tweak_even, g_evens ^ e_evens)
         } else {
-            (Block::from(1 as u128), g_odds ^ e_odds)
+            (tweak_odd,  g_odds ^ e_odds)
         };
 
         let sibling_index = missing ^ 1;
