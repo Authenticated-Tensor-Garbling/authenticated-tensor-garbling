@@ -68,7 +68,7 @@ impl AuthTensorGen {
 
 
 
-    pub fn gen_chunked_half_outer_product(
+    pub(crate) fn gen_chunked_half_outer_product(
         &mut self,
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
