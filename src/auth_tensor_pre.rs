@@ -322,4 +322,67 @@ mod tests {
         let _ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         // No panic = success
     }
+
+    #[test]
+    fn test_two_to_one_combine_product_invariant() {
+        // TEST-05 happy path: two concrete leaky triples, combine once, verify the paper's
+        // product invariant Z_combined[j*n+i] = x_combined[i] AND y_combined[j]
+        // (Construction 3 correctness, appendix_krrw_pre.tex line 443).
+        let n = 4;
+        let m = 4;
+        let triples = make_triples(n, m, 2);
+        let t0 = triples[0].clone();
+        let t1_ref = &triples[1];
+
+        let combined = two_to_one_combine(t0, t1_ref);
+
+        // MAC invariant on every combined share (sanity that d-reveal didn't corrupt shares).
+        for i in 0..n {
+            verify_cross_party(
+                &combined.gen_x_shares[i],
+                &combined.eval_x_shares[i],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+        for j in 0..m {
+            verify_cross_party(
+                &combined.gen_y_shares[j],
+                &combined.eval_y_shares[j],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &combined.gen_z_shares[k],
+                &combined.eval_z_shares[k],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+
+        // Product invariant: Z_full[j*n+i] == x_full[i] AND y_full[j].
+        let x_full: Vec<bool> = (0..n)
+            .map(|i| combined.gen_x_shares[i].value ^ combined.eval_x_shares[i].value)
+            .collect();
+        let y_full: Vec<bool> = (0..m)
+            .map(|j| combined.gen_y_shares[j].value ^ combined.eval_y_shares[j].value)
+            .collect();
+        for j in 0..m {
+            for i in 0..n {
+                let k = j * n + i;
+                let z_full =
+                    combined.gen_z_shares[k].value ^ combined.eval_z_shares[k].value;
+                assert_eq!(
+                    z_full,
+                    x_full[i] & y_full[j],
+                    "TEST-05 product invariant failed at (i={}, j={}, k={})",
+                    i,
+                    j,
+                    k
+                );
+            }
+        }
+    }
 }
