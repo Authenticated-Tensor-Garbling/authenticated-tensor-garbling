@@ -111,7 +111,6 @@ pub fn run_preprocessing(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
 

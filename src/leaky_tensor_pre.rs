@@ -368,7 +368,7 @@ mod tests {
         // Prove the 10 fields exist and have the expected types by touching
         // them via a default-initialized instance. This is NOT a semantic
         // test — Plan 3 adds the real PROTO-09 / paper-invariant tests.
-        let mut bcot = make_bcot();
+        let bcot = make_bcot();
         let delta_a = bcot.delta_a;
         let delta_b = bcot.delta_b;
         let triple = LeakyTriple {
