@@ -1,0 +1,4 @@
+    auth_tensor_pre::tests::test_combine_mac_invariants
+    leaky_tensor_pre::tests::test_alpha_beta_mac_invariants
+    leaky_tensor_pre::tests::test_correlated_mac_invariants
+    preprocessing::tests::test_run_preprocessing_mac_invariants

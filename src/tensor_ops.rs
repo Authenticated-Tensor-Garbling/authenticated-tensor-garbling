@@ -7,7 +7,7 @@ use crate::{
 
 /// Generates seeds for tensor operations using memory-optimized approach
 pub(crate) fn gen_populate_seeds_mem_optimized(
-    x: &MatrixViewRef<Block>,
+    x: &[Block],
     cipher: &FixedKeyAes,
     delta: Delta,
 ) -> (Vec<Block>, Vec<(Block, Block)>) {
@@ -79,7 +79,7 @@ pub(crate) fn gen_populate_seeds_mem_optimized(
         }
     }
 
-    let seeds = tree[tree.len() - (1 << x.rows())..tree.len()].to_vec();
+    let seeds = tree[tree.len() - (1 << n)..tree.len()].to_vec();
 
     (seeds, odd_evens)
 }
