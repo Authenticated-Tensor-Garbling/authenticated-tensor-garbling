@@ -190,9 +190,9 @@ mod tests {
     /// Paper-invariant oracle:
     ///
     /// 1. Produce matched `(a_keys: Vec<Key>, a_macs: Vec<Mac>)` from
-    ///    `IdealBCot::transfer_a_to_b(&choices)` — guaranteed to satisfy
-    ///    `mac = key XOR bit·delta_b` with `key.lsb() == 0` and
-    ///    `mac.lsb() == choice_bit`.
+    ///    `IdealBCot::transfer_b_to_a(&choices)` — guaranteed to satisfy
+    ///    `mac = key XOR bit·delta_a` with `key.lsb() == 0` and
+    ///    `mac.lsb() == choice_bit` (relies on `delta_a.lsb() == 1`).
     /// 2. Generate random T shares `t_gen`, `t_eval` (length-m column vectors).
     /// 3. Run `tensor_garbler` and `tensor_evaluator`.
     /// 4. Compute expected `a ⊗ T` using the same endianness convention the
@@ -202,19 +202,21 @@ mod tests {
         // ----- Set up bCOT and derive the macro's Δ -----
         let mut bcot = IdealBCot::new(seed, seed ^ 0xDEAD_BEEF);
 
-        // A is sender; A's correlation key for this batch is delta_b
-        // (see src/bcot.rs transfer_a_to_b). So the garbler's "Δ" in the
-        // macro view equals bcot.delta_b.
-        let delta = bcot.delta_b;
+        // B is sender; B's correlation key for this batch is delta_a
+        // (see src/bcot.rs transfer_b_to_a). So the garbler's "Δ" in the
+        // macro view equals bcot.delta_a (LSB=1 invariant — required by the macro).
+        // Phase 4 change: delta_b now has LSB=0, so delta_a is the correct choice
+        // for a standalone macro test where mac.lsb() must encode the choice bit.
+        let delta = bcot.delta_a;
 
         // ----- Sample random choice bits -----
         let mut rng = ChaCha12Rng::seed_from_u64(seed);
         let choices: Vec<bool> = (0..n).map(|_| rng.random_bool(0.5)).collect();
 
         // ----- Perform the batch bCOT -----
-        let cot = bcot.transfer_a_to_b(&choices);
+        let cot = bcot.transfer_b_to_a(&choices);
         let a_keys: Vec<Key> = cot.sender_keys;    // LSB = 0 invariant (Key::new)
-        let a_macs: Vec<Mac> = cot.receiver_macs;  // LSB = choices[i] by construction
+        let a_macs: Vec<Mac> = cot.receiver_macs;  // LSB = choices[i] by construction (delta_a.lsb()==1)
 
         // ----- Sample random T shares (each a length-m column vector) -----
         let mut t_gen = BlockMatrix::new(m, 1);

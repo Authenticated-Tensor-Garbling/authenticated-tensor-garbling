@@ -1,50 +1,61 @@
+//! Pi_LeakyTensor preprocessing protocol — paper Construction 2 (Appendix F).
+//!
+//! This file contains the `LeakyTriple` output struct and the
+//! `LeakyTensorPre` orchestrator. The `generate()` body is scaffolded
+//! (`unimplemented!()`) in Plan 1; Plan 2 replaces it with the 5-step
+//! paper transcript; Plan 3 adds paper-invariant tests.
+
 use crate::{
     bcot::IdealBCot,
-    block::Block,
     delta::Delta,
-    macs::Mac,
     sharing::AuthBitShare,
 };
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
-/// One leaky tensor triple (output of a single Pi_LeakyTensor execution).
-/// Both gen and eval views are stored together for in-process use.
+/// One leaky tensor triple — output of a single Pi_LeakyTensor execution.
+///
+/// Field shape matches paper Construction 2 exactly (no gamma, no wire
+/// labels — those belonged to the pre-rewrite algorithm). Both parties'
+/// views are stored together for in-process use.
+///
+/// Cross-party layout (canonical codebase convention):
+///   gen_*_share.key  = A's sender key from transfer_a_to_b   (LSB = 0)
+///   gen_*_share.mac  = A's MAC from transfer_b_to_a           (MAC of A's bit under Δ_B)
+///   eval_*_share.key = B's sender key from transfer_b_to_a   (LSB = 0)
+///   eval_*_share.mac = B's MAC from transfer_a_to_b           (MAC of B's bit under Δ_A)
+///
+/// Never call `share.verify(&delta)` directly on a cross-party share —
+/// it panics. Use `verify_cross_party(gen, eval, &Δ_A, &Δ_B)` from the
+/// test module (preserved verbatim from the pre-rewrite file).
 pub struct LeakyTriple {
     pub n: usize,
     pub m: usize,
-    // Garbler A's view
-    pub gen_alpha_shares: Vec<AuthBitShare>,
-    pub gen_beta_shares: Vec<AuthBitShare>,
-    /// length n*m, column-major: index = j*n+i (j = beta/y index, i = alpha/x index)
-    pub gen_correlated_shares: Vec<AuthBitShare>,
-    pub gen_gamma_shares: Vec<AuthBitShare>,
-    pub gen_alpha_labels: Vec<Block>,
-    pub gen_beta_labels: Vec<Block>,
-    // Evaluator B's view
-    pub eval_alpha_shares: Vec<AuthBitShare>,
-    pub eval_beta_shares: Vec<AuthBitShare>,
-    /// length n*m, column-major: index = j*n+i (j = beta/y index, i = alpha/x index)
-    pub eval_correlated_shares: Vec<AuthBitShare>,
-    pub eval_gamma_shares: Vec<AuthBitShare>,
-    pub eval_alpha_labels: Vec<Block>,
-    pub eval_beta_labels: Vec<Block>,
-    // The deltas (shared across all triples produced by one run_preprocessing call)
+    // Garbler A's view — paper notation x / y / Z.
+    pub gen_x_shares: Vec<AuthBitShare>,   // length n
+    pub gen_y_shares: Vec<AuthBitShare>,   // length m
+    /// length n*m, column-major: index = j*n + i (j = y index, i = x index).
+    pub gen_z_shares: Vec<AuthBitShare>,
+    // Evaluator B's view.
+    pub eval_x_shares: Vec<AuthBitShare>,  // length n
+    pub eval_y_shares: Vec<AuthBitShare>,  // length m
+    /// length n*m, column-major.
+    pub eval_z_shares: Vec<AuthBitShare>,
+    // Shared correlation keys for the run (same for every triple in one run_preprocessing).
     pub delta_a: Delta,
     pub delta_b: Delta,
 }
 
-/// Pi_LeakyTensor preprocessing protocol (Construction 2).
+/// Pi_LeakyTensor preprocessing protocol (Construction 2, Appendix F).
 ///
-/// LeakyTensorPre BORROWS &mut IdealBCot (does not own it). This ensures all leaky triples
-/// produced by one run_preprocessing call share the SAME delta_a and delta_b. If each
-/// LeakyTensorPre owned a separate IdealBCot, different deltas would break the XOR combination
-/// MAC invariant in Pi_aTensor bucketing.
+/// Borrows `&mut IdealBCot` so every triple produced by a single
+/// `run_preprocessing` call shares the same Δ_A and Δ_B (required for
+/// Phase 5 XOR combining to preserve the MAC invariant).
 pub struct LeakyTensorPre<'a> {
     pub n: usize,
     pub m: usize,
-    bcot: &'a mut IdealBCot,
-    rng: ChaCha12Rng,
+    pub(crate) bcot: &'a mut IdealBCot,
+    pub(crate) rng: ChaCha12Rng,
 }
 
 impl<'a> LeakyTensorPre<'a> {
@@ -57,195 +68,18 @@ impl<'a> LeakyTensorPre<'a> {
         }
     }
 
-    /// Generate one leaky tensor triple for inputs x_clear (n-bit) and y_clear (m-bit).
+    /// Generate one leaky tensor triple per paper Construction 2.
     ///
-    /// Layout invariant (matches gen_auth_bit canonical layout from auth_tensor_fpre.rs,
-    /// and the paper's convention [x_pa]^{Δ_b}, [x_pb]^{Δ_a} — verifier's delta):
-    ///   gen_share.key  = cot_a_to_b.sender_keys[i]   (A's sender key from A→B COT, LSB=0)
-    ///   gen_share.mac  = cot_b_to_a.receiver_macs[i] (A's MAC on A's bit under delta_b)
-    ///   eval_share.key = cot_b_to_a.sender_keys[i]   (B's sender key from B→A COT, LSB=0)
-    ///   eval_share.mac = cot_a_to_b.receiver_macs[i] (B's MAC on B's bit under delta_a)
-    pub fn generate(&mut self, x_clear: usize, y_clear: usize) -> LeakyTriple {
-        // ---- Step 1: Random full alpha and beta bits ----
-        let alpha_bits: Vec<bool> = (0..self.n).map(|_| self.rng.random_bool(0.5)).collect();
-        let beta_bits: Vec<bool> = (0..self.m).map(|_| self.rng.random_bool(0.5)).collect();
-
-        // ---- Step 2: Alpha auth shares via TWO COT calls ----
-        let gen_alpha_portions: Vec<bool> =
-            (0..self.n).map(|_| self.rng.random_bool(0.5)).collect();
-        let eval_alpha_portions: Vec<bool> = gen_alpha_portions
-            .iter()
-            .zip(alpha_bits.iter())
-            .map(|(&g, &full)| g ^ full)
-            .collect();
-
-        // COT A→B: A is sender with delta_a. Eval's bits as choice → [x_pb]^{Δ_a}.
-        let cot_alpha_a_to_b = self.bcot.transfer_a_to_b(&eval_alpha_portions);
-        // COT B→A: B is sender with delta_b. Gen's bits as choice → [x_pa]^{Δ_b}.
-        let cot_alpha_b_to_a = self.bcot.transfer_b_to_a(&gen_alpha_portions);
-
-        let gen_alpha_shares: Vec<AuthBitShare> = (0..self.n)
-            .map(|i| AuthBitShare {
-                key: cot_alpha_a_to_b.sender_keys[i], // A's sender key (A→B, LSB=0)
-                mac: Mac::new(*cot_alpha_b_to_a.receiver_macs[i].as_block()), // A's MAC under delta_b
-                value: gen_alpha_portions[i],
-            })
-            .collect();
-
-        let eval_alpha_shares: Vec<AuthBitShare> = (0..self.n)
-            .map(|i| AuthBitShare {
-                key: cot_alpha_b_to_a.sender_keys[i], // B's sender key (B→A, LSB=0)
-                mac: Mac::new(*cot_alpha_a_to_b.receiver_macs[i].as_block()), // B's MAC under delta_a
-                value: eval_alpha_portions[i],
-            })
-            .collect();
-
-        // ---- Step 3: Beta auth shares via TWO COT calls ----
-        let gen_beta_portions: Vec<bool> =
-            (0..self.m).map(|_| self.rng.random_bool(0.5)).collect();
-        let eval_beta_portions: Vec<bool> = gen_beta_portions
-            .iter()
-            .zip(beta_bits.iter())
-            .map(|(&g, &full)| g ^ full)
-            .collect();
-
-        let cot_beta_a_to_b = self.bcot.transfer_a_to_b(&eval_beta_portions);
-        let cot_beta_b_to_a = self.bcot.transfer_b_to_a(&gen_beta_portions);
-
-        let gen_beta_shares: Vec<AuthBitShare> = (0..self.m)
-            .map(|i| AuthBitShare {
-                key: cot_beta_a_to_b.sender_keys[i],
-                mac: Mac::new(*cot_beta_b_to_a.receiver_macs[i].as_block()),
-                value: gen_beta_portions[i],
-            })
-            .collect();
-
-        let eval_beta_shares: Vec<AuthBitShare> = (0..self.m)
-            .map(|i| AuthBitShare {
-                key: cot_beta_b_to_a.sender_keys[i],
-                mac: Mac::new(*cot_beta_a_to_b.receiver_macs[i].as_block()),
-                value: eval_beta_portions[i],
-            })
-            .collect();
-
-        // ---- Step 4: Alpha and beta labels ----
-        let mut gen_alpha_labels: Vec<Block> = Vec::with_capacity(self.n);
-        let mut eval_alpha_labels: Vec<Block> = Vec::with_capacity(self.n);
-        for i in 0..self.n {
-            let mut label_0 = Block::random(&mut self.rng);
-            label_0.set_lsb(false);
-            let masked_bit = (((x_clear >> i) & 1) != 0) ^ alpha_bits[i];
-            let label_b = if masked_bit {
-                label_0 ^ self.bcot.delta_a.as_block()
-            } else {
-                label_0
-            };
-            gen_alpha_labels.push(label_0);
-            eval_alpha_labels.push(label_b);
-        }
-
-        let mut gen_beta_labels: Vec<Block> = Vec::with_capacity(self.m);
-        let mut eval_beta_labels: Vec<Block> = Vec::with_capacity(self.m);
-        for j in 0..self.m {
-            let mut label_0 = Block::random(&mut self.rng);
-            label_0.set_lsb(false);
-            let masked_bit = (((y_clear >> j) & 1) != 0) ^ beta_bits[j];
-            let label_b = if masked_bit {
-                label_0 ^ self.bcot.delta_a.as_block()
-            } else {
-                label_0
-            };
-            gen_beta_labels.push(label_0);
-            eval_beta_labels.push(label_b);
-        }
-
-        // ---- Step 5: Correlated bits (alpha_i AND beta_j) via TWO COT calls, column-major ----
-        // column-major: index = j*n+i (j = beta/y index, i = alpha/x index)
-        let mut corr_bits: Vec<bool> = Vec::with_capacity(self.n * self.m);
-        for j in 0..self.m {
-            for i in 0..self.n {
-                corr_bits.push(alpha_bits[i] && beta_bits[j]);
-            }
-        }
-        let gen_corr_portions: Vec<bool> = (0..self.n * self.m)
-            .map(|_| self.rng.random_bool(0.5))
-            .collect();
-        let eval_corr_portions: Vec<bool> = gen_corr_portions
-            .iter()
-            .zip(corr_bits.iter())
-            .map(|(&g, &full)| g ^ full)
-            .collect();
-
-        let cot_corr_a_to_b = self.bcot.transfer_a_to_b(&eval_corr_portions);
-        let cot_corr_b_to_a = self.bcot.transfer_b_to_a(&gen_corr_portions);
-
-        let gen_correlated_shares: Vec<AuthBitShare> = (0..self.n * self.m)
-            .map(|k| AuthBitShare {
-                key: cot_corr_a_to_b.sender_keys[k],
-                mac: Mac::new(*cot_corr_b_to_a.receiver_macs[k].as_block()),
-                value: gen_corr_portions[k],
-            })
-            .collect();
-
-        let eval_correlated_shares: Vec<AuthBitShare> = (0..self.n * self.m)
-            .map(|k| AuthBitShare {
-                key: cot_corr_b_to_a.sender_keys[k],
-                mac: Mac::new(*cot_corr_a_to_b.receiver_macs[k].as_block()),
-                value: eval_corr_portions[k],
-            })
-            .collect();
-
-        // ---- Step 6: Gamma bits (uniform random) via TWO COT calls ----
-        let gamma_bits: Vec<bool> = (0..self.n * self.m)
-            .map(|_| self.rng.random_bool(0.5))
-            .collect();
-        let gen_gamma_portions: Vec<bool> = (0..self.n * self.m)
-            .map(|_| self.rng.random_bool(0.5))
-            .collect();
-        let eval_gamma_portions: Vec<bool> = gen_gamma_portions
-            .iter()
-            .zip(gamma_bits.iter())
-            .map(|(&g, &full)| g ^ full)
-            .collect();
-
-        let cot_gamma_a_to_b = self.bcot.transfer_a_to_b(&eval_gamma_portions);
-        let cot_gamma_b_to_a = self.bcot.transfer_b_to_a(&gen_gamma_portions);
-
-        let gen_gamma_shares: Vec<AuthBitShare> = (0..self.n * self.m)
-            .map(|k| AuthBitShare {
-                key: cot_gamma_a_to_b.sender_keys[k],
-                mac: Mac::new(*cot_gamma_b_to_a.receiver_macs[k].as_block()),
-                value: gen_gamma_portions[k],
-            })
-            .collect();
-
-        let eval_gamma_shares: Vec<AuthBitShare> = (0..self.n * self.m)
-            .map(|k| AuthBitShare {
-                key: cot_gamma_b_to_a.sender_keys[k],
-                mac: Mac::new(*cot_gamma_a_to_b.receiver_macs[k].as_block()),
-                value: eval_gamma_portions[k],
-            })
-            .collect();
-
-        // ---- Step 7: Assemble and return LeakyTriple ----
-        LeakyTriple {
-            n: self.n,
-            m: self.m,
-            delta_a: self.bcot.delta_a,
-            delta_b: self.bcot.delta_b,
-            gen_alpha_shares,
-            eval_alpha_shares,
-            gen_beta_shares,
-            eval_beta_shares,
-            gen_correlated_shares,
-            eval_correlated_shares,
-            gen_gamma_shares,
-            eval_gamma_shares,
-            gen_alpha_labels,
-            eval_alpha_labels,
-            gen_beta_labels,
-            eval_beta_labels,
-        }
+    /// Preprocessing is input-independent: x, y, and R are all sampled
+    /// uniformly at random from `self.rng`. The output shape is exactly
+    /// `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})` with no extra fields.
+    ///
+    /// Body is implemented in Plan 2 of Phase 4. This scaffold exists so
+    /// callers (`run_preprocessing`, `combine_leaky_triples`) compile.
+    pub fn generate(&mut self) -> LeakyTriple {
+        let _ = &mut self.rng;    // silence unused warnings until Plan 2
+        let _ = &mut self.bcot;
+        unimplemented!("Pi_LeakyTensor generate() body is Plan 2 of Phase 4");
     }
 }
 
@@ -253,175 +87,105 @@ impl<'a> LeakyTensorPre<'a> {
 mod tests {
     use super::*;
     use crate::bcot::IdealBCot;
+    use crate::delta::Delta;
 
-    fn make_bcot() -> IdealBCot {
-        IdealBCot::new(42, 99)
-    }
-
-    /// Cross-party MAC consistency check (Pa = garbler, Pb = evaluator).
+    /// Cross-party MAC verification helper — PRESERVE VERBATIM.
     ///
-    /// Each AuthBitShare is a cross-party struct mixing fields from both COT calls.
-    /// "pa_share" means the struct whose .value is Pa's committed bit (not "what Pa holds").
-    /// "pb_share" means the struct whose .value is Pb's committed bit (not "what Pb holds").
-    ///
-    /// Field ownership in the real protocol:
-    ///   pa_share.value = Pa's bit                                   (Pa commits to this)
-    ///   pa_share.mac   = K_Pa XOR Pa's_bit * delta_b               (Pa holds this MAC, under B's delta)
-    ///   pa_share.key   = K_Pb  (Pb's sender key from cot_a_to_b)   (Pb holds this key)
-    ///
-    ///   pb_share.value = Pb's bit                                   (Pb commits to this)
-    ///   pb_share.mac   = K_Pb XOR Pb's_bit * delta_a               (Pb holds this MAC, under A's delta)
-    ///   pb_share.key   = K_Pa  (Pa's sender key from cot_b_to_a)   (Pa holds this key)
-    fn verify_cross_party(
+    /// Direct `share.verify(delta)` panics on cross-party shares because
+    /// `gen.key` and `gen.mac` come from different bCOT directions. This
+    /// helper reconstructs the properly-aligned pair and verifies under
+    /// the correct delta.
+    #[allow(dead_code)]
+    pub(crate) fn verify_cross_party(
         pa_share: &AuthBitShare,
         pb_share: &AuthBitShare,
         delta_a: &Delta,
         delta_b: &Delta,
     ) {
-        // Verify Pa's commitment: pa's bit under delta_b (verifier B's key)
-        AuthBitShare { key: pb_share.key, mac: pa_share.mac, value: pa_share.value }
-            .verify(delta_b);
-        // Verify Pb's commitment: pb's bit under delta_a (verifier A's key)
-        AuthBitShare { key: pa_share.key, mac: pb_share.mac, value: pb_share.value }
-            .verify(delta_a);
-    }
-
-    // ---- Task 1a tests ----
-
-    #[test]
-    fn test_alpha_beta_dimensions() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(0, 4, 4, &mut bcot);
-        let triple = ltp.generate(0b1010, 0b1100);
-        assert_eq!(triple.gen_alpha_shares.len(), 4);
-        assert_eq!(triple.gen_beta_shares.len(), 4);
-        assert_eq!(triple.eval_alpha_shares.len(), 4);
-    }
-
-    #[test]
-    fn test_alpha_beta_mac_invariants() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(1, 4, 4, &mut bcot);
-        let t = ltp.generate(0b1010, 0b1100);
-        // Pa's share is first arg, Pb's share is second. Use verify_cross_party — direct verify panics.
-        for i in 0..4 {
-            verify_cross_party(
-                &t.gen_alpha_shares[i],
-                &t.eval_alpha_shares[i],
-                &t.delta_a,
-                &t.delta_b,
-            );
-            verify_cross_party(
-                &t.gen_beta_shares[i],
-                &t.eval_beta_shares[i],
-                &t.delta_a,
-                &t.delta_b,
-            );
+        AuthBitShare {
+            key: pb_share.key,
+            mac: pa_share.mac,
+            value: pa_share.value,
         }
-    }
-
-    #[test]
-    fn test_alpha_label_sharing() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(3, 4, 4, &mut bcot);
-        let t = ltp.generate(0b1010, 0b1100);
-        for i in 0..4 {
-            let alpha_full = t.gen_alpha_shares[i].value ^ t.eval_alpha_shares[i].value;
-            let x_bit = ((0b1010 >> i) & 1) != 0;
-            let masked_bit = x_bit ^ alpha_full;
-            if masked_bit {
-                assert_eq!(
-                    t.gen_alpha_labels[i],
-                    t.eval_alpha_labels[i] ^ t.delta_a.as_block()
-                );
-            } else {
-                assert_eq!(t.gen_alpha_labels[i], t.eval_alpha_labels[i]);
-            }
+        .verify(delta_b);
+        AuthBitShare {
+            key: pa_share.key,
+            mac: pb_share.mac,
+            value: pb_share.value,
         }
+        .verify(delta_a);
     }
 
+    #[allow(dead_code)]
+    fn make_bcot() -> IdealBCot {
+        IdealBCot::new(42, 99)
+    }
+
+    // ===== Plan 1 shape test (compile-time + runtime struct access) =====
+
     #[test]
-    fn test_key_lsb_zero() {
+    fn test_leaky_triple_shape_field_access() {
+        // Prove the 10 fields exist and have the expected types by touching
+        // them via a default-initialized instance. This is NOT a semantic
+        // test — Plan 3 adds the real PROTO-09 / paper-invariant tests.
         let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(5, 4, 4, &mut bcot);
-        let t = ltp.generate(0, 0);
-        for s in &t.gen_alpha_shares {
-            assert!(!s.key.as_block().lsb(), "gen alpha key LSB must be 0");
-        }
-        for s in &t.eval_alpha_shares {
-            assert!(!s.key.as_block().lsb(), "eval alpha key LSB must be 0");
-        }
+        let delta_a = bcot.delta_a;
+        let delta_b = bcot.delta_b;
+        let triple = LeakyTriple {
+            n: 2,
+            m: 3,
+            gen_x_shares: vec![AuthBitShare::default(); 2],
+            gen_y_shares: vec![AuthBitShare::default(); 3],
+            gen_z_shares: vec![AuthBitShare::default(); 6],
+            eval_x_shares: vec![AuthBitShare::default(); 2],
+            eval_y_shares: vec![AuthBitShare::default(); 3],
+            eval_z_shares: vec![AuthBitShare::default(); 6],
+            delta_a,
+            delta_b,
+        };
+        assert_eq!(triple.n, 2);
+        assert_eq!(triple.m, 3);
+        assert_eq!(triple.gen_x_shares.len(), 2);
+        assert_eq!(triple.gen_y_shares.len(), 3);
+        assert_eq!(triple.gen_z_shares.len(), 6);
+        assert_eq!(triple.eval_x_shares.len(), 2);
+        assert_eq!(triple.eval_y_shares.len(), 3);
+        assert_eq!(triple.eval_z_shares.len(), 6);
+        let _ = &triple.delta_a;
+        let _ = &triple.delta_b;
     }
 
-    // ---- Task 1b tests ----
-
-    #[test]
-    fn test_correlated_bit_correctness() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(2, 4, 4, &mut bcot);
-        let t = ltp.generate(0b1010, 0b1100);
-        let alpha_full: Vec<bool> = (0..4)
-            .map(|i| t.gen_alpha_shares[i].value ^ t.eval_alpha_shares[i].value)
-            .collect();
-        let beta_full: Vec<bool> = (0..4)
-            .map(|j| t.gen_beta_shares[j].value ^ t.eval_beta_shares[j].value)
-            .collect();
-        for j in 0..4 {
-            for i in 0..4 {
-                // column-major: index = j*n+i
-                let k = j * 4 + i;
-                let full_corr =
-                    t.gen_correlated_shares[k].value ^ t.eval_correlated_shares[k].value;
-                assert_eq!(
-                    full_corr,
-                    alpha_full[i] && beta_full[j],
-                    "correlated[j={} * 4 + i={}] mismatch: expected {} AND {} = {}",
-                    j,
-                    i,
-                    alpha_full[i],
-                    beta_full[j],
-                    alpha_full[i] && beta_full[j]
-                );
-            }
-        }
-    }
+    // ===== Plan 2 / Plan 3 placeholders (bodies filled in later plans) =====
 
     #[test]
-    fn test_correlated_mac_invariants() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(6, 4, 4, &mut bcot);
-        let t = ltp.generate(0b1010, 0b1100);
-        // Pa's share is first arg, Pb's share is second. Use verify_cross_party — direct verify panics.
-        for k in 0..16 {
-            verify_cross_party(
-                &t.gen_correlated_shares[k],
-                &t.eval_correlated_shares[k],
-                &t.delta_a,
-                &t.delta_b,
-            );
-            verify_cross_party(
-                &t.gen_gamma_shares[k],
-                &t.eval_gamma_shares[k],
-                &t.delta_a,
-                &t.delta_b,
-            );
-        }
-    }
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_correlated_randomness_dimensions() { /* PROTO-04 — Plan 3 */ }
 
     #[test]
-    fn test_generate_dimensions_full() {
-        let mut bcot = make_bcot();
-        let mut ltp = LeakyTensorPre::new(0, 4, 4, &mut bcot);
-        let triple = ltp.generate(0b1010, 0b1100);
-        assert_eq!(triple.gen_correlated_shares.len(), 16);
-        assert_eq!(triple.gen_gamma_shares.len(), 16);
-        assert_eq!(triple.eval_correlated_shares.len(), 16);
-    }
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_c_a_c_b_xor_invariant() { /* PROTO-05 — Plan 3 */ }
 
     #[test]
-    fn test_large_n_m() {
-        let mut bcot = IdealBCot::new(7, 8);
-        let mut ltp = LeakyTensorPre::new(4, 8, 8, &mut bcot);
-        let _t = ltp.generate(0xFF, 0xAA); // must not panic
-    }
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_macro_outputs_xor_invariant() { /* PROTO-06 — Plan 3 */ }
+
+    #[test]
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_d_extraction_and_z_assembly() { /* PROTO-07 — Plan 3 */ }
+
+    #[test]
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_feq_passes_on_honest_run() { /* PROTO-08 — Plan 3 */ }
+
+    #[test]
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_leaky_triple_mac_invariants() { /* TEST-02 — Plan 3 */ }
+
+    #[test]
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_leaky_triple_product_invariant() { /* TEST-03 — Plan 3 */ }
+
+    #[test]
+    #[ignore = "Plan 2 — generate() body"]
+    fn test_key_lsb_zero_all_shares() { /* preserved invariant — Plan 3 */ }
 }

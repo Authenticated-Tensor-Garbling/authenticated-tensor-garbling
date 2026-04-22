@@ -33,6 +33,25 @@ impl Delta {
         Self::new(Block::from(rng.random::<[u8; 16]>()))
     }
 
+    /// Creates a new Delta with an explicit pointer-bit value.
+    ///
+    /// Used when the two parties' deltas must satisfy `lsb(Δ_A ⊕ Δ_B) == 1`
+    /// (paper §F requires this for Pi_LeakyTensor Construction 2's masked reveal).
+    #[inline]
+    pub fn new_with_lsb(mut value: Block, lsb_value: bool) -> Self {
+        value.set_lsb(lsb_value);
+        Self(value)
+    }
+
+    /// Generate a random Party-B Delta (LSB cleared to 0).
+    ///
+    /// Pairs with `Delta::random` (LSB=1) so that `lsb(delta_a ⊕ delta_b) == 1`,
+    /// which is required by Pi_LeakyTensor Construction 2's masked reveal.
+    #[inline]
+    pub fn random_b<R: Rng>(rng: &mut R) -> Self {
+        Self::new_with_lsb(Block::from(rng.random::<[u8; 16]>()), false)
+    }
+
     #[inline]
     pub fn mul_bool(self, value: bool) -> Block {
         if value {

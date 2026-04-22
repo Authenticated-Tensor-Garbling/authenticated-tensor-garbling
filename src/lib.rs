@@ -19,6 +19,7 @@ pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
 
 pub mod bcot;
+pub mod feq;
 pub mod leaky_tensor_pre;
 pub mod auth_tensor_pre;
 pub mod preprocessing;

@@ -49,7 +49,7 @@ impl IdealBCot {
         let mut rng_a = ChaCha12Rng::seed_from_u64(seed_a);
         let mut rng_b = ChaCha12Rng::seed_from_u64(seed_b);
         let delta_a = Delta::random(&mut rng_a);
-        let delta_b = Delta::random(&mut rng_b);
+        let delta_b = Delta::random_b(&mut rng_b);      // LSB=0 so lsb(delta_a ^ delta_b) == 1
         let rng = ChaCha12Rng::seed_from_u64(seed_a ^ seed_b);
         Self { delta_a, delta_b, rng }
     }
@@ -226,6 +226,17 @@ mod tests {
             assert!(!key.as_block().lsb(),
                 "Test 5b: Key LSB must be 0 at position {} (transfer_b_to_a)", i);
         }
+    }
+
+    /// Paper §F Construction 2 requires `lsb(Δ_A ⊕ Δ_B) == 1` for masked reveal to work.
+    /// Verified by `delta_a.lsb() == 1` (invariant) and `delta_b.lsb() == 0` (new for Phase 4).
+    #[test]
+    fn test_delta_xor_lsb_is_one() {
+        let bcot = IdealBCot::new(42, 99);
+        assert!(bcot.delta_a.as_block().lsb(), "Δ_A lsb must be 1");
+        assert!(!bcot.delta_b.as_block().lsb(), "Δ_B lsb must be 0 (Phase 4 change)");
+        let xor_lsb = bcot.delta_a.as_block().lsb() ^ bcot.delta_b.as_block().lsb();
+        assert!(xor_lsb, "Paper §F requires lsb(Δ_A ⊕ Δ_B) == 1");
     }
 
     /// Test 6: Stress test — IdealBCot can generate 256 COT pairs without panic.
