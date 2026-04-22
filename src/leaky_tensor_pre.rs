@@ -185,14 +185,139 @@ impl<'a> LeakyTensorPre<'a> {
             );
         }
 
-        // The following bindings are consumed by Task 2.2 (Step 3-5).
-        // Silence unused-variable warnings for values that Task 2.2 reads.
-        let _ = (&gen_x_shares, &eval_x_shares,
-                 &gen_r_shares, &eval_r_shares,
-                 &c_a, &c_b, &c_a_r, &c_b_r,
-                 &cot_x_a_to_b, &cot_x_b_to_a);
+        // ========================================================
+        // Step 3: Two tensor_macro calls (PROTO-06, D-13/D-14/D-15)
+        // ========================================================
+        //
+        // Wrap C_A and C_B as m×1 BlockMatrix column vectors for tensor_macro.
+        let mut t_a = BlockMatrix::new(self.m, 1);
+        let mut t_b = BlockMatrix::new(self.m, 1);
+        for j in 0..self.m {
+            t_a[j] = c_a[j];
+            t_b[j] = c_b[j];
+        }
 
-        unimplemented!("Step 3-5 — Task 2.2");
+        // Macro Call 1: A garbles under Δ_A, B evaluates.
+        //   Keys: cot_x_a_to_b.sender_keys (A's keys; LSB=0 by Key invariant).
+        //   MACs: cot_x_a_to_b.receiver_macs (B's MACs = K[0] XOR x_B * Δ_A; lsb=x_b since Δ_A.lsb()=1).
+        //   Explicit bits x_b_bits passed to evaluator for GGM tree navigation.
+        let (z_gb1, g_1) = tensor_garbler(
+            self.n, self.m, self.bcot.delta_a,
+            &cot_x_a_to_b.sender_keys,
+            &t_a,
+        );
+        let e_1 = tensor_evaluator(
+            self.n, self.m, &g_1,
+            &cot_x_a_to_b.receiver_macs,
+            &x_b_bits,
+            &t_b,
+        );
+
+        // Macro Call 2: B garbles under Δ_B, A evaluates.
+        //   Keys: cot_x_b_to_a.sender_keys (B's keys; LSB=0 by Key invariant).
+        //   MACs: cot_x_b_to_a.receiver_macs (A's MACs = K[0] XOR x_A * Δ_B; lsb != x_a since Δ_B.lsb()=0).
+        //   Explicit bits x_a_bits passed to evaluator — mandatory since MAC LSB is unreliable.
+        let (z_gb2, g_2) = tensor_garbler(
+            self.n, self.m, self.bcot.delta_b,
+            &cot_x_b_to_a.sender_keys,
+            &t_b,
+        );
+        let e_2 = tensor_evaluator(
+            self.n, self.m, &g_2,
+            &cot_x_b_to_a.receiver_macs,
+            &x_a_bits,
+            &t_a,
+        );
+
+        // ========================================================
+        // Step 4: Masked reveal — S_1, S_2, D (PROTO-07, D-16)
+        // ========================================================
+        //
+        // Wrap C_A^(R) and C_B^(R) (Vec<Block> length n*m, column-major k=j*n+i)
+        // as n×m BlockMatrix so the borrowed XOR impl can combine them with
+        // the n×m z_gb / e matrices.
+        let mut c_a_r_mat = BlockMatrix::new(self.n, self.m);
+        let mut c_b_r_mat = BlockMatrix::new(self.n, self.m);
+        for j in 0..self.m {
+            for i in 0..self.n {
+                let k = j * self.n + i;
+                c_a_r_mat[(i, j)] = c_a_r[k];
+                c_b_r_mat[(i, j)] = c_b_r[k];
+            }
+        }
+
+        let s_1: BlockMatrix = &(&z_gb1 ^ &e_2) ^ &c_a_r_mat;
+        let s_2: BlockMatrix = &(&z_gb2 ^ &e_1) ^ &c_b_r_mat;
+
+        // D = lsb(S_1) ⊕ lsb(S_2), stored column-major (k = j*n + i).
+        // Paper correctness precondition: lsb(Δ_A ⊕ Δ_B) == 1 (enforced by Plan 1
+        // via Δ_B.lsb() == 0 in IdealBCot::new; regression test
+        // bcot::tests::test_delta_xor_lsb_is_one).
+        let mut d_bits: Vec<bool> = Vec::with_capacity(self.n * self.m);
+        for j in 0..self.m {
+            for i in 0..self.n {
+                d_bits.push(s_1[(i, j)].lsb() ^ s_2[(i, j)].lsb());
+            }
+        }
+
+        // ========================================================
+        // Step 5: F_eq check + final Z assembly (PROTO-07 + PROTO-08, D-17)
+        // ========================================================
+        //
+        // L_1, L_2 are n×m BlockMatrix with L_1 = S_1 ⊕ D·Δ_A and L_2 = S_2 ⊕ D·Δ_B.
+        let mut l_1 = BlockMatrix::new(self.n, self.m);
+        let mut l_2 = BlockMatrix::new(self.n, self.m);
+        for j in 0..self.m {
+            for i in 0..self.n {
+                let k = j * self.n + i;
+                let d_term_a = if d_bits[k] { delta_a_block } else { Block::ZERO };
+                let d_term_b = if d_bits[k] { delta_b_block } else { Block::ZERO };
+                l_1[(i, j)] = s_1[(i, j)] ^ d_term_a;
+                l_2[(i, j)] = s_2[(i, j)] ^ d_term_b;
+            }
+        }
+
+        // In-process ideal F_eq. Panics with "F_eq abort: ..." on mismatch (D-04).
+        feq::check(&l_1, &l_2);
+
+        // itmac{Z}{Δ} = itmac{R}{Δ} ⊕ itmac{D}{Δ}.
+        // D is public ⇒ each party locally constructs a "trivial" share of D.
+        // Convention (RESEARCH.md Pattern 4 / A1): gen owns the bit value with
+        // ZERO key/mac; eval's mac absorbs the Δ_B mass so that the cross-party
+        // verify_cross_party predicate still holds after Add-combining with R.
+        // If TEST-02 (Plan 3) fails, revisit this convention — the swap is local
+        // to these two lines and does not ripple further.
+        let gen_z_shares: Vec<AuthBitShare> = (0..(self.n * self.m)).map(|k| {
+            let gen_d = AuthBitShare {
+                key:   Key::default(),
+                mac:   Mac::default(),
+                value: d_bits[k],
+            };
+            gen_r_shares[k] + gen_d
+        }).collect();
+
+        let eval_z_shares: Vec<AuthBitShare> = (0..(self.n * self.m)).map(|k| {
+            let mac_block = if d_bits[k] { delta_b_block } else { Block::ZERO };
+            let eval_d = AuthBitShare {
+                key:   Key::default(),
+                mac:   Mac::new(mac_block),
+                value: false,
+            };
+            eval_r_shares[k] + eval_d
+        }).collect();
+
+        LeakyTriple {
+            n: self.n,
+            m: self.m,
+            gen_x_shares,
+            gen_y_shares,
+            gen_z_shares,
+            eval_x_shares,
+            eval_y_shares,
+            eval_z_shares,
+            delta_a: self.bcot.delta_a,
+            delta_b: self.bcot.delta_b,
+        }
     }
 }
 

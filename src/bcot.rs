@@ -56,17 +56,21 @@ impl IdealBCot {
 
     /// Party A is the sender; Party B is the receiver with choice bits.
     ///
-    /// A's correlation key is delta_b.
+    /// Same-delta convention: A's correlation key is delta_a (A's own global key).
     /// For each choice bit b:
     ///   - A generates K[0] (LSB cleared to 0)
-    ///   - B receives mac = K[0] XOR b*delta_b  (i.e., K[0].auth(b, delta_b))
+    ///   - B receives mac = K[0] XOR b*delta_a  (i.e., K[0].auth(b, delta_a))
+    ///
+    /// Paper §F Construction 2 convention: each sender uses their own delta.
+    /// This gives mac.lsb() = b when delta_a.lsb() = 1, enabling GGM tree
+    /// navigation in Macro 1 (A garbles under delta_a, B evaluates).
     pub fn transfer_a_to_b(&mut self, choices: &[bool]) -> BcotOutput {
         let mut sender_keys = Vec::with_capacity(choices.len());
         let mut receiver_macs = Vec::with_capacity(choices.len());
 
         for &b in choices {
             let k0 = Key::new(Block::random(&mut self.rng));
-            let mac = k0.auth(b, &self.delta_b);
+            let mac = k0.auth(b, &self.delta_a);
             sender_keys.push(k0);
             receiver_macs.push(mac);
         }
@@ -80,17 +84,21 @@ impl IdealBCot {
 
     /// Party B is the sender; Party A is the receiver with choice bits.
     ///
-    /// B's correlation key is delta_a.
+    /// Same-delta convention: B's correlation key is delta_b (B's own global key).
     /// For each choice bit b:
     ///   - B generates K[0] (LSB cleared to 0)
-    ///   - A receives mac = K[0] XOR b*delta_a  (i.e., K[0].auth(b, delta_a))
+    ///   - A receives mac = K[0] XOR b*delta_b  (i.e., K[0].auth(b, delta_b))
+    ///
+    /// Since delta_b.lsb() = 0, mac.lsb() != b for choice bit b=1. Downstream
+    /// callers that need choice bits for GGM tree navigation must use explicit
+    /// bit vectors rather than inferring from mac.lsb().
     pub fn transfer_b_to_a(&mut self, choices: &[bool]) -> BcotOutput {
         let mut sender_keys = Vec::with_capacity(choices.len());
         let mut receiver_macs = Vec::with_capacity(choices.len());
 
         for &b in choices {
             let k0 = Key::new(Block::random(&mut self.rng));
-            let mac = k0.auth(b, &self.delta_a);
+            let mac = k0.auth(b, &self.delta_b);
             sender_keys.push(k0);
             receiver_macs.push(mac);
         }
@@ -131,7 +139,7 @@ mod tests {
     use super::*;
 
     /// Test 1: transfer_a_to_b with all-false choices.
-    /// When b=false, mac = K[0] XOR 0 = K[0], so receiver_mac == sender_key block.
+    /// Same-delta convention: A uses delta_a. When b=false, mac = K[0] XOR 0 = K[0].
     #[test]
     fn test_transfer_a_to_b_all_false() {
         let mut bcot = IdealBCot::new(42, 99);
@@ -139,7 +147,7 @@ mod tests {
         let out = bcot.transfer_a_to_b(&choices);
 
         for (i, &b) in choices.iter().enumerate() {
-            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_b);
+            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_a);
             assert_eq!(out.receiver_macs[i], want_mac,
                 "Test 1: MAC mismatch at position {}", i);
             // When b=false, mac block == key block
@@ -149,7 +157,7 @@ mod tests {
     }
 
     /// Test 2: transfer_a_to_b with all-true choices.
-    /// When b=true, mac = K[0] XOR delta_b, so mac block == key block XOR delta_b.
+    /// Same-delta convention: A uses delta_a. When b=true, mac = K[0] XOR delta_a.
     #[test]
     fn test_transfer_a_to_b_all_true() {
         let mut bcot = IdealBCot::new(42, 99);
@@ -157,18 +165,18 @@ mod tests {
         let out = bcot.transfer_a_to_b(&choices);
 
         for (i, &b) in choices.iter().enumerate() {
-            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_b);
+            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_a);
             assert_eq!(out.receiver_macs[i], want_mac,
                 "Test 2: MAC mismatch at position {}", i);
-            // When b=true, mac block == key block XOR delta_b
-            let expected_block = out.sender_keys[i].as_block() ^ bcot.delta_b.as_block();
+            // When b=true, mac block == key block XOR delta_a
+            let expected_block = out.sender_keys[i].as_block() ^ bcot.delta_a.as_block();
             assert_eq!(*out.receiver_macs[i].as_block(), expected_block,
-                "Test 2: receiver_mac should equal sender_key XOR delta_b at position {}", i);
+                "Test 2: receiver_mac should equal sender_key XOR delta_a at position {}", i);
         }
     }
 
     /// Test 3: transfer_b_to_a with mixed choices.
-    /// Verify mac == key XOR bit*delta_a for each position.
+    /// Same-delta convention: B uses delta_b. Verify mac == key XOR bit*delta_b.
     #[test]
     fn test_transfer_b_to_a_mixed() {
         let mut bcot = IdealBCot::new(42, 99);
@@ -176,13 +184,14 @@ mod tests {
         let out = bcot.transfer_b_to_a(&choices);
 
         for (i, &b) in choices.iter().enumerate() {
-            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_a);
+            let want_mac = out.sender_keys[i].auth(b, &bcot.delta_b);
             assert_eq!(out.receiver_macs[i], want_mac,
                 "Test 3: MAC mismatch at position {} (choice={})", i, b);
         }
     }
 
     /// Test 4: All returned AuthBitShares pass verify() with correct delta.
+    /// Same-delta convention: transfer_a_to_b uses delta_a; transfer_b_to_a uses delta_b.
     #[test]
     fn test_auth_bit_shares_verify() {
         let mut bcot = IdealBCot::new(123, 456);
@@ -192,19 +201,17 @@ mod tests {
         let out_a = bcot.transfer_a_to_b(&choices_a);
         let out_b = bcot.transfer_b_to_a(&choices_b);
 
-        // A holds key, verified against delta_b
+        // A holds key, B holds mac = key.auth(bit, delta_a) — verify against delta_a
         let shares_a = IdealBCot::output_to_auth_bit_shares_a_holds_key(&out_a);
         for (i, share) in shares_a.iter().enumerate() {
-            // share.key is A's key, share.mac = key.auth(bit, delta_b)
-            // verify() checks: share.mac == share.key.auth(share.bit(), delta)
-            share.verify(&bcot.delta_b);
+            share.verify(&bcot.delta_a);
             assert_eq!(share.value, choices_a[i], "Test 4a: bit mismatch at position {}", i);
         }
 
-        // B holds key (from transfer_b_to_a), verified against delta_a
+        // B holds key, A holds mac = key.auth(bit, delta_b) — verify against delta_b
         let shares_b = IdealBCot::output_to_auth_bit_shares_a_holds_key(&out_b);
         for (i, share) in shares_b.iter().enumerate() {
-            share.verify(&bcot.delta_a);
+            share.verify(&bcot.delta_b);
             assert_eq!(share.value, choices_b[i], "Test 4b: bit mismatch at position {}", i);
         }
     }
@@ -253,13 +260,13 @@ mod tests {
         assert_eq!(out_b.sender_keys.len(), 256, "Test 6b: expected 256 sender keys from transfer_b_to_a");
         assert_eq!(out_b.receiver_macs.len(), 256, "Test 6b: expected 256 receiver macs from transfer_b_to_a");
 
-        // Spot-check a few MACs
+        // Spot-check a few MACs (same-delta convention: a_to_b uses delta_a, b_to_a uses delta_b)
         for i in [0, 64, 128, 192, 255] {
             let b = choices[i];
-            let want_a = out_a.sender_keys[i].auth(b, &bcot.delta_b);
+            let want_a = out_a.sender_keys[i].auth(b, &bcot.delta_a);
             assert_eq!(out_a.receiver_macs[i], want_a,
                 "Test 6a: MAC mismatch at position {}", i);
-            let want_b = out_b.sender_keys[i].auth(b, &bcot.delta_a);
+            let want_b = out_b.sender_keys[i].auth(b, &bcot.delta_b);
             assert_eq!(out_b.receiver_macs[i], want_b,
                 "Test 6b: MAC mismatch at position {}", i);
         }
