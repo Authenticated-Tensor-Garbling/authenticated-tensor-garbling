@@ -407,4 +407,81 @@ mod tests {
         // Must panic with "MAC mismatch in share" inside two_to_one_combine Step B.
         let _ = two_to_one_combine(t0, &t1);
     }
+
+    #[test]
+    fn test_combine_full_bucket_product_invariant() {
+        // TEST-05 complement: verify the iterative fold in combine_leaky_triples produces
+        // a tensor triple that still satisfies the product invariant over a full bucket
+        // (B = bucket_size_for(1) = 40). Catches regressions in the fold wrapper beyond
+        // the two-triple unit test.
+        let n = 4;
+        let m = 4;
+        let b = bucket_size_for(1); // 40 (SSP fallback for ell = 1)
+        assert_eq!(b, 40, "bucket_size_for(1) must return SSP = 40 per D-09");
+
+        let triples = make_triples(n, m, b);
+        let (gen_out, eval_out) = combine_leaky_triples(triples, b, n, m, 1, 0);
+
+        // delta invariants preserved through the fold
+        assert_eq!(gen_out.alpha_auth_bit_shares.len(), n);
+        assert_eq!(gen_out.beta_auth_bit_shares.len(), m);
+        assert_eq!(gen_out.correlated_auth_bit_shares.len(), n * m);
+        assert_eq!(eval_out.correlated_auth_bit_shares.len(), n * m);
+
+        // MAC invariant on every output share
+        for i in 0..n {
+            verify_cross_party(
+                &gen_out.alpha_auth_bit_shares[i],
+                &eval_out.alpha_auth_bit_shares[i],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for j in 0..m {
+            verify_cross_party(
+                &gen_out.beta_auth_bit_shares[j],
+                &eval_out.beta_auth_bit_shares[j],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &gen_out.correlated_auth_bit_shares[k],
+                &eval_out.correlated_auth_bit_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+
+        // Product invariant after B = 40 iterative folds
+        let x_full: Vec<bool> = (0..n)
+            .map(|i| {
+                gen_out.alpha_auth_bit_shares[i].value
+                    ^ eval_out.alpha_auth_bit_shares[i].value
+            })
+            .collect();
+        let y_full: Vec<bool> = (0..m)
+            .map(|j| {
+                gen_out.beta_auth_bit_shares[j].value
+                    ^ eval_out.beta_auth_bit_shares[j].value
+            })
+            .collect();
+        for j in 0..m {
+            for i in 0..n {
+                let k = j * n + i;
+                let z_full = gen_out.correlated_auth_bit_shares[k].value
+                    ^ eval_out.correlated_auth_bit_shares[k].value;
+                assert_eq!(
+                    z_full,
+                    x_full[i] & y_full[j],
+                    "full-bucket product invariant failed at (i={}, j={}, k={}, B={})",
+                    i,
+                    j,
+                    k,
+                    b
+                );
+            }
+        }
+    }
 }
