@@ -5,6 +5,117 @@ use crate::{
     sharing::AuthBitShare,
 };
 
+/// Perform one two-to-one combining step from paper Construction 3
+/// (references/appendix_krrw_pre.tex §3.1 lines 415-444).
+///
+/// Inputs: two LeakyTriples `prime` (consumed) and `dprime` (borrowed), both with the
+/// same (n, m, delta_a, delta_b). Output: a single combined LeakyTriple.
+///
+/// Algorithm (paper lines 427-443):
+///   x := x' XOR x''                           (D-01)
+///   y := y'                                   (D-02)
+///   d := y' XOR y'' (revealed with MACs)      (D-05, D-06)
+///   Z := Z' XOR Z'' XOR itmac{x''}{Δ} ⊗ d    (D-03, D-04)
+///
+/// The `itmac{x''}{Δ} ⊗ d` term is computed locally since d is public (paper line
+/// 437). For each (i, j), the IT-MAC share at column-major index j*n+i is
+/// `dprime.gen_x_shares[i]` if d[j] == 1, else the zero share
+/// `AuthBitShare::default()`.
+///
+/// Panics: "MAC mismatch in share" if any assembled d share fails MAC verification
+/// (in-process substitute for the paper's "publicly reveal with appropriate MACs").
+pub(crate) fn two_to_one_combine(
+    prime: LeakyTriple,
+    dprime: &LeakyTriple,
+) -> LeakyTriple {
+    // Precondition: same (n, m, delta_a, delta_b). The outer combine_leaky_triples
+    // already asserts this, but re-assert for unit-test safety (per 05-CONTEXT D-11).
+    assert_eq!(prime.n, dprime.n, "two_to_one_combine: n mismatch");
+    assert_eq!(prime.m, dprime.m, "two_to_one_combine: m mismatch");
+    assert_eq!(
+        prime.delta_a.as_block(),
+        dprime.delta_a.as_block(),
+        "two_to_one_combine: delta_a mismatch"
+    );
+    assert_eq!(
+        prime.delta_b.as_block(),
+        dprime.delta_b.as_block(),
+        "two_to_one_combine: delta_b mismatch"
+    );
+    let n = prime.n;
+    let m = prime.m;
+    let delta_a = prime.delta_a;
+    let delta_b = prime.delta_b;
+
+    // ---- Step A: assemble d shares (paper line 428: d := y' XOR y'') ----
+    // AuthBitShare + AuthBitShare is XOR field-wise per src/sharing.rs:66-77.
+    let gen_d: Vec<AuthBitShare> = (0..m)
+        .map(|j| prime.gen_y_shares[j] + dprime.gen_y_shares[j])
+        .collect();
+    let eval_d: Vec<AuthBitShare> = (0..m)
+        .map(|j| prime.eval_y_shares[j] + dprime.eval_y_shares[j])
+        .collect();
+
+    // ---- Step B: MAC-verify d and extract d bits (paper line 428) ----
+    // In-process substitute for "publicly reveal with appropriate MACs".
+    let mut d_bits: Vec<bool> = Vec::with_capacity(m);
+    for j in 0..m {
+        verify_cross_party(&gen_d[j], &eval_d[j], &delta_a, &delta_b);
+        d_bits.push(gen_d[j].value ^ eval_d[j].value);
+    }
+
+    // ---- Step C: x = x' XOR x'' (paper line 427, D-01) ----
+    let gen_x: Vec<AuthBitShare> = (0..n)
+        .map(|i| prime.gen_x_shares[i] + dprime.gen_x_shares[i])
+        .collect();
+    let eval_x: Vec<AuthBitShare> = (0..n)
+        .map(|i| prime.eval_x_shares[i] + dprime.eval_x_shares[i])
+        .collect();
+
+    // ---- Step D: Z = Z' XOR Z'' XOR (x'' tensor d), paper line 443 ----
+    // Column-major nested loop: outer j in 0..m, inner i in 0..n, k = j*n + i.
+    // Zero-share when d[j] == 0 (D-03).
+    let zero_share = AuthBitShare::default();
+    let mut gen_z: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+    let mut eval_z: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+    for j in 0..m {
+        for i in 0..n {
+            let k = j * n + i;
+            // Rightmost term: x''_i if d[j] else ZERO
+            let dx_gen = if d_bits[j] {
+                dprime.gen_x_shares[i]
+            } else {
+                zero_share
+            };
+            let dx_eval = if d_bits[j] {
+                dprime.eval_x_shares[i]
+            } else {
+                zero_share
+            };
+            gen_z.push(prime.gen_z_shares[k] + dprime.gen_z_shares[k] + dx_gen);
+            eval_z.push(prime.eval_z_shares[k] + dprime.eval_z_shares[k] + dx_eval);
+        }
+    }
+
+    // ---- Step E: y = y' (paper line 427, D-02) ----
+    // Move the vectors out of prime (it is owned); no clone needed.
+    let gen_y = prime.gen_y_shares;
+    let eval_y = prime.eval_y_shares;
+
+    LeakyTriple {
+        n,
+        m,
+        delta_a,
+        delta_b,
+        gen_x_shares: gen_x,
+        gen_y_shares: gen_y,
+        gen_z_shares: gen_z,
+        eval_x_shares: eval_x,
+        eval_y_shares: eval_y,
+        eval_z_shares: eval_z,
+    }
+}
+
 /// Compute the bucket size B for Pi_aTensor (Construction 3, Theorem 1).
 ///
 /// Formula: `B = floor(SSP / log2(ell)) + 1` for `ell >= 2`, where SSP = 40.
