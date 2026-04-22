@@ -51,12 +51,17 @@ Tests like `test_correlated_bit_correctness` verify that `gen_corr XOR eval_corr
 - ✓ Delta LSB = 1 invariant — existing
 - ✓ Shared IdealBCot for same Δ across triples — existing
 
+### Validated
+
+**Phase 3 — Generalized Tensor Macro (2026-04-22):**
+- ✓ PROTO-01: Implemented `tensor_garbler` (Construction 1 garbler side) — GGM tree expansion, emits level + leaf ciphertexts, returns Z_garbler
+- ✓ PROTO-02: Implemented `tensor_evaluator` (Construction 1 evaluator side) — reconstructs untraversed subtree, returns Z_evaluator
+- ✓ PROTO-03: `Z_garbler XOR Z_evaluator == a ⊗ T` verified by 10-test TDD battery (9 (n,m) tuples + fixed-seed regression)
+- ✓ TEST-01: Paper-invariant test battery in `tensor_macro::tests` — 10 passed / 0 failed
+
 ### Active
 
 **Protocol Correctness:**
-- [ ] PROTO-01: Implement Generalized Tensor Macro (Construction 1) — GGM tree expansion, garbler and evaluator roles
-- [ ] PROTO-02: Implement Pi_LeakyTensor (Construction 2) using the tensor macro and bCOT randomness
-- [ ] PROTO-03: Implement in-process F_eq for Pi_LeakyTensor consistency check
 - [ ] PROTO-04: Implement correct Pi_aTensor combining (§3.2): d = y' ⊕ y'', Z = Z' ⊕ Z'' ⊕ x'' ⊗ d
 - [ ] PROTO-05: Implement Pi_aTensor' (Construction 4): permutation bucketing with bucket size B = 1 + ceil(SSP / log2(n * ℓ))
 - [ ] PROTO-06: Fix bucket size formula to use ℓ (number of output triples) not n*m
@@ -83,10 +88,11 @@ Tests like `test_correlated_bit_correctness` verify that `gen_corr XOR eval_corr
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Implement Pi_LeakyTensor via GGM tree macro | Paper spec; current direct-AND approach is not the protocol | Pending |
-| In-process F_eq (ideal) | Matches IdealBCot pattern; no networking needed | Pending |
+| Implement Pi_LeakyTensor via GGM tree macro | Paper spec; current direct-AND approach is not the protocol | Done (Phase 3) |
+| In-process F_eq (ideal) | Matches IdealBCot pattern; no networking needed | Pending (Phase 4) |
 | Pi_aTensor' (permutation bucketing) over Pi_aTensor | Better bucket size (log(nℓ) vs log(ℓ)), user explicitly wants it | Pending |
 | Keep TensorFpreGen/Eval interface | Online phase already correct; minimize scope | Pending |
+| tensor_macro as standalone pub(crate) module | No dependency on leaky_tensor_pre or preprocessing — clean separation | Done (Phase 3) |
 
 ## Evolution
 
@@ -106,4 +112,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-21 after Phase 1 completion (M1 Primitives & Sharing Cleanup)*
+*Last updated: 2026-04-22 after Phase 3 completion (M2 Generalized Tensor Macro — Construction 1)*
