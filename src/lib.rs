@@ -12,6 +12,7 @@ pub mod tensor_pre;
 pub mod tensor_gen;
 pub mod tensor_eval;
 pub mod tensor_ops;
+pub mod tensor_macro;
 
 pub mod auth_tensor_fpre;
 pub mod auth_tensor_gen;

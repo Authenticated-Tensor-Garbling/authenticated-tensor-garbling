@@ -79,7 +79,7 @@ impl TensorProductGen {
 
             out.with_subrows(self.chunking_factor * s, slice_size, |part| {
     
-                let (gen_seeds, levels) = gen_populate_seeds_mem_optimized(&slice.as_view(), cipher, delta);
+                let (gen_seeds, levels) = gen_populate_seeds_mem_optimized(slice.elements_slice(), cipher, delta);
                 let gen_cts = gen_unary_outer_product(&gen_seeds, &y, part, cipher);
     
                 chunk_levels.push(levels);

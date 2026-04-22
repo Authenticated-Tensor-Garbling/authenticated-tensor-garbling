@@ -75,6 +75,15 @@ impl<T: MatrixElement> TypedMatrix<T> {
         self.cols
     }
 
+    /// Returns the underlying column-major element slice.
+    ///
+    /// Length is `rows * cols`. Element at 2-D coordinate `(i, j)` is stored at
+    /// linear index `j * rows + i`. Primarily used by kernels that treat a
+    /// column vector (`cols == 1`) as a flat `&[T]`.
+    pub(crate) fn elements_slice(&self) -> &[T] {
+        &self.elements
+    }
+
     pub fn as_view(&self) -> MatrixViewRef<'_, T> {
         MatrixViewRef::new(&self.elements[..], self.rows, self.cols)
     }
