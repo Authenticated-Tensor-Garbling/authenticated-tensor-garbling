@@ -305,14 +305,8 @@ impl<'a> LeakyTensorPre<'a> {
             gen_r_shares[k] + gen_d
         }).collect();
 
-        let eval_z_shares: Vec<AuthBitShare> = (0..(self.n * self.m)).map(|k| {
-            let eval_d = AuthBitShare {
-                key:   Key::default(),
-                mac:   Mac::default(),
-                value: false,
-            };
-            eval_r_shares[k] + eval_d
-        }).collect();
+        // eval side: evaluator holds no D contribution (D is public; eval_z = eval_r only).
+        let eval_z_shares: Vec<AuthBitShare> = eval_r_shares;
 
         LeakyTriple {
             n: self.n,
