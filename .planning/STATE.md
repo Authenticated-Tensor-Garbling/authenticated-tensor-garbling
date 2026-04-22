@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: ready_to_plan
 stopped_at: Phase 4 context gathered
-last_updated: "2026-04-22T05:31:39.419Z"
-last_activity: 2026-04-22
+last_updated: "2026-04-22T06:34:21.545Z"
+last_activity: 2026-04-22 -- Phase --phase execution started
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 7
+  completed_phases: 3
+  total_plans: 10
   completed_plans: 14
-  percent: 100
+  percent: 50
 ---
 
 # Project State
@@ -21,11 +21,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21)
 
 **Core value:** Correct paper-faithful implementation of Pi_LeakyTensor and Pi_aTensor — both the protocol mechanics (GGM tree macro, F_eq, correct combining) and the security properties (triple structure, combining correctness, bucket size formula).
-**Current focus:** Phase --phase — 03
+**Current focus:** Phase --phase — 04
 
 ## Current Position
 
-Phase: 4
+Phase: 5
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-04-22
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 14
+- Total plans completed: 17
 - Average duration: —
 - Total execution time: —
 
@@ -47,6 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 | 01 | 7 | - | - |
 | 02 | 4 | - | - |
 | 03 | 3 | - | - |
+| 04 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -89,4 +90,4 @@ Last session: --stopped-at
 Stopped at: Phase 4 context gathered
 Resume file: --resume-file
 
-**Planned Phase:** 3 (M2 Generalized Tensor Macro (Construction 1)) — 3 plans — 2026-04-22T02:50:42.926Z
+**Planned Phase:** 4 (M2 Pi_LeakyTensor + F_eq (Construction 2)) — 3 plans — 2026-04-22T06:27:31.281Z

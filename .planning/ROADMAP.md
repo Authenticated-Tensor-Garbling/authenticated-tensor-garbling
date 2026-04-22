@@ -80,9 +80,9 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   4. `LeakyTriple` struct contains exactly `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})`; gamma bits and wire labels are removed
   5. Tests verify paper invariants: IT-MAC equation `mac = key XOR bit·Δ` holds on every share, and `XOR(gen, eval)` of `Z` equals tensor product of `XOR(gen, eval)` of `x` and `y`
 **Plans**: 3 plans
-  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
-  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
-  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
+  - [x] 04-01-PLAN.md — Scaffolding: fix Δ_B LSB (paper §F invariant), create src/feq.rs with check() + 3 panic-path tests, rewrite LeakyTriple to 10-field paper shape, stub generate() to no-arg signature, cascade field renames through combine_leaky_triples and run_preprocessing (PROTO-04 partial, PROTO-08 module, PROTO-09, TEST-04 unit)
+  - [x] 04-02-PLAN.md — Pi_LeakyTensor Construction 2 implementation: five bCOT batch pairs (x/y/R), inline C_A/C_B/C_A^(R)/C_B^(R), two tensor_garbler+tensor_evaluator calls, masked reveal (D = lsb(S_1)⊕lsb(S_2)), feq::check, itmac{Z}{Δ} = itmac{R}{Δ} ⊕ itmac{D}{Δ} (PROTO-04..08)
+  - [x] 04-03-PLAN.md — Paper-invariant test battery: correlated randomness dimensions, C_A ⊕ C_B identity, macro-output determinism regression, D extraction + Z assembly, honest F_eq pass, cross-party MAC invariant on x/y/z, z_full == x_full ⊗ y_full product invariant, tampered-transcript F_eq abort (PROTO-04..09, TEST-02..04)
 
 ### Phase 5: M2 Pi_aTensor Correct Combining (Construction 3)
 **Goal**: `Pi_aTensor` combines B leaky triples into one authenticated tensor triple using the paper's two-to-one procedure (keep `x = x'`, `y = y'`, reveal `d = y' ⊕ y''`, compute `Z = Z' ⊕ Z'' ⊕ x'' ⊗ d`) with MAC verification on `d`, and the bucket size formula uses the correct `ℓ` (number of output triples).
