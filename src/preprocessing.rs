@@ -59,7 +59,7 @@ pub struct TensorFpreEval {
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor, Construction 3).
 ///
 /// Generates `count` authenticated tensor triples using:
-///   1. bucket_size_for(n, m) leaky triples per output triple (from Pi_LeakyTensor)
+///   1. bucket_size_for(count) leaky triples per output triple (from Pi_LeakyTensor)
 ///   2. Pi_aTensor bucketing combiner to amplify security
 ///
 /// CRITICAL: ONE shared IdealBCot is created before the generation loop. All
@@ -84,7 +84,7 @@ pub fn run_preprocessing(
 ) -> (TensorFpreGen, TensorFpreEval) {
     assert_eq!(count, 1, "Phase 1: only count=1 is supported; batch output requires Vec return");
 
-    let bucket_size = bucket_size_for(n, m);
+    let bucket_size = bucket_size_for(count);
     let total_leaky = bucket_size * count;
 
     // ONE shared IdealBCot for all triples — ensures all share the same delta_a and delta_b.
