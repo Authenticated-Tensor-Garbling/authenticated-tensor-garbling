@@ -3,19 +3,26 @@ use crate::{
     leaky_tensor_pre::LeakyTriple,
 };
 
-/// Compute the bucket size B for Pi_aTensor (Construction 3).
+/// Compute the bucket size B for Pi_aTensor (Construction 3, Theorem 1).
 ///
-/// Formula: B = floor(SSP / log2(n * m)) + 1
-/// where SSP = 40 (statistical security parameter).
+/// Formula: `B = floor(SSP / log2(ell)) + 1` for `ell >= 2`, where SSP = 40.
+/// For `ell <= 1`, the bucketing amplification is degenerate; fall back to
+/// the naive combining bound of B = SSP (paper §3.1 preamble).
+///
+/// Parameters:
+///   ell — number of OUTPUT authenticated tensor triples desired (NOT n*m).
 ///
 /// Examples:
-///   bucket_size_for(16, 16)   = floor(40 / 8)  + 1 = 6
-///   bucket_size_for(128, 128) = floor(40 / 14) + 1 = 3
-///   bucket_size_for(4, 4)     = floor(40 / 4)  + 1 = 11
-pub fn bucket_size_for(n: usize, m: usize) -> usize {
+///   bucket_size_for(1)    = 40   (naive fallback)
+///   bucket_size_for(2)    = 41   (log2 = 1, so 40 + 1)
+///   bucket_size_for(16)   = 11   (floor(40/4) + 1)
+///   bucket_size_for(128)  = 6    (floor(40/7) + 1)
+///   bucket_size_for(1024) = 5    (floor(40/10) + 1)
+pub fn bucket_size_for(ell: usize) -> usize {
     const SSP: usize = 40;
-    let ell = n * m;
-    // floor(log2(ell)) for ell >= 2
+    if ell <= 1 {
+        return SSP;
+    }
     let log2_ell = (usize::BITS - ell.leading_zeros() - 1) as usize;
     SSP / log2_ell + 1
 }
@@ -153,9 +160,16 @@ mod tests {
 
     #[test]
     fn test_bucket_size_formula() {
-        assert_eq!(bucket_size_for(16, 16), 6);
-        assert_eq!(bucket_size_for(128, 128), 3);
-        assert_eq!(bucket_size_for(4, 4), 11);
+        assert_eq!(bucket_size_for(2), 41);    // log2(2) = 1, 40/1 + 1
+        assert_eq!(bucket_size_for(16), 11);   // log2(16) = 4, 40/4 + 1
+        assert_eq!(bucket_size_for(128), 6);   // log2(128) = 7, 40/7 + 1
+        assert_eq!(bucket_size_for(1024), 5);  // log2(1024) = 10, 40/10 + 1
+    }
+
+    #[test]
+    fn test_bucket_size_formula_edge_cases() {
+        assert_eq!(bucket_size_for(0), 40, "ell=0 must return SSP fallback");
+        assert_eq!(bucket_size_for(1), 40, "ell=1 must return SSP fallback");
     }
 
     #[test]
@@ -174,7 +188,7 @@ mod tests {
     fn test_full_pipeline_no_panic() {
         let n = 4;
         let m = 4;
-        let b = bucket_size_for(n, m);
+        let b = bucket_size_for(1);
         let triples = make_triples(n, m, b);
         let (fpre_gen, fpre_eval) = combine_leaky_triples(triples, b, n, m, 1, 99);
         let _gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
