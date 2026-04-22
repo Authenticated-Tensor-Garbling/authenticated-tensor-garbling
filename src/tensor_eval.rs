@@ -154,12 +154,14 @@ impl TensorProductEval {
     pub fn evaluate_final_outer_product(
         &mut self,
     ) -> BlockMatrix {
-       
-        let eval_alpha_beta = BlockMatrix::constant(self.n, self.m, Block::default());
-        
+        // NOTE: In the semi-honest variant the evaluator's correlated share
+        // (alpha ⊗ beta) is always zero — alpha_labels is never populated from
+        // preprocessing data, so there is no eval_alpha_beta term to XOR in here.
+        // The authenticated path (auth_tensor_eval.rs) handles the non-zero case
+        // via correlated_auth_bit_shares[j*n+i].mac.
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ eval_alpha_beta[(i, j)];
+                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)];
             }
         }
 
