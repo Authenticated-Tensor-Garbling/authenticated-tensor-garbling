@@ -322,4 +322,166 @@ mod tests {
         let _ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         // No panic = success
     }
+
+    #[test]
+    fn test_two_to_one_combine_product_invariant() {
+        // TEST-05 happy path: two concrete leaky triples, combine once, verify the paper's
+        // product invariant Z_combined[j*n+i] = x_combined[i] AND y_combined[j]
+        // (Construction 3 correctness, appendix_krrw_pre.tex line 443).
+        let n = 4;
+        let m = 4;
+        let triples = make_triples(n, m, 2);
+        let t0 = triples[0].clone();
+        let t1_ref = &triples[1];
+
+        let combined = two_to_one_combine(t0, t1_ref);
+
+        // MAC invariant on every combined share (sanity that d-reveal didn't corrupt shares).
+        for i in 0..n {
+            verify_cross_party(
+                &combined.gen_x_shares[i],
+                &combined.eval_x_shares[i],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+        for j in 0..m {
+            verify_cross_party(
+                &combined.gen_y_shares[j],
+                &combined.eval_y_shares[j],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &combined.gen_z_shares[k],
+                &combined.eval_z_shares[k],
+                &combined.delta_a,
+                &combined.delta_b,
+            );
+        }
+
+        // Product invariant: Z_full[j*n+i] == x_full[i] AND y_full[j].
+        let x_full: Vec<bool> = (0..n)
+            .map(|i| combined.gen_x_shares[i].value ^ combined.eval_x_shares[i].value)
+            .collect();
+        let y_full: Vec<bool> = (0..m)
+            .map(|j| combined.gen_y_shares[j].value ^ combined.eval_y_shares[j].value)
+            .collect();
+        for j in 0..m {
+            for i in 0..n {
+                let k = j * n + i;
+                let z_full =
+                    combined.gen_z_shares[k].value ^ combined.eval_z_shares[k].value;
+                assert_eq!(
+                    z_full,
+                    x_full[i] & y_full[j],
+                    "TEST-05 product invariant failed at (i={}, j={}, k={})",
+                    i,
+                    j,
+                    k
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "MAC mismatch in share")]
+    fn test_two_to_one_combine_tampered_d_panics() {
+        // TEST-05 tamper path: flip one y'' value bit on the eval side without touching
+        // the MAC. The assembled d[0] share (d = y' XOR y'') now has inconsistent
+        // (value, mac, key) and verify_cross_party inside two_to_one_combine Step B
+        // detects the mismatch and panics. Matches the paper's "publicly reveal with
+        // appropriate MACs" abort semantics.
+        let n = 2;
+        let m = 2;
+        let triples = make_triples(n, m, 2);
+        let t0 = triples[0].clone();
+        let mut t1 = triples[1].clone();
+
+        // Tamper: flip the value bit of eval_y_shares[0] without updating the MAC.
+        // The assembled d share for j=0 will fail verify_cross_party.
+        t1.eval_y_shares[0].value = !t1.eval_y_shares[0].value;
+
+        // Must panic with "MAC mismatch in share" inside two_to_one_combine Step B.
+        let _ = two_to_one_combine(t0, &t1);
+    }
+
+    #[test]
+    fn test_combine_full_bucket_product_invariant() {
+        // TEST-05 complement: verify the iterative fold in combine_leaky_triples produces
+        // a tensor triple that still satisfies the product invariant over a full bucket
+        // (B = bucket_size_for(1) = 40). Catches regressions in the fold wrapper beyond
+        // the two-triple unit test.
+        let n = 4;
+        let m = 4;
+        let b = bucket_size_for(1); // 40 (SSP fallback for ell = 1)
+        assert_eq!(b, 40, "bucket_size_for(1) must return SSP = 40 per D-09");
+
+        let triples = make_triples(n, m, b);
+        let (gen_out, eval_out) = combine_leaky_triples(triples, b, n, m, 1, 0);
+
+        // delta invariants preserved through the fold
+        assert_eq!(gen_out.alpha_auth_bit_shares.len(), n);
+        assert_eq!(gen_out.beta_auth_bit_shares.len(), m);
+        assert_eq!(gen_out.correlated_auth_bit_shares.len(), n * m);
+        assert_eq!(eval_out.correlated_auth_bit_shares.len(), n * m);
+
+        // MAC invariant on every output share
+        for i in 0..n {
+            verify_cross_party(
+                &gen_out.alpha_auth_bit_shares[i],
+                &eval_out.alpha_auth_bit_shares[i],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for j in 0..m {
+            verify_cross_party(
+                &gen_out.beta_auth_bit_shares[j],
+                &eval_out.beta_auth_bit_shares[j],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &gen_out.correlated_auth_bit_shares[k],
+                &eval_out.correlated_auth_bit_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+
+        // Product invariant after B = 40 iterative folds
+        let x_full: Vec<bool> = (0..n)
+            .map(|i| {
+                gen_out.alpha_auth_bit_shares[i].value
+                    ^ eval_out.alpha_auth_bit_shares[i].value
+            })
+            .collect();
+        let y_full: Vec<bool> = (0..m)
+            .map(|j| {
+                gen_out.beta_auth_bit_shares[j].value
+                    ^ eval_out.beta_auth_bit_shares[j].value
+            })
+            .collect();
+        for j in 0..m {
+            for i in 0..n {
+                let k = j * n + i;
+                let z_full = gen_out.correlated_auth_bit_shares[k].value
+                    ^ eval_out.correlated_auth_bit_shares[k].value;
+                assert_eq!(
+                    z_full,
+                    x_full[i] & y_full[j],
+                    "full-bucket product invariant failed at (i={}, j={}, k={}, B={})",
+                    i,
+                    j,
+                    k,
+                    b
+                );
+            }
+        }
+    }
 }
