@@ -142,19 +142,22 @@ pub fn bucket_size_for(ell: usize) -> usize {
 
 /// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor, Construction 3).
 ///
-/// PRECONDITION: All triples MUST share the same delta_a and delta_b. This is guaranteed
-/// when run_preprocessing uses a single shared IdealBCot instance for all triple generations.
-/// Violated if each LeakyTensorPre owns a separate IdealBCot (which gives different deltas,
-/// breaking the XOR combination MAC invariant). An assertion enforces this at runtime.
+/// Implements the paper's two-to-one combining (references/appendix_krrw_pre.tex §3.1
+/// lines 415-444) iteratively: start with `triples[0]`, fold the remaining B-1 triples
+/// into the accumulator one at a time via `two_to_one_combine`.
 ///
-/// Algorithm (XOR combination):
-///   Keep first triple's alpha/beta/labels.
-///   XOR-combine all B triples' correlated shares.
-///   The XOR of B independent AuthBitShares with the same delta preserves the MAC invariant.
+/// PRECONDITION: All triples MUST share the same delta_a and delta_b. This is guaranteed
+/// when run_preprocessing uses a single shared IdealBCot instance. An assertion enforces
+/// this at runtime. If violated, the combining panics because XOR of shares under
+/// different deltas cannot preserve the MAC invariant mac = key XOR bit*delta.
+///
+/// Output shapes: alpha_auth_bit_shares (length n), beta_auth_bit_shares (length m),
+/// correlated_auth_bit_shares (length n*m, column-major j*n+i). Labels are stubbed to
+/// Vec::new() per Phase 4 D-07.
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
 /// chunking_factor: passed through to TensorFpreGen/Eval output.
-/// shuffle_seed: reserved for future use (Construction 3 calls for shuffling before bucketing).
+/// shuffle_seed: reserved for future Phase 6 (permutation bucketing, Construction 4).
 pub fn combine_leaky_triples(
     triples: Vec<LeakyTriple>,
     bucket_size: usize,
@@ -187,42 +190,43 @@ pub fn combine_leaky_triples(
         );
     }
 
-    // XOR-combine z shares across all B triples
-    let mut combined_gen_z = triples[0].gen_z_shares.clone();
-    let mut combined_eval_z = triples[0].eval_z_shares.clone();
-
-    for t in triples[1..].iter() {
-        for k in 0..(n * m) {
-            // column-major: index k = j*n+i
-            combined_gen_z[k] = combined_gen_z[k] + t.gen_z_shares[k];
-            combined_eval_z[k] = combined_eval_z[k] + t.eval_z_shares[k];
-        }
+    // Iterative fold per Construction 3: start with triples[0], combine each next
+    // triple into the accumulator via two_to_one_combine (paper line 474).
+    // (Clone triples[0] because LeakyTriple is not Copy — Rust ownership pitfall.)
+    let mut acc: LeakyTriple = triples[0].clone();
+    for next in triples.iter().skip(1) {
+        acc = two_to_one_combine(acc, next);
     }
 
-    // Keep first triple's x, y shares; stub labels to Vec::new() — Phase 5 stub per D-07
-    let t0 = &triples[0];
+    // The parameters n and m are passed through to the output structs; assert they
+    // agree with the combined triple shape to catch caller drift.
+    assert_eq!(acc.n, n, "combine_leaky_triples: n parameter disagrees with triple.n");
+    assert_eq!(acc.m, m, "combine_leaky_triples: m parameter disagrees with triple.m");
+
+    // Package the combined LeakyTriple into the preprocessing output structs.
+    // Labels stubbed to Vec::new() per Phase 4 D-07.
     (
         TensorFpreGen {
             n,
             m,
             chunking_factor,
             delta_a,
-            alpha_labels: Vec::new(), // Phase 5 stub — removed per D-07
-            beta_labels: Vec::new(),  // Phase 5 stub — removed per D-07
-            alpha_auth_bit_shares: t0.gen_x_shares.clone(),
-            beta_auth_bit_shares: t0.gen_y_shares.clone(),
-            correlated_auth_bit_shares: combined_gen_z,
+            alpha_labels: Vec::new(),
+            beta_labels: Vec::new(),
+            alpha_auth_bit_shares: acc.gen_x_shares,
+            beta_auth_bit_shares: acc.gen_y_shares,
+            correlated_auth_bit_shares: acc.gen_z_shares,
         },
         TensorFpreEval {
             n,
             m,
             chunking_factor,
             delta_b,
-            alpha_labels: Vec::new(), // Phase 5 stub — removed per D-07
-            beta_labels: Vec::new(),  // Phase 5 stub — removed per D-07
-            alpha_auth_bit_shares: t0.eval_x_shares.clone(),
-            beta_auth_bit_shares: t0.eval_y_shares.clone(),
-            correlated_auth_bit_shares: combined_eval_z,
+            alpha_labels: Vec::new(),
+            beta_labels: Vec::new(),
+            alpha_auth_bit_shares: acc.eval_x_shares,
+            beta_auth_bit_shares: acc.eval_y_shares,
+            correlated_auth_bit_shares: acc.eval_z_shares,
         },
     )
 }
