@@ -85,7 +85,7 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   - [x] 04-03-PLAN.md — Paper-invariant test battery: correlated randomness dimensions, C_A ⊕ C_B identity, macro-output determinism regression, D extraction + Z assembly, honest F_eq pass, cross-party MAC invariant on x/y/z, z_full == x_full ⊗ y_full product invariant, tampered-transcript F_eq abort (PROTO-04..09, TEST-02..04)
 
 ### Phase 5: M2 Pi_aTensor Correct Combining (Construction 3)
-**Goal**: `Pi_aTensor` combines B leaky triples into one authenticated tensor triple using the paper's two-to-one procedure (keep `x = x'`, `y = y'`, reveal `d = y' ⊕ y''`, compute `Z = Z' ⊕ Z'' ⊕ x'' ⊗ d`) with MAC verification on `d`, and the bucket size formula uses the correct `ℓ` (number of output triples).
+**Goal**: `Pi_aTensor` combines B leaky triples into one authenticated tensor triple using the paper's two-to-one procedure (`x = x' ⊕ x''`, `y = y'`, reveal `d = y' ⊕ y''`, compute `Z = Z' ⊕ Z'' ⊕ x'' ⊗ d`) with MAC verification on `d`, and the bucket size formula uses the correct `ℓ` (number of output triples).
 **Depends on**: Phase 4
 **Requirements**: PROTO-10, PROTO-11, PROTO-12, TEST-05
 **Success Criteria** (what must be TRUE):
@@ -94,9 +94,9 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   3. Iterative combining folds B leaky triples one at a time into a single authenticated triple
   4. Test verifies `Z_combined = Z' ⊕ Z'' ⊕ x'' ⊗ d` on two concrete leaky triples and confirms MAC on `d` rejects tampered values
 **Plans**: 3 plans
-  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
-  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
-  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
+  - [ ] 05-01-PLAN.md — Fix bucket_size_for signature (ell parameter) + add ell<=1 edge-case guard + update call sites in preprocessing.rs and tests (PROTO-12)
+  - [ ] 05-02-PLAN.md — Promote verify_cross_party to pub(crate); add two_to_one_combine helper implementing paper Construction 3 algebra; rewrite combine_leaky_triples as iterative fold (PROTO-10, PROTO-11)
+  - [ ] 05-03-PLAN.md — TEST-05 battery: happy-path product invariant on two triples, #[should_panic] tamper test on y'' flip, full-bucket B=40 product invariant (TEST-05)
 
 ### Phase 6: M2 Pi_aTensor' Permutation Bucketing (Construction 4) + Benches
 **Goal**: `Pi_aTensor'` is implemented per paper Construction 4 with uniform row-permutation bucketing and the improved bucket size `B = 1 + ceil(SSP / log2(n·ℓ))`; the end-to-end preprocessing pipeline produces a valid authenticated tensor triple, and benchmarks run after the full restructure.
