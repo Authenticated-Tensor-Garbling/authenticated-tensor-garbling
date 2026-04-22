@@ -40,7 +40,8 @@ pub struct TensorFpreEval {
     pub m: usize,
     /// GGM tree chunking factor.
     pub chunking_factor: usize,
-    /// Evaluator's (Party B) global correlation key. `as_block().lsb() == 1` invariant.
+    /// Evaluator's (Party B) global correlation key. `as_block().lsb() == 0` invariant
+    /// (required so that `lsb(delta_a XOR delta_b) == 1` per Pi_LeakyTensor §F).
     pub delta_b: Delta,
     /// Evaluator's share of each x-input wire label; length n. Combines with the
     /// garbler's `alpha_labels` to reveal `x XOR alpha` via `shares_differ`.
