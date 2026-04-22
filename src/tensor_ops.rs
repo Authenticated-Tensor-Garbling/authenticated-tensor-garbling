@@ -11,12 +11,14 @@ pub(crate) fn gen_populate_seeds_mem_optimized(
     cipher: &FixedKeyAes,
     delta: Delta,
 ) -> (Vec<Block>, Vec<(Block, Block)>) {
-    let mut tree: Vec<Block> = Vec::new();
     let mut odd_evens: Vec<(Block, Block)> = Vec::new();
 
     let n: usize = x.len();
 
-    // Seed buffer for level-by-level computation
+    // Seed buffer for level-by-level computation.
+    // After all iterations seeds[0..2^n] holds the final leaves directly —
+    // the tree accumulator has been removed (it grew to O(2^(n+1)) elements
+    // before being discarded, wasting up to ~64 MB for n=20).
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
     // Endianness note (little-endian vectors):
@@ -32,21 +34,14 @@ pub(crate) fn gen_populate_seeds_mem_optimized(
         seeds[0] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1] ^ delta);
     }
 
-    // Add Level 0 seeds to the tree
-    for idx in 0..2 {
-        if seeds[idx] != Block::default() {
-            tree.push(seeds[idx]);
-        }
-    }
-
     // Iterate through all other levels
     for i in 1..n {
         // Endianness note (little-endian vectors):
         // Level i consumes bit from x[n-i-1], moving MSB→LSB across iterations.
         let mut seed = Block::from(x[n-i-1]);
 
-        if !x[n-i-1].lsb() { 
-            seed ^= delta; 
+        if !x[n-i-1].lsb() {
+            seed ^= delta;
         }
         let key0 = seed;
         let key1 = key0 ^ delta;
@@ -73,19 +68,11 @@ pub(crate) fn gen_populate_seeds_mem_optimized(
         // Add the key contributions to the sums (same level-indexed tweaks)
         evens ^= cipher.tccr(tweak_even, key0);
         odds  ^= cipher.tccr(tweak_odd,  key1);
-        
+
         odd_evens.push((evens, odds));
-        
-        // Add all non-default seeds from this level to the tree
-        for idx in 0..(1 << (i+1)) {
-            if seeds[idx] != Block::default() {
-                tree.push(seeds[idx]);
-            }
-        }
     }
 
-    let seeds = tree[tree.len() - (1 << n)..tree.len()].to_vec();
-
+    // seeds already holds the 2^n leaves after all level expansions.
     (seeds, odd_evens)
 }
 
@@ -147,9 +134,12 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
     levels: Vec<(Block, Block)>,
     cipher: &FixedKeyAes,
 ) -> (Vec<Block>, usize) {
-    let mut tree: Vec<Block> = Vec::new();
-
     let n: usize = x.len();
+
+    // Seed buffer for level-by-level computation.
+    // After all iterations seeds[0..2^n] holds the final leaves directly —
+    // the tree accumulator has been removed (it grew to O(2^(n+1)) elements
+    // before being discarded, wasting up to ~64 MB for n=20).
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
     // Endianness note (little-endian vectors):
@@ -158,11 +148,6 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
 
     // Missing path is constructed MSB-to-LSB by shifting in x[n-i-1].lsb() at each level.
     let mut missing = x[n-1].lsb() as usize;
-
-    // Add Level 0 seeds to the tree
-    for idx in 0..2 {
-        tree.push(seeds[idx]);
-    }
 
     for i in 1..n {
         let g_evens = levels[i-1].0;
@@ -205,16 +190,10 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
         let sibling_index = missing ^ 1;
         let computed_seed = cipher.tccr(tweak, x[n-i-1]) ^ mask;
         seeds[sibling_index] = computed_seed;
-
-        // Add all seeds to the tree (missing nodes will be Block::default())
-        for idx in 0..(1 << (i+1)) {
-            tree.push(seeds[idx]);
-        }
     }
 
-    // Extract only the final seeds (leaves of the tree)
-    let final_seeds = tree[tree.len() - (1 << n)..tree.len()].to_vec();
-    (final_seeds, missing)
+    // seeds already holds the 2^n leaves after all level expansions.
+    (seeds, missing)
 }
 
 /// Evaluator's leaf-expansion + Z accumulation counterpart to `gen_unary_outer_product`.
