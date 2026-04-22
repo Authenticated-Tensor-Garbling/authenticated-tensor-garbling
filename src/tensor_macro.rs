@@ -86,6 +86,7 @@ pub(crate) fn tensor_garbler(
     a_keys: &[Key],
     t_gen: &BlockMatrix,
 ) -> (BlockMatrix, TensorMacroCiphertexts) {
+    assert!(n > 0, "n must be at least 1 (degenerate n=0 is not supported)");
     assert_eq!(a_keys.len(), n, "a_keys length must equal n");
     assert_eq!(t_gen.rows(), m, "t_gen must be a length-m column vector");
     assert_eq!(t_gen.cols(), 1, "t_gen must be a column vector (cols == 1)");
@@ -135,12 +136,13 @@ pub(crate) fn tensor_evaluator(
     a_macs: &[Mac],
     t_eval: &BlockMatrix,
 ) -> BlockMatrix {
+    assert!(n > 0, "n must be at least 1 (degenerate n=0 is not supported)");
     assert_eq!(a_macs.len(), n, "a_macs length must equal n");
     assert_eq!(t_eval.rows(), m, "t_eval must be a length-m column vector");
     assert_eq!(t_eval.cols(), 1, "t_eval must be a column vector (cols == 1)");
     assert_eq!(
         g.level_cts.len(),
-        n - 1,
+        n - 1,    // safe: n >= 1
         "G must have n-1 level ciphertexts"
     );
     assert_eq!(g.leaf_cts.len(), m, "G must have m leaf ciphertexts");
