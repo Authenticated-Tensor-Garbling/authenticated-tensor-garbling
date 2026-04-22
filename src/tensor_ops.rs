@@ -97,7 +97,7 @@ pub(crate) fn gen_unary_outer_product(
 
     // For each share (B, B+ b∂)
     // G sends the sum (XOR_i A_i) + B), which allows E to obtain A_{x + gamma} + b∂
-    // Expand the 2^n leaf seeds into 2^n by 
+    // Expand the 2^n leaf seeds into 2^n by
     for j in 0..m {
         // Endianness note (little-endian y): index 0 is LSB of y, index m-1 is MSB.
         let mut row: Block = Block::default();
@@ -119,5 +119,151 @@ pub(crate) fn gen_unary_outer_product(
         gen_cts.push(row);
     }
     gen_cts
+}
+
+/// Reconstructs the GGM seed tree on the evaluator side.
+///
+/// Given the evaluator's auth-bit MAC values `x` (each `x[i]` equals
+/// `A_i XOR a_i*Delta` where `Delta.lsb() = 1`, so `x[i].lsb() = a_i`)
+/// and the level ciphertexts `levels` from the garbler, reconstruct the
+/// 2^n leaf seeds `Label_l` for l != missing. The seed at index `missing`
+/// (the clear integer value of the bit vector `a`) is set to
+/// `Block::default()` as a sentinel for the downstream leaf-expansion step.
+///
+/// Endianness: index 0 is LSB, index n-1 is MSB of the bit vector. The
+/// tree is traversed MSB-first, consuming `x[n-1]` at level 0.
+///
+/// Returns `(leaf_seeds, missing)` where `leaf_seeds.len() == 2^n` and
+/// `leaf_seeds[missing] == Block::default()`.
+///
+/// Implements Step 2-3 of Construction 1's tensorev (paper Appendix F).
+pub(crate) fn eval_populate_seeds_mem_optimized(
+    x: &[Block],
+    levels: Vec<(Block, Block)>,
+    cipher: &FixedKeyAes,
+) -> (Vec<Block>, usize) {
+    let mut tree: Vec<Block> = Vec::new();
+
+    let n: usize = x.len();
+    let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
+
+    // Endianness note (little-endian vectors):
+    // Index 0 is LSB, index n-1 is MSB. Start from x[n-1] as the first branching bit.
+    seeds[!x[n-1].lsb() as usize] = cipher.tccr(Block::new((0 as u128).to_be_bytes()), x[n-1]);
+
+    // Missing path is constructed MSB-to-LSB by shifting in x[n-i-1].lsb() at each level.
+    let mut missing = x[n-1].lsb() as usize;
+
+    // Add Level 0 seeds to the tree
+    for idx in 0..2 {
+        tree.push(seeds[idx]);
+    }
+
+    for i in 1..n {
+        let g_evens = levels[i-1].0;
+        let g_odds = levels[i-1].1;
+
+        let mut e_evens = Block::default();
+        let mut e_odds = Block::default();
+
+        // Compute seeds for the next level, skipping the missing node
+        for j in (0..(1 << i)).rev() {
+            if j == missing {
+                seeds[j * 2 + 1] = Block::default();
+                seeds[j * 2] = Block::default();
+            } else {
+                // GGM tree tweak domain separation: distinct AES tweaks derive the two child
+                // seeds at each tree level (tweak=0 for odd-indexed sibling, tweak=1 for
+                // even-indexed).
+                seeds[j * 2 + 1] = cipher.tccr(Block::from(0 as u128), seeds[j]);
+                seeds[j * 2] = cipher.tccr(Block::from(1 as u128), seeds[j]);
+
+                e_evens ^= seeds[j * 2];
+                e_odds ^= seeds[j * 2 + 1];
+            }
+        }
+
+        // Endianness note (little-endian vectors): consume bit at position n-i-1.
+        let bit = x[n-i-1].lsb();
+        missing = (missing << 1) | bit as usize;
+
+        // Reconstruct the sibling of the missing node using the ciphertext
+        let (tweak, mask) = if bit {
+            (Block::from(0 as u128), g_evens ^ e_evens)
+        } else {
+            (Block::from(1 as u128), g_odds ^ e_odds)
+        };
+
+        let sibling_index = missing ^ 1;
+        let computed_seed = cipher.tccr(tweak, x[n-i-1]) ^ mask;
+        seeds[sibling_index] = computed_seed;
+
+        // Add all seeds to the tree (missing nodes will be Block::default())
+        for idx in 0..(1 << (i+1)) {
+            tree.push(seeds[idx]);
+        }
+    }
+
+    // Extract only the final seeds (leaves of the tree)
+    let final_seeds = tree[tree.len() - (1 << n)..tree.len()].to_vec();
+    (final_seeds, missing)
+}
+
+/// Evaluator's leaf-expansion + Z accumulation counterpart to `gen_unary_outer_product`.
+///
+/// Combines the reconstructed `seeds` (with `seeds[missing] == Block::default()`),
+/// the garbler's leaf ciphertexts `gen_cts`, the evaluator's `y` share (T^ev),
+/// and the `missing` index to (a) write Z_eval into `out` and (b) return the
+/// recovered missing-leaf column values (for optional downstream use).
+///
+/// Preconditions:
+/// - `seeds.len() == 2^n` for some `n`
+/// - `seeds[missing] == Block::default()` (sentinel set by `eval_populate_seeds_mem_optimized`)
+/// - `y.len() == m`, `gen_cts.len() == m`, `out` is an n×m column-major view
+pub(crate) fn eval_unary_outer_product(
+    seeds: &[Block],
+    y: &MatrixViewRef<Block>,
+    out: &mut MatrixViewMut<Block>,
+    cipher: &FixedKeyAes,
+    missing: usize,
+    gen_cts: &[Block],
+) -> Vec<Block> {
+    debug_assert_eq!(
+        seeds[missing],
+        Block::default(),
+        "seeds[missing] must be Block::default() sentinel"
+    );
+    let m = y.len();
+
+    let mut eval_cts: Vec<Block> = Vec::new();
+
+    for j in 0..m {
+        // Endianness note (little-endian y): index 0 is LSB of y, index m-1 is MSB.
+        let mut eval_ct = Block::default();
+        for i in 0..seeds.len() {
+            if i != missing {
+                let tweak = (seeds.len() * j + i) as u128;
+                let s = cipher.tccr(Block::from(tweak), seeds[i]);
+                eval_ct ^= s;
+                // Endianness note (little-endian x encoded in seed index i):
+                // bit k of i corresponds to the k-th least significant bit.
+                for k in 0..out.rows() {
+                    if ((i >> k) & 1) == 1 {
+                        out[(k, j)] ^= s;
+                    }
+                }
+            }
+        }
+        eval_ct ^= gen_cts[j] ^ y[j];
+        eval_cts.push(eval_ct);
+        // Endianness note (little-endian x): distribute eval_ct to rows where missing has bit k set.
+        for k in 0..out.rows() {
+            if ((missing >> k) & 1) == 1 {
+                out[(k, j)] ^= eval_ct;
+            }
+        }
+    }
+
+    eval_cts
 }
 
