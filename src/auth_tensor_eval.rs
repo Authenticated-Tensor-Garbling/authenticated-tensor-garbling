@@ -97,6 +97,9 @@ impl AuthTensorEval {
                     seeds[j * 2 + 1] = Block::default();
                     seeds[j * 2] = Block::default();
                 } else {
+                    // GGM tree tweak domain separation: distinct AES tweaks derive the two child
+                    // seeds at each tree level (tweak=0 for odd-indexed sibling, tweak=1 for
+                    // even-indexed).
                     seeds[j * 2 + 1] = cipher.tccr(Block::from(0 as u128), seeds[j]);
                     seeds[j * 2] = cipher.tccr(Block::from(1 as u128), seeds[j]);
                     
@@ -249,10 +252,12 @@ impl AuthTensorEval {
         self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), chunk_levels, chunk_cts, false);
     }
 
+    /// Combines both half-outer-product outputs with the correlated preprocessing
+    /// MAC to produce the evaluator's share of the garbled tensor gate output.
     pub fn evaluate_final(&mut self) {
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^= 
+                self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
                     self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
             }

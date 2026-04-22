@@ -73,7 +73,7 @@ impl AuthTensorGen {
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
         first_half: bool,
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) { // awful return type
+    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
     
         let mut chunk_levels: Vec<Vec<(Block, Block)>> = Vec::new();
         let mut chunk_cts: Vec<Vec<Block>> = Vec::new();
@@ -173,6 +173,8 @@ impl AuthTensorGen {
         (chunk_levels, chunk_cts)
     }
 
+    /// Combines both half-outer-product outputs with the correlated preprocessing
+    /// share to produce the garbled tensor gate output.
     pub fn garble_final(&mut self) {
         for i in 0..self.n {
             for j in 0..self.m {
