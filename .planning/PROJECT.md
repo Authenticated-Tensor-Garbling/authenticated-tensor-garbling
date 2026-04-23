@@ -2,121 +2,105 @@
 
 ## What This Is
 
-A correctness fix and completion of the KRRW-style uncompressed preprocessing protocol for authenticated tensor garbling in Rust (Appendix F of the paper). The existing Phase 1 implementation is algorithmically wrong in multiple critical ways — the GGM tree-based generalized tensor macro is absent, the combining procedure does not match the paper, the bucket size formula is incorrect, and tests verify code behavior rather than paper invariants. This project fixes all bugs, implements missing protocol pieces (F_eq, Pi_aTensor' permutation bucketing), and rewrites tests to verify paper-specified properties.
+A correct, paper-faithful implementation of the KRRW-style uncompressed preprocessing protocol for authenticated tensor garbling in Rust (Appendix F). All four paper constructions are implemented: the Generalized Tensor Macro (Construction 1), Pi_LeakyTensor with F_eq (Construction 2), Pi_aTensor correct combining (Construction 3), and Pi_aTensor' with permutation bucketing (Construction 4). The codebase has been refactored for correctness, the 8 known algorithmic bugs are fixed, and tests verify paper-specified invariants rather than echoing code behavior.
 
 ## Core Value
 
-**Correct paper-faithful implementation of Pi_LeakyTensor and Pi_aTensor** — both the protocol mechanics (GGM tree macro, F_eq check, correct combining) and the security properties (triple structure, combining correctness, bucket size formula).
+**Correct paper-faithful implementation of Pi_LeakyTensor and Pi_aTensor** — both the protocol mechanics (GGM tree macro, F_eq check, correct combining, permutation bucketing) and the security properties (triple structure, combining correctness, bucket size formula).
 
 ## Context
 
-- **Codebase:** Rust library, no networking. Authenticated garbling for secure two-party computation.
-- **Paper:** KRRW18 + Appendix F of this project's in-progress paper. Protocol described in `references/appendix_krrw_pre.tex`.
-- **Phase 1 status:** Marked "complete" in STATE.md but contains deep algorithmic bugs discovered on review.
+- **Codebase:** Rust library, no networking. ~54,842 LOC across 199 source files.
+- **Tech stack:** Rust, rand/rand_chacha (ChaCha12Rng), once_cell (FIXED_KEY_AES), criterion (benchmarks)
+- **Paper:** KRRW18 + Appendix F. Protocol in `references/appendix_krrw_pre.tex`.
+- **v1.0 shipped:** 2026-04-23. All 6 phases complete. 74/74 tests passing.
 - **Protocol chain:** `bcot → leaky_tensor_pre → auth_tensor_pre → auth_tensor_fpre → auth_tensor_gen/eval`
-- **Online phase:** `auth_tensor_gen.rs` / `auth_tensor_eval.rs` — untouched, feeds from preprocessing output.
-
-## Known Bugs (from paper review)
-
-### Bug 1 — GGM Tree Macro Not Implemented
-`LeakyTensorPre::generate()` does NOT implement Pi_LeakyTensor. The paper uses the Generalized Tensor Macro (Construction 1: GGM tree expansion + tensor operations on leaves) to compute XOR shares of x ⊗ y(Δ_A ⊕ Δ_B). The current code directly computes `alpha_i AND beta_j` via bCOT — this is a completely different computation that bypasses the core protocol.
-
-### Bug 2 — F_eq Consistency Check Missing
-Pi_LeakyTensor ends with a consistency check (§3.1 "Consistency check and output"): both parties send L_1 and L_2 to F_eq and abort if they don't match. This is entirely absent.
-
-### Bug 3 — Wrong Pi_aTensor Combining Algorithm
-The paper's combining procedure (§3.2): keep x = x', y = y', reveal d = y' ⊕ y'' publicly (with MACs), compute Z = Z' ⊕ Z'' ⊕ (x'' ⊗ d). Current `combine_leaky_triples` XOR-combines all shares naively — this does not match the paper's combining step, and carries "gamma" bits that are not part of the leaky triple format.
-
-### Bug 4 — Gamma Bits in Wrong Place
-The paper's leaky triple output is `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})`. There are no "gamma" bits in Pi_LeakyTensor output. Gamma is a random authenticated bit for the online garbling phase. Current code generates gamma as part of preprocessing.
-
-### Bug 5 — Wrong Bucket Size Formula
-`bucket_size_for(n, m)` uses `ell = n * m` (tensor dimension product) as ℓ in the formula `B = floor(SSP / log2(ℓ)) + 1`. But ℓ is the number of OUTPUT authenticated tensor triples, not the tensor dimensions. Pi_aTensor' uses `B = 1 + ceil(SSP / log2(n * ℓ))` which correctly involves both n and ℓ.
-
-### Bug 6 — Wire Labels in Wrong Layer
-Alpha/beta labels (label_0 per wire) are generated inside `LeakyTensorPre::generate()` and stored on the LeakyTriple. These are online garbling setup, not preprocessing output. The preprocessing output from F_aTensor does not include wire labels.
-
-### Bug 7 — `generate_with_input_values` Violates Input Independence
-`TensorFpre::generate_with_input_values(x, y)` takes concrete input values and embeds them into preprocessing structures. Preprocessing must be completely input-independent — actual inputs are provided during the online phase.
-
-### Bug 8 — Tests Echo Code, Not Paper
-Tests like `test_correlated_bit_correctness` verify that `gen_corr XOR eval_corr == alpha AND beta` — but this is exactly what the code computes, not a paper invariant. Paper invariant tests would verify the IT-MAC structure of each share, the correctness of the triple under the paper's definition, and the combining procedure output.
+- **Online phase:** `auth_tensor_gen.rs` / `auth_tensor_eval.rs` — untouched; feeds from preprocessing output.
 
 ## Requirements
 
 ### Validated
-*(from existing working online phase)*
+
+*(from existing working online phase — pre-milestone)*
 - ✓ AuthBitShare IT-MAC structure: `mac = key XOR bit * delta` — existing
 - ✓ Key LSB = 0 invariant — existing
 - ✓ Delta LSB = 1 invariant — existing
 - ✓ Shared IdealBCot for same Δ across triples — existing
 
-### Validated
+**Phase 1 — M1 Primitives & Sharing Cleanup (v1.0):**
+- ✓ CLEAN-01: Key::new enforces LSB=0 at construction — v1.0
+- ✓ CLEAN-02: AuthBitShare/AuthBit scopes documented — v1.0
+- ✓ CLEAN-03: InputSharing::shares_differ() replaces bit() — v1.0
+- ✓ CLEAN-04: build_share documents Key LSB=0 dependency — v1.0
+- ✓ CLEAN-05: pub(crate) narrowing; column-major docs — v1.0
+- ✓ CLEAN-06: FIXED_KEY_AES Lazy thread-safety documented — v1.0
 
-**Phase 3 — Generalized Tensor Macro (2026-04-22):**
-- ✓ PROTO-01: Implemented `tensor_garbler` (Construction 1 garbler side) — GGM tree expansion, emits level + leaf ciphertexts, returns Z_garbler
-- ✓ PROTO-02: Implemented `tensor_evaluator` (Construction 1 evaluator side) — reconstructs untraversed subtree, returns Z_evaluator
-- ✓ PROTO-03: `Z_garbler XOR Z_evaluator == a ⊗ T` verified by 10-test TDD battery (9 (n,m) tuples + fixed-seed regression)
-- ✓ TEST-01: Paper-invariant test battery in `tensor_macro::tests` — 10 passed / 0 failed
+**Phase 2 — M1 Online + Ideal Fpre + Benches (v1.0):**
+- ✓ CLEAN-07: generate_for_ideal_trusted_dealer rename — v1.0
+- ✓ CLEAN-08: preprocessing.rs module separation — v1.0
+- ✓ CLEAN-09: TensorFpreGen/Eval per-field docs — v1.0
+- ✓ CLEAN-10: auth_tensor_gen/eval dead code removed, comments added — v1.0
+- ✓ CLEAN-11: auth_gen.rs / auth_eval.rs confirmed absent — v1.0
+- ✓ CLEAN-12: benchmarks deduplicated, paper-protocol headers — v1.0
 
-### Validated
+**Phase 3 — Generalized Tensor Macro (v1.0):**
+- ✓ PROTO-01: tensor_garbler (Construction 1 garbler) — v1.0
+- ✓ PROTO-02: tensor_evaluator (Construction 1 evaluator) — v1.0
+- ✓ PROTO-03: Z_garbler XOR Z_evaluator == a ⊗ T (10-test battery) — v1.0
+- ✓ TEST-01: Paper-invariant GGM test battery — v1.0
 
-**Phase 4 — Pi_LeakyTensor + F_eq (2026-04-22):**
-- ✓ PROTO-04..08: `Pi_LeakyTensor::generate` consumes bCOT, runs two tensor-macro calls, XORs with correlations, executes masked reveal, assembles `itmac{Z}{Δ} = itmac{R}{Δ} ⊕ itmac{D}{Δ}`
-- ✓ PROTO-09: In-process `feq::check` aborts on mismatched inputs; `LeakyTriple` is exactly `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})` — gamma and wire labels removed
-- ✓ TEST-02..04: MAC invariant, product invariant, F_eq abort, and cross-party consistency verified; 7-test battery passing
+**Phase 4 — Pi_LeakyTensor + F_eq (v1.0):**
+- ✓ PROTO-04..08: Full Pi_LeakyTensor generate() body — v1.0
+- ✓ PROTO-09: LeakyTriple = exact paper shape (no gamma, no wire labels) — v1.0
+- ✓ TEST-02..04: MAC invariant, product invariant, F_eq abort — v1.0
 
-**Phase 5 — Pi_aTensor Correct Combining (2026-04-22):**
-- ✓ PROTO-10: `two_to_one_combine` helper implements paper Construction 3 algebra (d assembly, MAC verify, x=x'⊕x'', Z=Z'⊕Z''⊕x''⊗d, y preserved from prime)
-- ✓ PROTO-11: `combine_leaky_triples` is a thin iterative fold over `two_to_one_combine`; output sources all share vectors from acc (fixes silent x-bug)
-- ✓ PROTO-12: `bucket_size_for(ell)` uses paper Theorem 1 formula with `ell<=1` SSP=40 fallback guard; all call sites updated
-- ✓ TEST-05: Three-test battery — happy-path product invariant (2 triples), tamper-path `#[should_panic]`, full B=40 bucket fold; 70/70 tests passing
+**Phase 5 — Pi_aTensor Correct Combining (v1.0):**
+- ✓ PROTO-10: two_to_one_combine (paper §3.2 algebra) — v1.0
+- ✓ PROTO-11: combine_leaky_triples iterative fold — v1.0
+- ✓ PROTO-12: bucket_size_for(ell) with correct ℓ — v1.0
+- ✓ TEST-05: Combining correctness 3-test battery — v1.0
 
-**Phase 6 — Pi_aTensor' Permutation Bucketing + Benches (2026-04-23):**
-- ✓ PROTO-13: `apply_permutation_to_triple(&mut LeakyTriple, &[usize])` — permutes x-rows and Z-row i-indices in lockstep, y-rows untouched
-- ✓ PROTO-14: `combine_leaky_triples` activates per-triple `ChaCha12Rng::seed_from_u64(shuffle_seed ^ j)` Fisher-Yates shuffle; `run_preprocessing` threads `shuffle_seed=42`
-- ✓ PROTO-15: `bucket_size_for(n, ell)` implements Construction 4 formula `B = 1 + ceil(SSP / log2(n*ell))`; values (4,1)=21, (4,2)=15, (16,1)=11 pinned in tests
-- ✓ TEST-06: `test_run_preprocessing_product_invariant_construction_4` — end-to-end regression over full pipeline; 74/74 tests passing
-- ✓ TEST-07: `cargo bench --no-run` compiles clean; bench doc identifies `Pi_aTensor' / Construction 4`
+**Phase 6 — Pi_aTensor' Permutation Bucketing (v1.0):**
+- ✓ PROTO-13: Per-triple Fisher-Yates row permutation — v1.0
+- ✓ PROTO-14: apply_permutation_to_triple (x-rows + Z i-indices; y unchanged) — v1.0
+- ✓ PROTO-15: bucket_size_for(n, ell) Construction 4 formula — v1.0
+- ✓ TEST-06: End-to-end Construction 4 regression — v1.0
+- ✓ TEST-07: cargo bench --no-run clean — v1.0
 
 ### Active
 
-None — all requirements validated.
+None — all v1.0 requirements validated. Next requirements defined in `/gsd-new-milestone`.
 
 ### Out of Scope
 
-- Real network OT (Ferret/IKNP) — ideal F_bCOT stays for benchmarking
+- Real network OT (Ferret/IKNP) — ideal F_bCOT stays for now; real OT is v2
 - Malicious security proof verification — correctness of honest-party execution only
 - Online garbling phase changes beyond what preprocessing restructure requires
+- Circuit-level changes (`circuits/` submodule)
+- Semi-honest family (`tensor_gen`, `tensor_eval`, `tensor_pre`) — referenced in lib.rs integration test only
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Implement Pi_LeakyTensor via GGM tree macro | Paper spec; current direct-AND approach is not the protocol | Done (Phase 3) |
-| In-process F_eq (ideal) | Matches IdealBCot pattern; no networking needed | Done (Phase 4) |
-| Pi_aTensor' (permutation bucketing) over Pi_aTensor | Better bucket size (log(nℓ) vs log(ℓ)), user explicitly wants it | Done (Phase 6) |
-| Keep TensorFpreGen/Eval interface | Online phase already correct; minimize scope | Done (Phase 2) |
-| tensor_macro as standalone pub(crate) module | No dependency on leaky_tensor_pre or preprocessing — clean separation | Done (Phase 3) |
-| Hard-code shuffle_seed=42 in run_preprocessing | Deterministic permutations for test reproducibility; preprocessing output is not secret from holder | Done (Phase 6) |
-| Construction 4 replaces Construction 3 fully — no parallel path | Single bucket-sizer, no dead one-argument version remains | Done (Phase 6) |
+| Implement Pi_LeakyTensor via GGM tree macro | Paper spec; current direct-AND approach was not the protocol | ✓ Done (Phase 3) |
+| In-process F_eq (ideal) | Matches IdealBCot pattern; no networking needed | ✓ Done (Phase 4) |
+| Pi_aTensor' (permutation bucketing) over Pi_aTensor | Better bucket size (log(nℓ) vs log(ℓ)), user explicitly wants it | ✓ Done (Phase 6) |
+| Keep TensorFpreGen/Eval interface | Online phase already correct; minimize scope | ✓ Done (Phase 2) |
+| tensor_macro as standalone pub(crate) module | No dependency on leaky_tensor_pre or preprocessing — clean separation | ✓ Done (Phase 3) |
+| Hard-code shuffle_seed=42 in run_preprocessing | Deterministic permutations for test reproducibility | ✓ Done (Phase 6) — caller should supply seed for production |
+| Construction 4 replaces Construction 3 fully — no parallel path | Single bucket-sizer; no dead one-argument version | ✓ Done (Phase 6) |
+| Verifier-delta COT convention throughout | Paper specifies A's bits under Δ_B, B's bits under Δ_A | ✓ Done (Phase 4) — COT convention task became moot |
 
 ## Evolution
 
-This document evolves at phase transitions and milestone boundaries.
+**After v1.0 milestone:**
+- All 8 known algorithmic bugs resolved
+- All 34 v1 requirements validated
+- 74/74 tests passing
+- Preprocessing pipeline is paper-correct end-to-end
 
-**After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+Next milestone: `/gsd-new-milestone` — likely v2.0 focusing on real OT (Ferret/IKNP) and network layer.
 
 ---
-*Last updated: 2026-04-23 after Phase 6 completion (Pi_aTensor' Permutation Bucketing + Benches — Construction 4). Milestone v1.0 complete — all 6 phases done, 74/74 tests passing.*
+*Last updated: 2026-04-23 after v1.0 milestone close — all 6 phases complete, 74/74 tests passing, full protocol implemented.*
