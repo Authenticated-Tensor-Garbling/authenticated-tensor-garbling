@@ -17,6 +17,23 @@ A correct, paper-faithful implementation of the KRRW-style uncompressed preproce
 - **Protocol chain:** `bcot → leaky_tensor_pre → auth_tensor_pre → auth_tensor_fpre → auth_tensor_gen/eval`
 - **Online phase:** `auth_tensor_gen.rs` / `auth_tensor_eval.rs` — untouched; feeds from preprocessing output.
 
+## Current Milestone: v1.1 Full Protocol Demonstration + Benchmarks
+
+**Goal:** Extend the v1.0 preprocessing foundation into a complete, demonstrable protocol with interchangeable preprocessing, a working online phase (Open + consistency check), and coherent wall-clock benchmarks.
+
+**Target features:**
+- IdealPreprocessing interface — produces correct authenticated triples as oracle; interchangeable with real preprocessing implementations
+- Preprocessing trait abstraction — pi_atensor, pi'_atensor, FbCOT, IdealPreprocessing all satisfy common interface
+- Compressed preprocessing — if derivable from paper (appendix_cpre.tex), implement as additional interchangeable backend
+- Unauthenticated tensor macros (Protocol 1) — standalone garble/eval functions per Construction 1
+- Authenticated tensor macros (Protocol 2) — full authenticated garble/eval using preprocessing output
+- Open() — correct reveal of authenticated values per Protocol 1 and Protocol 2
+- Consistency check — verifies output correctness for both protocols
+- Coherent wall-clock benchmarks for tensor product; cleaned benchmark code
+- Distributed half gates + comparison of naive tensor vs tensor product (if feasible from 4_distributed_garbling.tex)
+
+**Paper reference:** `references/Authenticated_Garbling_with_Tensor_Gates/CCS2026/` — 5_online.tex (Protocol 1/2), appendix_cpre.tex (compressed preprocessing), 4_distributed_garbling.tex (distributed half gates)
+
 ## Requirements
 
 ### Validated
@@ -69,7 +86,7 @@ A correct, paper-faithful implementation of the KRRW-style uncompressed preproce
 
 ### Active
 
-None — all v1.0 requirements validated. Next requirements defined in `/gsd-new-milestone`.
+v1.1 requirements — see REQUIREMENTS.md (to be defined).
 
 ### Out of Scope
 
@@ -100,7 +117,7 @@ None — all v1.0 requirements validated. Next requirements defined in `/gsd-new
 - 74/74 tests passing
 - Preprocessing pipeline is paper-correct end-to-end
 
-Next milestone: `/gsd-new-milestone` — likely v2.0 focusing on real OT (Ferret/IKNP) and network layer.
+Next milestone: After v1.1 — v2.0 focusing on real OT (Ferret/IKNP) and network layer.
 
 ---
-*Last updated: 2026-04-23 after v1.0 milestone close — all 6 phases complete, 74/74 tests passing, full protocol implemented.*
+*Last updated: 2026-04-23 — v1.1 milestone started: full protocol demonstration + benchmarks.*
