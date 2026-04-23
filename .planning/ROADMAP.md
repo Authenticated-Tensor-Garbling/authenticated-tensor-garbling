@@ -109,9 +109,9 @@ This roadmap delivers a paper-faithful implementation of the KRRW-style uncompre
   4. End-to-end test: output authenticated tensor triple satisfies `itmac{Z}{Δ}` with `Z = x ⊗ y` where `x, y, Z` are the XOR of both parties' shares
   5. `cargo bench` runs the preprocessing benchmark successfully after the restructure is complete
 **Plans**: 3 plans
-  - [ ] 01-PLAN-keys-sharing.md — Enforce Key LSB=0 invariant via Key::new; fix build_share; rename InputSharing::bit to shares_differ; add AuthBitShare/AuthBit docs (CLEAN-01..04)
-  - [ ] 01-PLAN-matrix-ops-aes.md — Narrow tensor_ops and matrix view types to pub(crate); document column-major indexing; document FIXED_KEY_AES singleton (CLEAN-05, CLEAN-06)
-  - [ ] 01-PLAN-bcot-migration.md — Migrate src/bcot.rs set_lsb+Key::from two-step to Key::new (CLEAN-01 follow-through)
+  - [x] 06-01-PLAN.md — Replace `bucket_size_for(ell)` with `bucket_size_for(n, ell)` implementing Construction 4 formula `B = 1 + ceil(SSP / log2(n*ell))`; update `run_preprocessing` call site; rewrite unit tests to Construction 4 values (4,1)=21, (4,2)=15, (16,1)=11 (PROTO-15)
+  - [x] 06-02-PLAN.md — Add `apply_permutation_to_triple` helper; activate per-triple ChaCha12Rng Fisher-Yates row-permutation in `combine_leaky_triples`; thread `shuffle_seed=42` through `run_preprocessing`; product invariant holds under permutation (PROTO-13, PROTO-14)
+  - [x] 06-03-PLAN.md — Add `test_run_preprocessing_product_invariant_construction_4` end-to-end regression via `run_preprocessing(4,4,1,1)`; update `bench_preprocessing` doc comment to `Pi_aTensor' / Construction 4`; `cargo bench --no-run` clean (TEST-06, TEST-07)
 
 ## Progress
 
@@ -120,12 +120,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. M1 Primitives & Sharing Cleanup | 0/3 | Not started | - |
-| 2. M1 Online + Ideal Fpre + Benches Cleanup | 0/TBD | Not started | - |
-| 3. M2 Generalized Tensor Macro | 0/TBD | Not started | - |
-| 4. M2 Pi_LeakyTensor + F_eq | 0/TBD | Not started | - |
-| 5. M2 Pi_aTensor Correct Combining | 0/TBD | Not started | - |
-| 6. M2 Pi_aTensor' Permutation Bucketing + Benches | 0/TBD | Not started | - |
+| 1. M1 Primitives & Sharing Cleanup | 3/3 | Complete | 2026-04-22 |
+| 2. M1 Online + Ideal Fpre + Benches Cleanup | 4/4 | Complete | 2026-04-22 |
+| 3. M2 Generalized Tensor Macro | 3/3 | Complete | 2026-04-22 |
+| 4. M2 Pi_LeakyTensor + F_eq | 3/3 | Complete | 2026-04-22 |
+| 5. M2 Pi_aTensor Correct Combining | 3/3 | Complete | 2026-04-22 |
+| 6. M2 Pi_aTensor' Permutation Bucketing + Benches | 3/3 | Complete | 2026-04-23 |
 
 ## References
 
