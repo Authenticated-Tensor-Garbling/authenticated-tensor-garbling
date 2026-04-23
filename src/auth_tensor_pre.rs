@@ -288,6 +288,90 @@ mod tests {
         triples
     }
 
+    /// Field-by-field AuthBitShare equality helper — AuthBitShare does NOT
+    /// derive PartialEq (per src/sharing.rs line 42). Used by Task 1
+    /// apply_permutation_to_triple tests to compare whole shares before/after
+    /// the permutation. Returns true iff key, mac, and value all match.
+    fn shares_eq(a: &AuthBitShare, b: &AuthBitShare) -> bool {
+        a.key == b.key && a.mac == b.mac && a.value == b.value
+    }
+
+    /// Field-by-field equality over a slice of AuthBitShare.
+    fn slices_eq(a: &[AuthBitShare], b: &[AuthBitShare]) -> bool {
+        a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| shares_eq(x, y))
+    }
+
+    #[test]
+    fn test_apply_permutation_identity_is_noop() {
+        let triples = make_triples(4, 2, 1);
+        let mut t = triples[0].clone();
+        let before_gen_x = t.gen_x_shares.clone();
+        let before_eval_x = t.eval_x_shares.clone();
+        let before_gen_y = t.gen_y_shares.clone();
+        let before_eval_y = t.eval_y_shares.clone();
+        let before_gen_z = t.gen_z_shares.clone();
+        let before_eval_z = t.eval_z_shares.clone();
+
+        let perm: Vec<usize> = (0..t.n).collect();
+        apply_permutation_to_triple(&mut t, &perm);
+
+        assert!(slices_eq(&t.gen_x_shares, &before_gen_x), "identity perm must not move gen_x");
+        assert!(slices_eq(&t.eval_x_shares, &before_eval_x), "identity perm must not move eval_x");
+        assert!(slices_eq(&t.gen_y_shares, &before_gen_y), "y is never permuted");
+        assert!(slices_eq(&t.eval_y_shares, &before_eval_y), "y is never permuted");
+        assert!(slices_eq(&t.gen_z_shares, &before_gen_z), "identity perm must not move gen_z");
+        assert!(slices_eq(&t.eval_z_shares, &before_eval_z), "identity perm must not move eval_z");
+    }
+
+    #[test]
+    fn test_apply_permutation_swap_moves_x_and_z_rows_but_not_y() {
+        let n = 4usize;
+        let m = 2usize;
+        let triples = make_triples(n, m, 1);
+        let mut t = triples[0].clone();
+        let before_gen_x = t.gen_x_shares.clone();
+        let before_eval_x = t.eval_x_shares.clone();
+        let before_gen_y = t.gen_y_shares.clone();
+        let before_eval_y = t.eval_y_shares.clone();
+        let before_gen_z = t.gen_z_shares.clone();
+        let before_eval_z = t.eval_z_shares.clone();
+
+        // Swap rows 0 and 1; leave 2 and 3 fixed.
+        let perm = vec![1usize, 0, 2, 3];
+        apply_permutation_to_triple(&mut t, &perm);
+
+        // x: row 0 and row 1 swapped.
+        assert!(shares_eq(&t.gen_x_shares[0], &before_gen_x[1]));
+        assert!(shares_eq(&t.gen_x_shares[1], &before_gen_x[0]));
+        assert!(shares_eq(&t.gen_x_shares[2], &before_gen_x[2]));
+        assert!(shares_eq(&t.gen_x_shares[3], &before_gen_x[3]));
+        assert!(shares_eq(&t.eval_x_shares[0], &before_eval_x[1]));
+        assert!(shares_eq(&t.eval_x_shares[1], &before_eval_x[0]));
+
+        // y must be unchanged.
+        assert!(slices_eq(&t.gen_y_shares, &before_gen_y));
+        assert!(slices_eq(&t.eval_y_shares, &before_eval_y));
+
+        // Z: in each column j, indices 0 and 1 swap; indices 2 and 3 fixed.
+        for j in 0..m {
+            assert!(shares_eq(&t.gen_z_shares[j * n + 0], &before_gen_z[j * n + 1]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 1], &before_gen_z[j * n + 0]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 2], &before_gen_z[j * n + 2]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 3], &before_gen_z[j * n + 3]));
+            assert!(shares_eq(&t.eval_z_shares[j * n + 0], &before_eval_z[j * n + 1]));
+            assert!(shares_eq(&t.eval_z_shares[j * n + 1], &before_eval_z[j * n + 0]));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "apply_permutation_to_triple: perm.len() must equal n")]
+    fn test_apply_permutation_wrong_length_panics() {
+        let triples = make_triples(4, 2, 1);
+        let mut t = triples[0].clone();
+        let bad_perm = vec![0usize, 1, 2]; // length 3 != n=4
+        apply_permutation_to_triple(&mut t, &bad_perm);
+    }
+
     #[test]
     fn test_bucket_size_formula() {
         // Construction 4 (Appendix F): B = 1 + ceil(SSP / log2(n * ell)), SSP = 40.
