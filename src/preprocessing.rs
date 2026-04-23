@@ -88,7 +88,14 @@ pub fn run_preprocessing(
     count: usize,
     chunking_factor: usize,
 ) -> (TensorFpreGen, TensorFpreEval) {
-    assert_eq!(count, 1, "Phase 1: only count=1 is supported; batch output requires Vec return");
+    assert_eq!(
+        count, 1,
+        "Phase 1: only count=1 is supported; batch output requires a Vec-returning variant. \
+        Note: total_leaky = bucket_size * count generates enough leaky triples for 'count' \
+        output authenticated triples, but combine_leaky_triples below only consumes \
+        bucket_size of them and returns a single pair — remove this assert only after \
+        adding a loop that calls combine_leaky_triples once per output triple."
+    );
 
     let bucket_size = bucket_size_for(n, count);
     let total_leaky = bucket_size * count;
