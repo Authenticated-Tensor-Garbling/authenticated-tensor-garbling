@@ -116,28 +116,31 @@ pub(crate) fn two_to_one_combine(
     }
 }
 
-/// Compute the bucket size B for Pi_aTensor (Construction 3, Theorem 1).
+/// Compute the bucket size B for Pi_aTensor' (Construction 4, Appendix F).
 ///
-/// Formula: `B = floor(SSP / log2(ell)) + 1` for `ell >= 2`, where SSP = 40.
-/// For `ell <= 1`, the bucketing amplification is degenerate; fall back to
-/// the naive combining bound of B = SSP (paper §3.1 preamble).
+/// Formula: `B = 1 + ceil(SSP / log2(n * ell))` for `n * ell >= 2`, where SSP = 40.
+/// For `n * ell <= 1`, the bucketing amplification is degenerate; fall back to
+/// the naive combining bound B = SSP (paper §3.1 preamble).
+///
+/// Integer ceiling: `1 + (SSP + log2_floor(n*ell) - 1) / log2_floor(n*ell)`.
+/// `log2_floor(k) = usize::BITS - k.leading_zeros() - 1`.
 ///
 /// Parameters:
-///   ell — number of OUTPUT authenticated tensor triples desired (NOT n*m).
+///   n   — tensor row dimension.
+///   ell — number of OUTPUT authenticated tensor triples desired.
 ///
 /// Examples:
-///   bucket_size_for(1)    = 40   (naive fallback)
-///   bucket_size_for(2)    = 41   (log2 = 1, so 40 + 1)
-///   bucket_size_for(16)   = 11   (floor(40/4) + 1)
-///   bucket_size_for(128)  = 6    (floor(40/7) + 1)
-///   bucket_size_for(1024) = 5    (floor(40/10) + 1)
-pub fn bucket_size_for(ell: usize) -> usize {
+///   bucket_size_for(4, 1)    = 21   (1 + ceil(40 / log2(4))  = 1 + 20)
+///   bucket_size_for(4, 2)    = 14   (1 + ceil(40 / log2(8))  = 1 + ceil(40/3))
+///   bucket_size_for(16, 1)   = 11   (1 + ceil(40 / log2(16)) = 1 + 10)
+pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     const SSP: usize = 40;
-    if ell <= 1 {
+    let product = n.saturating_mul(ell);
+    if product <= 1 {
         return SSP;
     }
-    let log2_ell = (usize::BITS - ell.leading_zeros() - 1) as usize;
-    SSP / log2_ell + 1
+    let log2_p = (usize::BITS - product.leading_zeros() - 1) as usize;
+    1 + (SSP + log2_p - 1) / log2_p
 }
 
 /// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor, Construction 3).
