@@ -4,6 +4,8 @@ use crate::{
     preprocessing::{TensorFpreGen, TensorFpreEval},
     sharing::AuthBitShare,
 };
+use rand::{SeedableRng, seq::SliceRandom};
+use rand_chacha::ChaCha12Rng;
 
 /// Perform one two-to-one combining step from paper Construction 3
 /// (references/appendix_krrw_pre.tex §3.1 lines 415-444).
@@ -232,6 +234,53 @@ pub fn combine_leaky_triples(
             correlated_auth_bit_shares: acc.eval_z_shares,
         },
     )
+}
+
+/// Apply a row permutation `perm` (a permutation of `0..n`) to the x and
+/// Z rows of `triple` IN PLACE. y rows are NOT permuted — per Construction 4
+/// (Appendix F), only the alpha side and the correlated tensor rows carry the
+/// row permutation; beta is untouched.
+///
+/// Permutation semantics:
+///   new gen_x_shares[i]  = old gen_x_shares[perm[i]]   for i in 0..n
+///   new eval_x_shares[i] = old eval_x_shares[perm[i]]  for i in 0..n
+///   for each column j in 0..m, within the contiguous slice [j*n..(j+1)*n]:
+///     new gen_z_shares[j*n + i]  = old gen_z_shares[j*n + perm[i]]
+///     new eval_z_shares[j*n + i] = old eval_z_shares[j*n + perm[i]]
+///
+/// `perm.len()` must equal `triple.n`; otherwise this panics. The caller
+/// is responsible for constructing `perm` as a valid permutation of 0..n.
+pub(crate) fn apply_permutation_to_triple(
+    triple: &mut LeakyTriple,
+    perm: &[usize],
+) {
+    let n = triple.n;
+    let m = triple.m;
+    assert_eq!(
+        perm.len(),
+        n,
+        "apply_permutation_to_triple: perm.len() must equal n"
+    );
+
+    // Permute x shares (length n) — build new vecs by reading position
+    // perm[i] from the original snapshot.
+    let orig_gen_x = triple.gen_x_shares.clone();
+    let orig_eval_x = triple.eval_x_shares.clone();
+    for i in 0..n {
+        triple.gen_x_shares[i] = orig_gen_x[perm[i]];
+        triple.eval_x_shares[i] = orig_eval_x[perm[i]];
+    }
+
+    // Permute Z shares column-major: for each column j, permute the
+    // i-index within the contiguous slice [j*n .. (j+1)*n].
+    let orig_gen_z = triple.gen_z_shares.clone();
+    let orig_eval_z = triple.eval_z_shares.clone();
+    for j in 0..m {
+        for i in 0..n {
+            triple.gen_z_shares[j * n + i] = orig_gen_z[j * n + perm[i]];
+            triple.eval_z_shares[j * n + i] = orig_eval_z[j * n + perm[i]];
+        }
+    }
 }
 
 /// Cross-party `AuthBitShare` MAC verification — the in-process substitute for the
