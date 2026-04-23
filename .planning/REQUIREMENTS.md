@@ -71,11 +71,27 @@ Extend the v1.0 preprocessing foundation into a complete, demonstrable 2PC proto
 
 ## Traceability
 
-| Requirement | Phase |
-|-------------|-------|
-| PRE-01..04  | TBD (roadmapper) |
-| PRE-05      | TBD |
-| ONL-01..02  | TBD |
-| P1-01..05   | TBD |
-| P2-01..05   | TBD |
-| BENCH-01..05 | TBD |
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| PRE-01 | Phase 7 | Pending |
+| PRE-02 | Phase 7 | Pending |
+| PRE-03 | Phase 7 | Pending |
+| PRE-04 | Phase 7 | Pending |
+| PRE-05 | Phase 7 | Pending |
+| ONL-01 | Phase 8 | Pending |
+| ONL-02 | Phase 8 | Pending |
+| P1-01 | Phase 8 | Pending |
+| P1-02 | Phase 8 | Pending |
+| P1-03 | Phase 8 | Pending |
+| P1-04 | Phase 8 | Pending |
+| P1-05 | Phase 8 | Pending |
+| P2-01 | Phase 9 | Pending |
+| P2-02 | Phase 9 | Pending |
+| P2-03 | Phase 9 | Pending |
+| P2-04 | Phase 9 | Pending |
+| P2-05 | Phase 9 | Pending |
+| BENCH-01 | Phase 10 | Pending |
+| BENCH-02 | Phase 10 | Pending |
+| BENCH-04 | Phase 10 | Pending |
+| BENCH-05 | Phase 10 | Pending |
+| BENCH-06 | Phase 10 | Pending |
