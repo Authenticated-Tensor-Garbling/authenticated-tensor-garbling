@@ -131,7 +131,7 @@ pub(crate) fn two_to_one_combine(
 ///
 /// Examples:
 ///   bucket_size_for(4, 1)    = 21   (1 + ceil(40 / log2(4))  = 1 + 20)
-///   bucket_size_for(4, 2)    = 14   (1 + ceil(40 / log2(8))  = 1 + ceil(40/3))
+///   bucket_size_for(4, 2)    = 15   (1 + ceil(40 / log2(8))  = 1 + ceil(40/3) = 1 + 14)
 ///   bucket_size_for(16, 1)   = 11   (1 + ceil(40 / log2(16)) = 1 + 10)
 pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     const SSP: usize = 40;
@@ -290,16 +290,17 @@ mod tests {
 
     #[test]
     fn test_bucket_size_formula() {
-        assert_eq!(bucket_size_for(2), 41);    // log2(2) = 1, 40/1 + 1
-        assert_eq!(bucket_size_for(16), 11);   // log2(16) = 4, 40/4 + 1
-        assert_eq!(bucket_size_for(128), 6);   // log2(128) = 7, 40/7 + 1
-        assert_eq!(bucket_size_for(1024), 5);  // log2(1024) = 10, 40/10 + 1
+        // Construction 4 (Appendix F): B = 1 + ceil(SSP / log2(n * ell)), SSP = 40.
+        assert_eq!(bucket_size_for(4, 1), 21);   // 1 + ceil(40 / log2(4))  = 1 + 20
+        assert_eq!(bucket_size_for(4, 2), 15);   // 1 + ceil(40 / log2(8))  = 1 + ceil(40/3) = 1 + 14
+        assert_eq!(bucket_size_for(16, 1), 11);  // 1 + ceil(40 / log2(16)) = 1 + 10
     }
 
     #[test]
     fn test_bucket_size_formula_edge_cases() {
-        assert_eq!(bucket_size_for(0), 40, "ell=0 must return SSP fallback");
-        assert_eq!(bucket_size_for(1), 40, "ell=1 must return SSP fallback");
+        // product = n * ell <= 1 → SSP fallback per D-02.
+        assert_eq!(bucket_size_for(1, 0), 40, "n*ell=0 must return SSP fallback");
+        assert_eq!(bucket_size_for(1, 1), 40, "n*ell=1 must return SSP fallback");
     }
 
     #[test]
@@ -318,7 +319,7 @@ mod tests {
     fn test_full_pipeline_no_panic() {
         let n = 4;
         let m = 4;
-        let b = bucket_size_for(1);
+        let b = bucket_size_for(n, 1);
         let triples = make_triples(n, m, b);
         let (fpre_gen, fpre_eval) = combine_leaky_triples(triples, b, n, m, 1, 99);
         let _gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
@@ -415,12 +416,12 @@ mod tests {
     fn test_combine_full_bucket_product_invariant() {
         // TEST-05 complement: verify the iterative fold in combine_leaky_triples produces
         // a tensor triple that still satisfies the product invariant over a full bucket
-        // (B = bucket_size_for(1) = 40). Catches regressions in the fold wrapper beyond
+        // (B = bucket_size_for(n, 1) = 21 for n=4). Catches regressions in the fold wrapper beyond
         // the two-triple unit test.
         let n = 4;
         let m = 4;
-        let b = bucket_size_for(1); // 40 (SSP fallback for ell = 1)
-        assert_eq!(b, 40, "bucket_size_for(1) must return SSP = 40 per D-09");
+        let b = bucket_size_for(n, 1); // Construction 4: 1 + ceil(40/log2(4)) = 21
+        assert_eq!(b, 21, "bucket_size_for(4, 1) must return 21 per Construction 4");
 
         let triples = make_triples(n, m, b);
         let (gen_out, eval_out) = combine_leaky_triples(triples, b, n, m, 1, 0);
