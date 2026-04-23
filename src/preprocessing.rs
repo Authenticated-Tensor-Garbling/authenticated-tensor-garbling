@@ -106,7 +106,7 @@ pub fn run_preprocessing(
         triples.push(ltp.generate());
     }
 
-    combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 0)
+    combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 42)
 }
 
 #[cfg(test)]

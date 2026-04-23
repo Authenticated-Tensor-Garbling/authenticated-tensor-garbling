@@ -4,6 +4,8 @@ use crate::{
     preprocessing::{TensorFpreGen, TensorFpreEval},
     sharing::AuthBitShare,
 };
+use rand::{SeedableRng, seq::SliceRandom};
+use rand_chacha::ChaCha12Rng;
 
 /// Perform one two-to-one combining step from paper Construction 3
 /// (references/appendix_krrw_pre.tex §3.1 lines 415-444).
@@ -143,7 +145,7 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     1 + (SSP + log2_p - 1) / log2_p
 }
 
-/// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor, Construction 3).
+/// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor', Construction 4).
 ///
 /// Implements the paper's two-to-one combining (references/appendix_krrw_pre.tex §3.1
 /// lines 415-444) iteratively: start with `triples[0]`, fold the remaining B-1 triples
@@ -160,14 +162,15 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
 /// chunking_factor: passed through to TensorFpreGen/Eval output.
-/// shuffle_seed: reserved for future Phase 6 (permutation bucketing, Construction 4).
+/// shuffle_seed: seeds a per-triple `ChaCha12Rng::seed_from_u64(shuffle_seed ^ j)`
+/// used to sample the Construction 4 row-permutation π_j ∈ S_n for triple j.
 pub fn combine_leaky_triples(
     triples: Vec<LeakyTriple>,
     bucket_size: usize,
     n: usize,
     m: usize,
     chunking_factor: usize,
-    _shuffle_seed: u64,
+    shuffle_seed: u64,
 ) -> (TensorFpreGen, TensorFpreEval) {
     assert_eq!(triples.len(), bucket_size, "triples.len() must equal bucket_size");
     assert!(bucket_size >= 1);
@@ -193,7 +196,20 @@ pub fn combine_leaky_triples(
         );
     }
 
-    // Iterative fold per Construction 3: start with triples[0], combine each next
+    // ---- Construction 4 permutation step (PROTO-13, PROTO-14) ----
+    // For each triple j, sample a fresh per-triple ChaCha12Rng seeded
+    // with (shuffle_seed XOR j), generate a uniform permutation
+    // π_j ∈ S_n via Fisher-Yates (SliceRandom::shuffle), and apply it
+    // to the x-rows and the i-index of the Z-rows (y-rows untouched).
+    let mut triples = triples; // rebind as `mut` for in-place permutation.
+    for (j, triple) in triples.iter_mut().enumerate() {
+        let mut rng = ChaCha12Rng::seed_from_u64(shuffle_seed ^ j as u64);
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.shuffle(&mut rng);
+        apply_permutation_to_triple(triple, &perm);
+    }
+
+    // Iterative fold per Construction 4: start with triples[0], combine each next
     // triple into the accumulator via two_to_one_combine (paper line 474).
     // (Clone triples[0] because LeakyTriple is not Copy — Rust ownership pitfall.)
     let mut acc: LeakyTriple = triples[0].clone();
@@ -232,6 +248,53 @@ pub fn combine_leaky_triples(
             correlated_auth_bit_shares: acc.eval_z_shares,
         },
     )
+}
+
+/// Apply a row permutation `perm` (a permutation of `0..n`) to the x and
+/// Z rows of `triple` IN PLACE. y rows are NOT permuted — per Construction 4
+/// (Appendix F), only the alpha side and the correlated tensor rows carry the
+/// row permutation; beta is untouched.
+///
+/// Permutation semantics:
+///   new gen_x_shares[i]  = old gen_x_shares[perm[i]]   for i in 0..n
+///   new eval_x_shares[i] = old eval_x_shares[perm[i]]  for i in 0..n
+///   for each column j in 0..m, within the contiguous slice [j*n..(j+1)*n]:
+///     new gen_z_shares[j*n + i]  = old gen_z_shares[j*n + perm[i]]
+///     new eval_z_shares[j*n + i] = old eval_z_shares[j*n + perm[i]]
+///
+/// `perm.len()` must equal `triple.n`; otherwise this panics. The caller
+/// is responsible for constructing `perm` as a valid permutation of 0..n.
+pub(crate) fn apply_permutation_to_triple(
+    triple: &mut LeakyTriple,
+    perm: &[usize],
+) {
+    let n = triple.n;
+    let m = triple.m;
+    assert_eq!(
+        perm.len(),
+        n,
+        "apply_permutation_to_triple: perm.len() must equal n"
+    );
+
+    // Permute x shares (length n) — build new vecs by reading position
+    // perm[i] from the original snapshot.
+    let orig_gen_x = triple.gen_x_shares.clone();
+    let orig_eval_x = triple.eval_x_shares.clone();
+    for i in 0..n {
+        triple.gen_x_shares[i] = orig_gen_x[perm[i]];
+        triple.eval_x_shares[i] = orig_eval_x[perm[i]];
+    }
+
+    // Permute Z shares column-major: for each column j, permute the
+    // i-index within the contiguous slice [j*n .. (j+1)*n].
+    let orig_gen_z = triple.gen_z_shares.clone();
+    let orig_eval_z = triple.eval_z_shares.clone();
+    for j in 0..m {
+        for i in 0..n {
+            triple.gen_z_shares[j * n + i] = orig_gen_z[j * n + perm[i]];
+            triple.eval_z_shares[j * n + i] = orig_eval_z[j * n + perm[i]];
+        }
+    }
 }
 
 /// Cross-party `AuthBitShare` MAC verification — the in-process substitute for the
@@ -286,6 +349,90 @@ mod tests {
             triples.push(ltp.generate());
         }
         triples
+    }
+
+    /// Field-by-field AuthBitShare equality helper — AuthBitShare does NOT
+    /// derive PartialEq (per src/sharing.rs line 42). Used by Task 1
+    /// apply_permutation_to_triple tests to compare whole shares before/after
+    /// the permutation. Returns true iff key, mac, and value all match.
+    fn shares_eq(a: &AuthBitShare, b: &AuthBitShare) -> bool {
+        a.key == b.key && a.mac == b.mac && a.value == b.value
+    }
+
+    /// Field-by-field equality over a slice of AuthBitShare.
+    fn slices_eq(a: &[AuthBitShare], b: &[AuthBitShare]) -> bool {
+        a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| shares_eq(x, y))
+    }
+
+    #[test]
+    fn test_apply_permutation_identity_is_noop() {
+        let triples = make_triples(4, 2, 1);
+        let mut t = triples[0].clone();
+        let before_gen_x = t.gen_x_shares.clone();
+        let before_eval_x = t.eval_x_shares.clone();
+        let before_gen_y = t.gen_y_shares.clone();
+        let before_eval_y = t.eval_y_shares.clone();
+        let before_gen_z = t.gen_z_shares.clone();
+        let before_eval_z = t.eval_z_shares.clone();
+
+        let perm: Vec<usize> = (0..t.n).collect();
+        apply_permutation_to_triple(&mut t, &perm);
+
+        assert!(slices_eq(&t.gen_x_shares, &before_gen_x), "identity perm must not move gen_x");
+        assert!(slices_eq(&t.eval_x_shares, &before_eval_x), "identity perm must not move eval_x");
+        assert!(slices_eq(&t.gen_y_shares, &before_gen_y), "y is never permuted");
+        assert!(slices_eq(&t.eval_y_shares, &before_eval_y), "y is never permuted");
+        assert!(slices_eq(&t.gen_z_shares, &before_gen_z), "identity perm must not move gen_z");
+        assert!(slices_eq(&t.eval_z_shares, &before_eval_z), "identity perm must not move eval_z");
+    }
+
+    #[test]
+    fn test_apply_permutation_swap_moves_x_and_z_rows_but_not_y() {
+        let n = 4usize;
+        let m = 2usize;
+        let triples = make_triples(n, m, 1);
+        let mut t = triples[0].clone();
+        let before_gen_x = t.gen_x_shares.clone();
+        let before_eval_x = t.eval_x_shares.clone();
+        let before_gen_y = t.gen_y_shares.clone();
+        let before_eval_y = t.eval_y_shares.clone();
+        let before_gen_z = t.gen_z_shares.clone();
+        let before_eval_z = t.eval_z_shares.clone();
+
+        // Swap rows 0 and 1; leave 2 and 3 fixed.
+        let perm = vec![1usize, 0, 2, 3];
+        apply_permutation_to_triple(&mut t, &perm);
+
+        // x: row 0 and row 1 swapped.
+        assert!(shares_eq(&t.gen_x_shares[0], &before_gen_x[1]));
+        assert!(shares_eq(&t.gen_x_shares[1], &before_gen_x[0]));
+        assert!(shares_eq(&t.gen_x_shares[2], &before_gen_x[2]));
+        assert!(shares_eq(&t.gen_x_shares[3], &before_gen_x[3]));
+        assert!(shares_eq(&t.eval_x_shares[0], &before_eval_x[1]));
+        assert!(shares_eq(&t.eval_x_shares[1], &before_eval_x[0]));
+
+        // y must be unchanged.
+        assert!(slices_eq(&t.gen_y_shares, &before_gen_y));
+        assert!(slices_eq(&t.eval_y_shares, &before_eval_y));
+
+        // Z: in each column j, indices 0 and 1 swap; indices 2 and 3 fixed.
+        for j in 0..m {
+            assert!(shares_eq(&t.gen_z_shares[j * n + 0], &before_gen_z[j * n + 1]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 1], &before_gen_z[j * n + 0]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 2], &before_gen_z[j * n + 2]));
+            assert!(shares_eq(&t.gen_z_shares[j * n + 3], &before_gen_z[j * n + 3]));
+            assert!(shares_eq(&t.eval_z_shares[j * n + 0], &before_eval_z[j * n + 1]));
+            assert!(shares_eq(&t.eval_z_shares[j * n + 1], &before_eval_z[j * n + 0]));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "apply_permutation_to_triple: perm.len() must equal n")]
+    fn test_apply_permutation_wrong_length_panics() {
+        let triples = make_triples(4, 2, 1);
+        let mut t = triples[0].clone();
+        let bad_perm = vec![0usize, 1, 2]; // length 3 != n=4
+        apply_permutation_to_triple(&mut t, &bad_perm);
     }
 
     #[test]
