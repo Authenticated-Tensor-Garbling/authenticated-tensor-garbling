@@ -8,9 +8,6 @@ use network_simulator::SimpleNetworkSimulator;
 
 use authenticated_tensor_garbling::{
     block::Block,
-    tensor_gen::TensorProductGen,
-    tensor_eval::TensorProductEval,
-    tensor_pre::SemiHonestTensorPre,
     auth_tensor_gen::AuthTensorGen,
     auth_tensor_eval::AuthTensorEval,
     auth_tensor_fpre::TensorFpre,
@@ -43,30 +40,6 @@ const BENCHMARK_PARAMS: &[(usize, usize)] = &[
 const X_INPUT: usize = 0b1101;
 const Y_INPUT: usize= 0b110;
 
-// Setup functions for semi-honest protocols
-fn _setup_semihonest_gen(n: usize, m: usize, chunking_factor: usize) -> TensorProductGen {
-
-    let mut pre = SemiHonestTensorPre::new(0, n, m, chunking_factor);
-    
-    pre.gen_inputs(X_INPUT, Y_INPUT); // Example input values
-    pre.gen_masks();
-    pre.mask_inputs();
-
-    let (fpre_gen, _) = pre.into_gen_eval();
-    TensorProductGen::new_from_fpre_gen(fpre_gen)
-}
-
-fn _setup_semihonest_eval(n: usize, m: usize, chunking_factor: usize) -> TensorProductEval {
-    let mut pre = SemiHonestTensorPre::new(1, n, m, chunking_factor);
-    
-    pre.gen_inputs(X_INPUT, Y_INPUT); // Example input values
-    pre.gen_masks();
-    pre.mask_inputs();
-
-    let (_, fpre_eval) = pre.into_gen_eval();
-    TensorProductEval::new_from_fpre_eval(fpre_eval)
-}
-
 // Setup functions for authenticated protocols
 fn setup_auth_gen(n: usize, m: usize, chunking_factor: usize) -> AuthTensorGen {
 
@@ -81,99 +54,6 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
     fpre.generate_for_ideal_trusted_dealer(X_INPUT, Y_INPUT); // Example input values
     let (_, fpre_eval) = fpre.into_gen_eval();
     AuthTensorEval::new_from_fpre_eval(fpre_eval)
-}
-
-// Benchmarks online garbling for the authenticated tensor gate (Pi_Garble, §4 / auth_tensor_gen): first half, second half, and final combine across BENCHMARK_PARAMS dimensions and chunking factors [1, 2, 4, 6, 8].
-fn bench_full_protocol_garbling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("full_protocol_garbling");
-
-    for &(n, m) in BENCHMARK_PARAMS {
-        group.throughput(Throughput::Elements((n * m) as u64));
-
-        // Authenticated full protocol evaluation across the original sweep
-        // of chunking factors. The literal [1, 2, 4, 6, 8] is intentional —
-        // these are the factors historically benchmarked; 3/5/7 are skipped
-        // by design. cf.to_string() preserves the prior BenchmarkId strings
-        // ("1"/"2"/"4"/"6"/"8") so Criterion baselines under
-        // target/criterion/full_protocol_garbling/{1,2,4,6,8}/ remain valid.
-        for cf in [1usize, 2, 4, 6, 8] {
-            let mut generator = setup_auth_gen(n, m, cf);
-            group.bench_with_input(
-                BenchmarkId::new(cf.to_string(), format!("{}x{}", n, m)),
-                &(n, m),
-                |b, &(_n, _m)| {
-                    b.iter(|| {
-                        let (_first_levels, _first_cts) = generator.garble_first_half();
-                        let (_second_levels, _second_cts) = generator.garble_second_half();
-                        generator.garble_final();
-                    })
-                },
-            );
-        }
-    }
-    group.finish();
-}
-
-// Benchmarks online garbling + evaluation for the authenticated tensor gate (auth_tensor_gen + auth_tensor_eval) with simulated network I/O between parties at 100 Mbps; sweeps chunking factors [1, 2, 4, 6, 8] across BENCHMARK_PARAMS.
-fn bench_full_protocol_with_networking(c: &mut Criterion) {
-    let mut group = c.benchmark_group("full_protocol_with_networking");
-    group.warm_up_time(Duration::from_secs(10));
-    group.measurement_time(Duration::from_secs(30));
-
-    let block_sz = size_of::<Block>();
-
-    for &(n, m) in BENCHMARK_PARAMS {
-        // Sweep over the same chunking factors as bench_full_protocol_garbling.
-        // Explicit list (not 1..=8) preserves pre-refactor BenchmarkId strings
-        // "1"/"2"/"4"/"6"/"8" via cf.to_string(), keeping prior Criterion
-        // baselines at target/criterion/full_protocol_with_networking/{1,2,4,6,8}/
-        // valid (RESEARCH Q4 recommendation extends D-17 to this function).
-        for cf in [1usize, 2, 4, 6, 8] {
-            let chunking_factor = cf;
-
-            let mut generator = setup_auth_gen(n, m, chunking_factor);
-
-            let (first_levels, first_cts) = generator.garble_first_half();
-            let (second_levels, second_cts) = generator.garble_second_half();
-            generator.garble_final();
-
-            let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
-            let cts_bytes_1: usize    = first_cts.iter().map(|row| row.len() * block_sz).sum();
-            let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
-            let cts_bytes_2: usize    = second_cts.iter().map(|row| row.len() * block_sz).sum();
-
-            let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
-
-            group.throughput(Throughput::Bytes(total_bytes as u64));
-
-            group.bench_with_input(
-                BenchmarkId::new(cf.to_string(), format!("{}x{}", n, m)),
-                &(n, m),
-                |b, &(n, m)| {
-                    b.to_async(&*RT)
-                    .iter_batched(
-                        || (
-                            setup_auth_gen(n, m, chunking_factor),
-                            setup_auth_eval(n, m, chunking_factor),
-                            SimpleNetworkSimulator::new(100.0, 0)
-                        ),
-                        |(mut generator, mut evaluator, network)| async move {
-                            let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
-                            let (second_levels_inner, second_cts_inner) = generator.garble_second_half();
-                            generator.garble_final();
-
-                            network.send_size_with_metrics(total_bytes).await;
-
-                            evaluator.evaluate_first_half(first_levels_inner, first_cts_inner);
-                            evaluator.evaluate_second_half(second_levels_inner, second_cts_inner);
-                            evaluator.evaluate_final();
-                    },
-                    BatchSize::SmallInput
-                )},
-            );
-        }
-    }
-    group.finish();
 }
 
 // Benchmarks online garbling + network I/O for the authenticated tensor gate at fixed dimension 4x4, sweeping chunking factors 1..=8 (auth_tensor_gen + auth_tensor_eval + SimpleNetworkSimulator).
