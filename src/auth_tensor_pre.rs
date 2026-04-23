@@ -635,4 +635,93 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_run_preprocessing_product_invariant_construction_4() {
+        // TEST-06 (Phase 6): end-to-end Pi_aTensor' / Construction 4 invariant.
+        // Generate an authenticated tensor triple via the full preprocessing
+        // pipeline (IdealBCot → LeakyTensorPre × B → combine_leaky_triples with
+        // per-triple permutation → TensorFpreGen/Eval) and assert:
+        //   1. MAC invariant on every x, y, z share (verify_cross_party).
+        //   2. Product invariant Z_full[j*n+i] == x_full[i] & y_full[j]
+        //      (identical shape as test_combine_full_bucket_product_invariant
+        //      but entered via run_preprocessing, not combine_leaky_triples).
+        //   3. Dimensions: |alpha| = n, |beta| = m, |correlated| = n*m
+        //      on both parties' outputs.
+        //   4. D-12 bucket-size improvement: bucket_size_for(4, 1) == 21 < 40.
+
+        let n = 4usize;
+        let m = 4usize;
+
+        // D-12 pin: confirm Construction 4's bucket is smaller than Construction 3's 40.
+        let b_new = bucket_size_for(n, 1);
+        assert_eq!(b_new, 21, "Construction 4 bucket_size_for(4, 1) must be 21");
+        assert!(b_new < 40, "Construction 4 B must be smaller than Construction 3 B=40");
+
+        // Full pipeline (includes permutation + iterative fold + bucket reduction).
+        let (gen_out, eval_out) = crate::preprocessing::run_preprocessing(n, m, 1, 1);
+
+        // (3) Dimensions on both sides.
+        assert_eq!(gen_out.alpha_auth_bit_shares.len(), n);
+        assert_eq!(gen_out.beta_auth_bit_shares.len(), m);
+        assert_eq!(gen_out.correlated_auth_bit_shares.len(), n * m);
+        assert_eq!(eval_out.alpha_auth_bit_shares.len(), n);
+        assert_eq!(eval_out.beta_auth_bit_shares.len(), m);
+        assert_eq!(eval_out.correlated_auth_bit_shares.len(), n * m);
+
+        // (1) Cross-party MAC invariant on every share.
+        for i in 0..n {
+            verify_cross_party(
+                &gen_out.alpha_auth_bit_shares[i],
+                &eval_out.alpha_auth_bit_shares[i],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for j in 0..m {
+            verify_cross_party(
+                &gen_out.beta_auth_bit_shares[j],
+                &eval_out.beta_auth_bit_shares[j],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &gen_out.correlated_auth_bit_shares[k],
+                &eval_out.correlated_auth_bit_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+
+        // (2) Product invariant: Z_full[j*n+i] == x_full[i] & y_full[j].
+        let x_full: Vec<bool> = (0..n)
+            .map(|i| {
+                gen_out.alpha_auth_bit_shares[i].value
+                    ^ eval_out.alpha_auth_bit_shares[i].value
+            })
+            .collect();
+        let y_full: Vec<bool> = (0..m)
+            .map(|j| {
+                gen_out.beta_auth_bit_shares[j].value
+                    ^ eval_out.beta_auth_bit_shares[j].value
+            })
+            .collect();
+        for j in 0..m {
+            for i in 0..n {
+                let k = j * n + i;
+                let z_full = gen_out.correlated_auth_bit_shares[k].value
+                    ^ eval_out.correlated_auth_bit_shares[k].value;
+                assert_eq!(
+                    z_full,
+                    x_full[i] & y_full[j],
+                    "TEST-06 product invariant failed at (i={}, j={}, k={})",
+                    i,
+                    j,
+                    k
+                );
+            }
+        }
+    }
 }
