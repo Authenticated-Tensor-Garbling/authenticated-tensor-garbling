@@ -554,7 +554,7 @@ fn bench_256x256_runtime_with_networking(c: &mut Criterion) {
     group.finish();
 }
 
-// Benchmarks the uncompressed preprocessing pipeline (Pi_aTensor / Construction 3, Appendix F): ideal F_bCOT + leaky_tensor_pre + auth_tensor_pre producing TensorFpreGen / TensorFpreEval output, plus simulated bCOT network bandwidth accounting.
+// Benchmarks the uncompressed preprocessing pipeline (Pi_aTensor' / Construction 4, Appendix F): ideal F_bCOT + leaky_tensor_pre + auth_tensor_pre producing TensorFpreGen / TensorFpreEval output, plus simulated bCOT network bandwidth accounting.
 fn bench_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("preprocessing");
     group.warm_up_time(Duration::from_secs(5));
