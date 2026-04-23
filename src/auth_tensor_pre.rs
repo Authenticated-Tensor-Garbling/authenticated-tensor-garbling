@@ -162,8 +162,11 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
 /// chunking_factor: passed through to TensorFpreGen/Eval output.
-/// shuffle_seed: seeds a per-triple `ChaCha12Rng::seed_from_u64(shuffle_seed ^ j)`
+/// shuffle_seed: seeds a per-triple `ChaCha12Rng::seed_from_u64(shuffle_seed.wrapping_add(j))`
 /// used to sample the Construction 4 row-permutation π_j ∈ S_n for triple j.
+/// `wrapping_add` is used instead of XOR so that `shuffle_seed = 0` does not collapse
+/// all seeds to `j` directly — triple 0 always gets seed 0 under XOR, eliminating
+/// per-run freshness. With `wrapping_add`, distinct seeds are guaranteed for all j.
 pub fn combine_leaky_triples(
     triples: Vec<LeakyTriple>,
     bucket_size: usize,
@@ -198,12 +201,12 @@ pub fn combine_leaky_triples(
 
     // ---- Construction 4 permutation step (PROTO-13, PROTO-14) ----
     // For each triple j, sample a fresh per-triple ChaCha12Rng seeded
-    // with (shuffle_seed XOR j), generate a uniform permutation
+    // with shuffle_seed.wrapping_add(j), generate a uniform permutation
     // π_j ∈ S_n via Fisher-Yates (SliceRandom::shuffle), and apply it
     // to the x-rows and the i-index of the Z-rows (y-rows untouched).
     let mut triples = triples; // rebind as `mut` for in-place permutation.
     for (j, triple) in triples.iter_mut().enumerate() {
-        let mut rng = ChaCha12Rng::seed_from_u64(shuffle_seed ^ j as u64);
+        let mut rng = ChaCha12Rng::seed_from_u64(shuffle_seed.wrapping_add(j as u64));
         let mut perm: Vec<usize> = (0..n).collect();
         perm.shuffle(&mut rng);
         apply_permutation_to_triple(triple, &perm);
