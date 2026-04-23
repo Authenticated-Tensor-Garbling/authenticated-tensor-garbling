@@ -337,7 +337,6 @@ pub(crate) fn verify_cross_party(
 mod tests {
     use super::*;
     use crate::bcot::IdealBCot;
-    use crate::delta::Delta;
     use crate::leaky_tensor_pre::LeakyTensorPre;
     use crate::sharing::AuthBitShare;
     use crate::auth_tensor_gen::AuthTensorGen;
