@@ -145,7 +145,7 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     1 + (SSP + log2_p - 1) / log2_p
 }
 
-/// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor, Construction 3).
+/// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor', Construction 4).
 ///
 /// Implements the paper's two-to-one combining (references/appendix_krrw_pre.tex §3.1
 /// lines 415-444) iteratively: start with `triples[0]`, fold the remaining B-1 triples
@@ -162,14 +162,15 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
 /// chunking_factor: passed through to TensorFpreGen/Eval output.
-/// shuffle_seed: reserved for future Phase 6 (permutation bucketing, Construction 4).
+/// shuffle_seed: seeds a per-triple `ChaCha12Rng::seed_from_u64(shuffle_seed ^ j)`
+/// used to sample the Construction 4 row-permutation π_j ∈ S_n for triple j.
 pub fn combine_leaky_triples(
     triples: Vec<LeakyTriple>,
     bucket_size: usize,
     n: usize,
     m: usize,
     chunking_factor: usize,
-    _shuffle_seed: u64,
+    shuffle_seed: u64,
 ) -> (TensorFpreGen, TensorFpreEval) {
     assert_eq!(triples.len(), bucket_size, "triples.len() must equal bucket_size");
     assert!(bucket_size >= 1);
@@ -195,7 +196,20 @@ pub fn combine_leaky_triples(
         );
     }
 
-    // Iterative fold per Construction 3: start with triples[0], combine each next
+    // ---- Construction 4 permutation step (PROTO-13, PROTO-14) ----
+    // For each triple j, sample a fresh per-triple ChaCha12Rng seeded
+    // with (shuffle_seed XOR j), generate a uniform permutation
+    // π_j ∈ S_n via Fisher-Yates (SliceRandom::shuffle), and apply it
+    // to the x-rows and the i-index of the Z-rows (y-rows untouched).
+    let mut triples = triples; // rebind as `mut` for in-place permutation.
+    for (j, triple) in triples.iter_mut().enumerate() {
+        let mut rng = ChaCha12Rng::seed_from_u64(shuffle_seed ^ j as u64);
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.shuffle(&mut rng);
+        apply_permutation_to_triple(triple, &perm);
+    }
+
+    // Iterative fold per Construction 4: start with triples[0], combine each next
     // triple into the accumulator via two_to_one_combine (paper line 474).
     // (Clone triples[0] because LeakyTriple is not Copy — Rust ownership pitfall.)
     let mut acc: LeakyTriple = triples[0].clone();
