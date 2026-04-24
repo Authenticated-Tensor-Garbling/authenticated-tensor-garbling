@@ -54,6 +54,7 @@ impl AuthTensorEval {
             alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,
+            // TODO(Phase 8): forward fpre_eval.gamma_auth_bit_shares to a corresponding field on AuthTensorEval
             first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
         }

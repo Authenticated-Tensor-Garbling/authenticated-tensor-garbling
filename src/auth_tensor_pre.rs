@@ -238,6 +238,7 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: acc.gen_x_shares,
             beta_auth_bit_shares: acc.gen_y_shares,
             correlated_auth_bit_shares: acc.gen_z_shares,
+            gamma_auth_bit_shares: vec![], // stub: uncompressed path does not generate l_gamma yet (Phase 8)
         },
         TensorFpreEval {
             n,
@@ -249,6 +250,7 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: acc.eval_x_shares,
             beta_auth_bit_shares: acc.eval_y_shares,
             correlated_auth_bit_shares: acc.eval_z_shares,
+            gamma_auth_bit_shares: vec![], // stub: uncompressed path does not generate l_gamma yet (Phase 8)
         },
     )
 }
