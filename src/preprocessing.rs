@@ -31,6 +31,13 @@ pub struct TensorFpreGen {
     /// Garbler's `AuthBitShare` for each correlated bit alpha_i AND beta_j; length n*m,
     /// column-major index j*n + i. MAC committed under delta_b.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    /// Garbler's `AuthBitShare` for each gate-output mask l_gamma per (i,j) pair;
+    /// length n*m, column-major index j*n + i. MAC committed under delta_b (D_ev-authenticated).
+    /// Distinct from `correlated_auth_bit_shares` which encodes l_gamma* (the preprocessing
+    /// triple output mask). Populated by `IdealPreprocessingBackend`; initialized to `vec![]`
+    /// by `UncompressedPreprocessingBackend` (Phase 8 will fill in the real value).
+    /// See CONTEXT.md D-04, D-05 and REQUIREMENTS.md PRE-04.
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 }
 
 pub struct TensorFpreEval {
@@ -55,6 +62,10 @@ pub struct TensorFpreEval {
     /// Evaluator's `AuthBitShare` for each correlated bit (column-major, length n*m,
     /// index j*n + i). MAC committed under delta_a.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    /// Evaluator's `AuthBitShare` for each gate-output mask l_gamma; length n*m,
+    /// column-major index j*n + i. MAC committed under delta_a (symmetric to TensorFpreGen).
+    /// See CONTEXT.md D-04, D-05.
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 }
 
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor', Construction 4).
