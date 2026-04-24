@@ -23,6 +23,7 @@ pub mod feq;
 pub mod leaky_tensor_pre;
 pub mod auth_tensor_pre;
 pub mod preprocessing;
+pub mod online;
 
 use crate::block::Block;
 
