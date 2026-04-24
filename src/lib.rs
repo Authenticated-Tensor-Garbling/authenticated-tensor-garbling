@@ -249,6 +249,130 @@ mod tests {
     use crate::auth_tensor_fpre::TensorFpre;
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
+    use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
+    use crate::online::check_zero;
+    use crate::sharing::AuthBitShare;
+
+    /// Assembles the per-gate D_ev-authenticated `c_gamma_shares` vec for Protocol 1
+    /// CheckZero per Construction 3 (5_online.tex line 206) and Phase 8 CONTEXT.md D-09.
+    ///
+    /// For each (i, j) gate, c_gamma is the linear combination:
+    ///   c_gamma[(i,j)] = (L_alpha[i] AND L_beta[j])              [public bit]
+    ///                  XOR L_alpha[i] · l_beta[j]                 [shared, include iff L_alpha[i]]
+    ///                  XOR L_beta [j] · l_alpha[i]                [shared, include iff L_beta[j]]
+    ///                  XOR l_gamma_star[(i,j)]                    [shared, always — = l_alpha · l_beta]
+    ///                  XOR L_gamma[(i,j)]                          [public bit]
+    ///                  XOR l_gamma[(i,j)]                          [shared, always]
+    ///
+    /// **In-process simulation approach:**
+    ///
+    /// For the in-process integration test, both parties' preprocessing shares are
+    /// available. We compute the FULL reconstructed c_gamma bit from both parties'
+    /// share values, and assemble an IT-MAC share verified under `delta_a` using
+    /// the evaluator's MAC structure (which is committed under delta_a per
+    /// src/preprocessing.rs:61-71 and gen_auth_bit in auth_tensor_fpre.rs:66-86).
+    ///
+    /// Specifically, per `gen_auth_bit`:
+    ///   gen_share.key = B's sender key Kb
+    ///   eval_share.mac = Kb.auth(eval.value, delta_a)
+    ///
+    /// So `{ key: gb.key, mac: ev.mac }` satisfies `mac == key.auth(ev.value, delta_a)`.
+    ///
+    /// The full c_gamma bit is `gb.value XOR ev.value`. In the in-process simulation
+    /// this is computed directly; then the MAC is adjusted to reflect the full bit:
+    ///   combined.mac = combined.key.auth(c_gamma_bit, delta_a)
+    ///                = combined.key.auth(XOR(gb_i.v XOR ev_i.v), delta_a)
+    ///
+    /// This produces valid `AuthBitShare`s that `check_zero` can verify:
+    ///   - value == 0 iff c_gamma_bit == 0
+    ///   - mac == key.auth(value, delta_a) always holds
+    ///
+    /// The combined key is `XOR(gb_i.key)` (sum of gen-side keys, which are the
+    /// evaluator's B-keys in the D_ev structure). The MAC is freshly computed from
+    /// the full reconstructed value.
+    ///
+    /// Returns a Vec<AuthBitShare> of length n*m in column-major order (j*n + i).
+    #[allow(clippy::too_many_arguments)]
+    fn assemble_c_gamma_shares(
+        n: usize,
+        m: usize,
+        l_alpha_pub: &[bool],          // length n — public masked alpha bits
+        l_beta_pub: &[bool],           // length m — public masked beta bits
+        l_gamma_pub: &[bool],          // length n*m — public masked gamma bits (column-major)
+        gb: &AuthTensorGen,
+        ev: &AuthTensorEval,
+    ) -> Vec<AuthBitShare> {
+        assert_eq!(l_alpha_pub.len(), n);
+        assert_eq!(l_beta_pub.len(),  m);
+        assert_eq!(l_gamma_pub.len(), n * m);
+        assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
+        assert_eq!(gb.beta_auth_bit_shares.len(),        m);
+        assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
+        assert_eq!(gb.gamma_auth_bit_shares.len(),       n * m);
+        assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
+        assert_eq!(ev.beta_auth_bit_shares.len(),        m);
+        assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
+        assert_eq!(ev.gamma_auth_bit_shares.len(),       n * m);
+
+        let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+        for j in 0..m {
+            for i in 0..n {
+                let idx = j * n + i;
+
+                // Accumulate the combined key (XOR of gen-side B-keys) and the
+                // full reconstructed c_gamma bit (XOR of both parties' values).
+                // The gen-side keys are the D_ev-structure keys (B's keys, Kb_i)
+                // that authenticate the eval's share values under delta_a.
+                use crate::keys::Key;
+                use crate::block::Block;
+                let mut combined_key = Key::from(Block::ZERO);
+                let mut c_gamma_bit = false;
+
+                // Term: L_alpha[i] · l_beta[j]   (include iff L_alpha[i] is true)
+                if l_alpha_pub[i] {
+                    combined_key = combined_key + gb.beta_auth_bit_shares[j].key;
+                    c_gamma_bit ^= gb.beta_auth_bit_shares[j].value
+                                 ^ ev.beta_auth_bit_shares[j].value;
+                }
+
+                // Term: L_beta[j] · l_alpha[i]   (include iff L_beta[j] is true)
+                if l_beta_pub[j] {
+                    combined_key = combined_key + gb.alpha_auth_bit_shares[i].key;
+                    c_gamma_bit ^= gb.alpha_auth_bit_shares[i].value
+                                 ^ ev.alpha_auth_bit_shares[i].value;
+                }
+
+                // Term: l_gamma*[(i,j)] = l_alpha[i] · l_beta[j]   (always)
+                combined_key = combined_key + gb.correlated_auth_bit_shares[idx].key;
+                c_gamma_bit ^= gb.correlated_auth_bit_shares[idx].value
+                             ^ ev.correlated_auth_bit_shares[idx].value;
+
+                // Term: l_gamma[(i,j)]   (always)
+                combined_key = combined_key + gb.gamma_auth_bit_shares[idx].key;
+                c_gamma_bit ^= gb.gamma_auth_bit_shares[idx].value
+                             ^ ev.gamma_auth_bit_shares[idx].value;
+
+                // Fold the PUBLIC-bit value contribution.
+                // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
+                // the bit value — no IT-MAC structure.
+                let public_bit = (l_alpha_pub[i] & l_beta_pub[j]) ^ l_gamma_pub[idx];
+                c_gamma_bit ^= public_bit;
+
+                // Build a properly-formed AuthBitShare verified under delta_a.
+                // key = XOR(gen-side B-keys), mac = key.auth(c_gamma_bit, delta_a).
+                // value = c_gamma_bit.
+                let combined_mac = combined_key.auth(c_gamma_bit, &gb.delta_a);
+                let share = AuthBitShare {
+                    key: combined_key,
+                    mac: combined_mac,
+                    value: c_gamma_bit,
+                };
+
+                out.push(share);
+            }
+        }
+        out
+    }
 
     #[test]
     fn test_auth_tensor_product() {
@@ -379,4 +503,132 @@ mod tests {
             println!();
         }
     }
+
+    #[test]
+    fn test_auth_tensor_product_full_protocol_1() {
+        // P1-04: end-to-end honest run produces L_gamma reconstructions consistent with
+        // c_gamma == 0, and check_zero returns true.
+        //
+        // Key: L_alpha[i] and L_beta[j] must be the ACTUAL masked input values used
+        // by the garble pipeline. IdealPreprocessingBackend.run() calls
+        // generate_for_ideal_trusted_dealer(0, 0) internally, so masked_x = alpha
+        // and masked_y = beta. The reconstructed clear masked-input bits are:
+        //   L_alpha[i] = gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value
+        //               = l_alpha[i] (the preprocessing alpha bit)
+        // which gives v_alpha[i] = L_alpha[i] ^ l_alpha[i] = 0. Then
+        // v_gamma = v_alpha ⊗ v_beta = 0, so L_gamma = l_gamma and c_gamma = 0.
+        //
+        // To exercise non-trivial L_alpha/L_beta patterns while keeping c_gamma = 0,
+        // we reconstruct the ACTUAL alpha/beta bits and use them directly.
+
+        let n = 4;
+        let m = 3;
+
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        // Standard Protocol 1 garble + evaluate sequence (mirrors test_auth_tensor_product).
+        let (cl1, ct1) = gb.garble_first_half();
+        ev.evaluate_first_half(cl1, ct1);
+        let (cl2, ct2) = gb.garble_second_half();
+        ev.evaluate_second_half(cl2, ct2);
+        gb.garble_final();
+        ev.evaluate_final();
+
+        // Phase 8 NEW: emit and reconstruct L_gamma.
+        let lambda_gb = gb.compute_lambda_gamma();
+        assert_eq!(lambda_gb.len(), n * m);
+        let l_gamma_combined = ev.compute_lambda_gamma(&lambda_gb);
+        assert_eq!(l_gamma_combined.len(), n * m);
+
+        // The public masked-input bits (L_alpha, L_beta) must match what the garble
+        // pipeline used. For IdealPreprocessingBackend (internally uses input=0),
+        // L_alpha[i] = reconstructed alpha[i] = gen.value ^ ev.value.
+        // This ensures v_alpha = L_alpha ^ l_alpha = 0 for each bit, so
+        // v_gamma = v_alpha ⊗ v_beta = 0 and c_gamma = 0 in honest run.
+        let l_alpha_pub: Vec<bool> = (0..n)
+            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
+            .collect();
+        let l_beta_pub: Vec<bool> = (0..m)
+            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
+            .collect();
+
+        // L_gamma_pub is the masked output value reconstructed by the evaluator —
+        // it IS the l_gamma_combined vec we just produced (= l_gamma when v_gamma=0).
+        let c_gamma_shares = assemble_c_gamma_shares(
+            n, m,
+            &l_alpha_pub,
+            &l_beta_pub,
+            &l_gamma_combined,
+            &gb,
+            &ev,
+        );
+
+        assert_eq!(c_gamma_shares.len(), n * m);
+
+        // Honest-party CheckZero: c_gamma must reconstruct to 0 and the MAC must verify.
+        assert!(
+            check_zero(&c_gamma_shares, &gb.delta_a),
+            "P1-04: honest Protocol 1 run must pass check_zero"
+        );
+    }
+
+    #[test]
+    fn test_protocol_1_check_zero_aborts_on_tampered_lambda() {
+        // P1-05: tampering with lambda_gb (the garbler-emitted [L_gamma]^gb) must cause
+        // check_zero to return false, NOT silently pass.
+
+        let n = 4;
+        let m = 3;
+
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        let (cl1, ct1) = gb.garble_first_half();
+        ev.evaluate_first_half(cl1, ct1);
+        let (cl2, ct2) = gb.garble_second_half();
+        ev.evaluate_second_half(cl2, ct2);
+        gb.garble_final();
+        ev.evaluate_final();
+
+        let lambda_gb = gb.compute_lambda_gamma();
+
+        // Tamper: clone the garbler's emitted vec, flip ONE bit at index 0.
+        // (We do not mutate `lambda_gb` itself — keep it as the honest reference.)
+        let mut tampered_lambda_gb = lambda_gb.clone();
+        tampered_lambda_gb[0] ^= true;
+        assert_ne!(tampered_lambda_gb, lambda_gb,
+            "tampered vec must differ from honest vec");
+
+        // Evaluator processes the tampered lambda_gb — this corrupts L_gamma_combined[0].
+        let l_gamma_combined_tampered = ev.compute_lambda_gamma(&tampered_lambda_gb);
+        assert_eq!(l_gamma_combined_tampered.len(), n * m);
+
+        // Use the ACTUAL reconstructed masked-input bits (same approach as P1-04).
+        // This ensures the c_gamma formula is correct regardless of the L values chosen.
+        let l_alpha_pub: Vec<bool> = (0..n)
+            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
+            .collect();
+        let l_beta_pub: Vec<bool> = (0..m)
+            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
+            .collect();
+
+        let c_gamma_shares_tampered = assemble_c_gamma_shares(
+            n, m,
+            &l_alpha_pub,
+            &l_beta_pub,
+            &l_gamma_combined_tampered,
+            &gb,
+            &ev,
+        );
+
+        // The tampered L_gamma corrupts c_gamma at index 0. check_zero MUST return false.
+        assert!(
+            !check_zero(&c_gamma_shares_tampered, &gb.delta_a),
+            "P1-05: tampered lambda_gb must cause check_zero to abort, not silently pass"
+        );
+    }
+
 }
