@@ -19,6 +19,7 @@ pub struct AuthTensorEval {
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -37,6 +38,7 @@ impl AuthTensorEval {
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
+            gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
         }
@@ -54,7 +56,7 @@ impl AuthTensorEval {
             alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,
-            // TODO(Phase 8): forward fpre_eval.gamma_auth_bit_shares to a corresponding field on AuthTensorEval
+            gamma_auth_bit_shares: fpre_eval.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
         }
@@ -160,6 +162,57 @@ impl AuthTensorEval {
                     self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
             }
         }
+    }
+
+    /// Reconstructs the masked output `L_gamma` per (i,j) given the garbler's
+    /// `[L_gamma]^gb` from the garbled circuit.
+    ///
+    /// MUST be called AFTER `evaluate_final()` — `first_half_out` only holds
+    /// `[v_gamma D_gb]^ev` once `evaluate_final` has XORed in the correlated MAC.
+    /// Calling earlier returns garbage.
+    ///
+    /// Per CONTEXT.md D-05 (paper 5_online.tex line 160):
+    ///   `L_gamma[j*n+i] = lambda_gb[j*n+i]
+    ///                     XOR first_half_out[(i,j)].lsb()
+    ///                     XOR gamma_auth_bit_shares[j*n+i].bit()`
+    ///
+    /// Output is column-major: `vec[j * self.n + i]` corresponds to gate output (i, j).
+    /// Returns the reconstructed `L_gamma := v_gamma XOR l_gamma` (the masked output
+    /// value that the consistency check and the output decoding step both consume).
+    ///
+    /// Note on D_gb vs D_ev: see the corresponding doc on AuthTensorGen's method —
+    /// `AuthBitShare::bit()` is delta-independent so the D_ev-authenticated
+    /// gamma_auth_bit_shares yields the correct extbit value despite the paper's
+    /// D_gb notation. See 08-RESEARCH.md Pitfall 1.
+    ///
+    /// # Panics
+    /// - Panics if `lambda_gb.len() != self.n * self.m`.
+    /// - Panics if `gamma_auth_bit_shares.len() != self.n * self.m`
+    ///   (UncompressedPreprocessingBackend stub leaves it empty — use IdealPreprocessingBackend).
+    pub fn compute_lambda_gamma(&self, lambda_gb: &[bool]) -> Vec<bool> {
+        assert_eq!(
+            lambda_gb.len(),
+            self.n * self.m,
+            "compute_lambda_gamma: lambda_gb length must equal n*m"
+        );
+        assert_eq!(
+            self.gamma_auth_bit_shares.len(),
+            self.n * self.m,
+            "compute_lambda_gamma requires gamma_auth_bit_shares.len() == n*m; \
+             UncompressedPreprocessingBackend leaves this vec empty — \
+             use IdealPreprocessingBackend"
+        );
+
+        let mut out = Vec::with_capacity(self.n * self.m);
+        for j in 0..self.m {
+            for i in 0..self.n {
+                let idx = j * self.n + i;
+                let v_extbit  = self.first_half_out[(i, j)].lsb();
+                let lg_extbit = self.gamma_auth_bit_shares[idx].bit();
+                out.push(lambda_gb[idx] ^ v_extbit ^ lg_extbit);
+            }
+        }
+        out
     }
 }
 
