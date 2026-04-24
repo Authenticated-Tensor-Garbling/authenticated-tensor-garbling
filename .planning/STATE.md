@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Full Protocol Demonstration + Benchmarks
-status: active
-stopped_at: ~
-last_updated: "2026-04-23T00:00:00.000Z"
-last_activity: 2026-04-23 -- roadmap created for v1.1 (Phases 7-10)
+milestone_name: Phases
+status: Not started
+stopped_at: Phase 7 context gathered
+last_updated: "2026-04-24T00:33:43.826Z"
+last_activity: 2026-04-23 — Roadmap for v1.1 created (Phases 7–10)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -47,6 +47,7 @@ Progress: [░░░░░░░░░░] 0% (0/4 phases)
 All v1.0 decisions logged in PROJECT.md Key Decisions table.
 
 **v1.1 decisions:**
+
 - PRE-04 (TensorFpreGen/Eval field extensions) is in Phase 7 with PRE-01..03 — struct field additions must update all constructors atomically; splitting across phases breaks compilation
 - ONL-01/02 (Open()) and P1-01..05 (Protocol 1) are co-located in Phase 8 — Open() is called inside garble/eval steps so both must land together
 - P2-01..05 (Protocol 2) is Phase 9, depends on Phase 7 (PRE-04 fields) but is independent of Phase 8 ordering
@@ -73,7 +74,7 @@ None — Phase 7 planning next.
 
 ## Session Continuity
 
-Last session: 2026-04-23
-Stopped at: Roadmap created — ready to plan Phase 7
-Resume file: None
+Last session: --stopped-at
+Stopped at: Phase 7 context gathered
+Resume file: --resume-file
 Next action: `/gsd-plan-phase 7`
