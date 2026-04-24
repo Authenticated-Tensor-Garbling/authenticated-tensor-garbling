@@ -452,10 +452,6 @@ mod tests {
 
 
         let (gen_chunk_levels, gen_chunk_cts) = gb.garble_second_half();
-        println!("gen_chunk_levels: {:?}", gen_chunk_levels.len());
-        println!("gen_chunk_levels[0] (each hold 2 blocks): {:?}", gen_chunk_levels[0].len());
-        println!("gen_chunk_cts: {:?}", gen_chunk_cts.len());
-        println!("gen_chunk_cts[0] (ecah hold one block): {:?}", gen_chunk_cts[0].len());
         ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
 
         // check that second_out has the correct value
@@ -497,14 +493,13 @@ mod tests {
 
                 let gb_val = gb.first_half_out[(i, j)];
                 let ev_val = ev.first_half_out[(i, j)];
-                
+
                 if expected_val {
                     assert_eq!(gb_val, ev_val ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
                 } else {
                     assert_eq!(gb_val, ev_val, "At position ({},{}): gb_out should equal ev_out when expected_val=0", i, j);
                 }
             }
-            println!();
         }
     }
 
