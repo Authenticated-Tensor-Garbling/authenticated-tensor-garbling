@@ -8,6 +8,9 @@ use crate::{block::Block, delta::Delta, sharing::AuthBitShare};
 use crate::bcot::IdealBCot;
 use crate::leaky_tensor_pre::LeakyTensorPre;
 use crate::auth_tensor_pre::{combine_leaky_triples, bucket_size_for};
+use crate::auth_tensor_fpre::TensorFpre;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha12Rng;
 
 pub struct TensorFpreGen {
     /// Tensor row dimension (number of alpha / x-input bits).
@@ -66,6 +69,42 @@ pub struct TensorFpreEval {
     /// column-major index j*n + i. MAC committed under delta_a (symmetric to TensorFpreGen).
     /// See CONTEXT.md D-04, D-05.
     pub gamma_auth_bit_shares: Vec<AuthBitShare>,
+}
+
+/// Common interface for all preprocessing backends.
+///
+/// All implementations are zero-field (unit) structs — no state, just behavior.
+/// Using `&self` even though no data is read: makes the trait object-safe
+/// (usable as `dyn TensorPreprocessing`) consistent with the codebase's `&self` / `&mut self`
+/// convention. See CONTEXT.md D-01.
+pub trait TensorPreprocessing {
+    fn run(
+        &self,
+        n: usize,
+        m: usize,
+        count: usize,
+        chunking_factor: usize,
+    ) -> (TensorFpreGen, TensorFpreEval);
+}
+
+/// Backend that wraps the real two-party uncompressed preprocessing protocol (Pi_aTensor',
+/// Construction 4). Callers should use `UncompressedPreprocessingBackend.run(n, m, 1, cf)`
+/// instead of calling `run_preprocessing` directly. See CONTEXT.md D-02.
+///
+/// Note: count > 1 retains the existing `assert_eq!(count, 1)` panic from `run_preprocessing`
+/// until a batch variant is implemented. This matches existing behavior.
+pub struct UncompressedPreprocessingBackend;
+
+impl TensorPreprocessing for UncompressedPreprocessingBackend {
+    fn run(
+        &self,
+        n: usize,
+        m: usize,
+        count: usize,
+        chunking_factor: usize,
+    ) -> (TensorFpreGen, TensorFpreEval) {
+        run_preprocessing(n, m, count, chunking_factor)
+    }
 }
 
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor', Construction 4).
