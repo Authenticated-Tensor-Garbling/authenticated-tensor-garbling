@@ -23,7 +23,7 @@ Full phase details: [`.planning/milestones/v1.0-ROADMAP.md`](.planning/milestone
 
 ## v1.1 Phases
 
-- [ ] **Phase 7: Preprocessing Trait + Ideal Backends** - Define TensorPreprocessing trait; IdealPreprocessingBackend + IdealCompressedPreprocessingBackend; extend TensorFpreGen/Eval with consistency-check fields
+- [ ] **Phase 7: Preprocessing Trait + Ideal Backends** - Define TensorPreprocessing trait; IdealPreprocessingBackend; extend TensorFpreGen/Eval with gamma_auth_bit_shares consistency-check field (PRE-05 deferred to v3)
 - [ ] **Phase 8: Open() + Protocol 1 Garble/Eval/Check** - open() free function; Protocol 1 complete garble, evaluate, and CheckZero; positive and negative tests
 - [ ] **Phase 9: Protocol 2 Garble/Eval/Check** - Wide seed expansion; Protocol 2 garble (_p2), evaluate (_p2), consistency check; end-to-end test
 - [ ] **Phase 10: Wall-Clock Benchmarks** - black_box all outputs; iter_custom throughput benchmarks; preprocessing vs online comparison; distributed half gates vs naive tensor
@@ -33,14 +33,19 @@ Full phase details: [`.planning/milestones/v1.0-ROADMAP.md`](.planning/milestone
 ### Phase 7: Preprocessing Trait + Ideal Backends
 **Goal**: All preprocessing backends are interchangeable through a single trait; TensorFpreGen/Eval carry the fields needed for the consistency check
 **Depends on**: Phase 6 (v1.0 complete)
-**Requirements**: PRE-01, PRE-02, PRE-03, PRE-04, PRE-05
+**Requirements**: PRE-01, PRE-02, PRE-03, PRE-04 (PRE-05 deferred to v3 per D-10)
+**Plans**: 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — PRE-04: Add gamma_auth_bit_shares field to TensorFpreGen/TensorFpreEval; update all construction sites atomically
+- [ ] 07-02-PLAN.md — PRE-01/02/03: Define TensorPreprocessing trait; implement UncompressedPreprocessingBackend and IdealPreprocessingBackend
+- [ ] 07-03-PLAN.md — Tests: PRE-01/02/03/04 verification (trait dispatch, backend correctness, IT-MAC invariant on gamma shares)
+
 **Success Criteria** (what must be TRUE):
   1. A caller can swap IdealPreprocessingBackend for pi'_atensor (run_preprocessing) by changing only the concrete type — no call-site changes to the online phase
-  2. TensorFpreGen and TensorFpreEval each compile with the two new fields (gamma_auth_bit_shares, output_mask_auth_bit_shares) and every existing constructor initializes them without error
+  2. TensorFpreGen and TensorFpreEval each compile with the new gamma_auth_bit_shares field and every existing constructor initializes it without error
   3. IdealPreprocessingBackend::run() returns a (TensorFpreGen, TensorFpreEval) pair whose D_gb and D_ev MAC values satisfy the IT-MAC invariant (mac = key XOR bit * delta)
-  4. IdealCompressedPreprocessingBackend::run() returns a pair satisfying the same invariant with O(SSP * log(kappa)) authentication cost observable in the construction logic
-  5. cargo test passes with zero regressions after the struct field and trait additions
-**Plans**: TBD
+  4. cargo test passes with zero regressions after the struct field and trait additions
 
 ### Phase 8: Open() + Protocol 1 Garble/Eval/Check
 **Goal**: Users of the online phase can execute a full Protocol 1 tensor gate — garble, evaluate, open masked wire values, and confirm output correctness via CheckZero — with tests catching both wrong-delta and tampered-mask failure modes
@@ -89,7 +94,7 @@ Full phase details: [`.planning/milestones/v1.0-ROADMAP.md`](.planning/milestone
 | 4. M2 Pi_LeakyTensor + F_eq | v1.0 | 3/3 | Complete | 2026-04-22 |
 | 5. M2 Pi_aTensor Correct Combining | v1.0 | 3/3 | Complete | 2026-04-22 |
 | 6. M2 Pi_aTensor' Permutation Bucketing + Benches | v1.0 | 3/3 | Complete | 2026-04-23 |
-| 7. Preprocessing Trait + Ideal Backends | v1.1 | 0/? | Not started | - |
+| 7. Preprocessing Trait + Ideal Backends | v1.1 | 0/3 | Not started | - |
 | 8. Open() + Protocol 1 Garble/Eval/Check | v1.1 | 0/? | Not started | - |
 | 9. Protocol 2 Garble/Eval/Check | v1.1 | 0/? | Not started | - |
 | 10. Wall-Clock Benchmarks | v1.1 | 0/? | Not started | - |
