@@ -57,7 +57,13 @@ Plans:
   3. Protocol 1 garble + evaluate together produce Z_garbler XOR Z_evaluator == correct tensor product (extends the v1.0 battery to the full online protocol including l_gamma* XOR)
   4. CheckZero on D_ev MAC shares including the l_gamma* preprocessing term passes for honest parties and aborts when L_gamma is tampered (two separate test cases)
   5. cargo test passes with zero regressions on all v1.0 tests
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [x] 08-01-PLAN.md — P1-01/P1-02: Forward gamma_auth_bit_shares + add compute_lambda_gamma to AuthTensorGen and AuthTensorEval
+- [x] 08-02-PLAN.md — P1-03 (+ ONL-01/02 deferred per D-01): Create src/online.rs with check_zero primitive; wire `pub mod online;` in lib.rs
+- [ ] 08-03-PLAN.md — P1-04/P1-05: End-to-end Protocol 1 positive test + tampered-lambda negative test in src/lib.rs (uses IdealPreprocessingBackend)
+
 **UI hint**: no
 
 ### Phase 9: Protocol 2 Garble/Eval/Check
@@ -95,7 +101,7 @@ Plans:
 | 5. M2 Pi_aTensor Correct Combining | v1.0 | 3/3 | Complete | 2026-04-22 |
 | 6. M2 Pi_aTensor' Permutation Bucketing + Benches | v1.0 | 3/3 | Complete | 2026-04-23 |
 | 7. Preprocessing Trait + Ideal Backends | v1.1 | 0/3 | Not started | - |
-| 8. Open() + Protocol 1 Garble/Eval/Check | v1.1 | 0/? | Not started | - |
+| 8. Open() + Protocol 1 Garble/Eval/Check | v1.1 | 0/3 | Planned | - |
 | 9. Protocol 2 Garble/Eval/Check | v1.1 | 0/? | Not started | - |
 | 10. Wall-Clock Benchmarks | v1.1 | 0/? | Not started | - |
 
