@@ -1,23 +1,23 @@
 ---
 phase: 08-open-protocol-1-garble-eval-check
-fixed_at: 2026-04-23T00:00:00Z
+fixed_at: 2026-04-24T00:00:00Z
 review_path: .planning/phases/08-open-protocol-1-garble-eval-check/08-REVIEW.md
 iteration: 1
-findings_in_scope: 3
-fixed: 3
+findings_in_scope: 5
+fixed: 5
 skipped: 0
 status: all_fixed
 ---
 
 # Phase 08: Code Review Fix Report
 
-**Fixed at:** 2026-04-23
+**Fixed at:** 2026-04-24
 **Source review:** .planning/phases/08-open-protocol-1-garble-eval-check/08-REVIEW.md
 **Iteration:** 1
 
 **Summary:**
-- Findings in scope: 3 (WR-01, WR-02, WR-03 — Info findings excluded per fix_scope)
-- Fixed: 3
+- Findings in scope: 5 (WR-01, WR-02, WR-03, IN-01, IN-02 — all scope)
+- Fixed: 5
 - Skipped: 0
 
 ## Fixed Issues
@@ -60,8 +60,31 @@ parties' private state, is only valid inside `#[cfg(test)]`, and describes what
 a real protocol implementation would do instead (each party assembles its own
 half independently and then runs `check_zero` over the network).
 
+### IN-01: Debug `println!` left in `test_auth_tensor_product`
+
+**Files modified:** `src/lib.rs`
+**Commit:** 0a181fb
+**Applied fix:** Removed all five diagnostic `println!` calls from the
+`test_auth_tensor_product` test (the four annotated calls reporting chunk-level
+and ciphertext counts, plus the bare `println!()` newline at the end of the
+inner loop). The `print!` used for the expected-value grid is not a diagnostic
+and was left in place. All 95 tests continue to pass.
+
+### IN-02: `check_zero` parameter named `delta_ev` but called with `delta_a` (garbler's delta)
+
+**Files modified:** `src/online.rs`
+**Commit:** b0fc15c
+**Applied fix:** Renamed the `delta_ev` parameter to `delta_mac` throughout
+`check_zero` — the function signature, all doc-comment references, and the
+single internal call to `share.key.auth(share.value, delta_mac)`. Added a
+clarifying paragraph to the doc comment explaining that `delta_mac` is the
+global correlation key under which the `c_gamma_shares` IT-MACs are
+authenticated (the verifying party's delta), and noting that `delta_a` from
+`AuthTensorGen` is that delta in this codebase. Eliminates the ambiguity that
+arose from `delta_ev` implying it must be the evaluator's own delta.
+
 ---
 
-_Fixed: 2026-04-23_
+_Fixed: 2026-04-24_
 _Fixer: Claude (gsd-code-fixer)_
 _Iteration: 1_
