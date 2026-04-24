@@ -21,25 +21,22 @@ use crate::delta::Delta;
 /// # Caller contract (per CONTEXT.md D-08)
 ///
 /// `check_zero` is a thin primitive — it does NOT know about the protocol
-/// structs or the c_gamma assembly. The caller MUST:
-///   1. Compute `c_gamma_shares` as the linear combination of D_ev-shares
-///      (l_alpha, l_beta, l_gamma, l_gamma\*) per the formula above.
-///   2. Pre-XOR the garbler-side and evaluator-side shares pairwise (using
-///      the `+` operator on `AuthBitShare`, which is field-wise XOR — see
-///      src/sharing.rs lines 66-115) so that for each entry:
-///        - `share.value` is the reconstructed c_gamma bit (gen.value XOR ev.value)
-///        - `share.key`   = gen.key XOR ev.key
-///        - `share.mac`   = gen.mac XOR ev.mac
-///      The combined share then satisfies the standard IT-MAC invariant
-///      `mac == key XOR value * delta_ev`, which is GF(2)-linear over
-///      individually correct shares.
+/// structs or the c_gamma assembly. The caller MUST assemble each `share`
+/// in `c_gamma_shares` with:
+///   - `share.value` = full reconstructed c_gamma bit (gen.value XOR ev.value)
+///   - `share.key`   = XOR of all gen-side B-keys contributing to this gate
+///   - `share.mac`   = `share.key.auth(share.value, delta_ev)`  ← freshly computed
 ///
-/// Calling `share.verify(&delta_ev)` directly on a RAW (un-XORed) cross-party
-/// share will panic with "MAC mismatch in share" even on correctly-formed
-/// shares (the key and MAC fields come from different bCOT directions and
-/// commit under different deltas — see src/auth_tensor_pre.rs lines 305-336
-/// for the full explanation). The pre-XOR step is what makes this primitive
-/// safe to call.
+/// **Do NOT** use the `AuthBitShare::add` (`+`) operator to combine
+/// cross-party shares directly. The two parties' MACs are authenticated
+/// under opposite deltas (gen side vs eval side in the bCOT structure) and
+/// will NOT combine correctly without recomputing the MAC — a naive XOR of
+/// gen.mac and ev.mac does not yield a valid IT-MAC under either party's
+/// delta. Always recompute `mac = key.auth(value, delta_ev)` after
+/// accumulating the full reconstructed bit and the combined key.
+///
+/// See `assemble_c_gamma_shares` in the test module (src/lib.rs) for the
+/// reference implementation of this pattern.
 ///
 /// # Returns
 ///
