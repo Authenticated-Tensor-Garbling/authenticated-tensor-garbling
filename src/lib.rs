@@ -292,6 +292,10 @@ mod tests {
     /// the full reconstructed value.
     ///
     /// Returns a Vec<AuthBitShare> of length n*m in column-major order (j*n + i).
+    // SIMULATION ONLY: This function requires both parties' private state and is
+    // only valid inside #[cfg(test)]. In a real protocol each party assembles its
+    // own half of c_gamma independently using only its own preprocessing shares,
+    // then the parties run check_zero on the combined share over the network.
     #[allow(clippy::too_many_arguments)]
     fn assemble_c_gamma_shares(
         n: usize,
