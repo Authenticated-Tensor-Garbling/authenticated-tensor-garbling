@@ -62,7 +62,7 @@ Plans:
 Plans:
 - [x] 08-01-PLAN.md — P1-01/P1-02: Forward gamma_auth_bit_shares + add compute_lambda_gamma to AuthTensorGen and AuthTensorEval
 - [x] 08-02-PLAN.md — P1-03 (+ ONL-01/02 deferred per D-01): Create src/online.rs with check_zero primitive; wire `pub mod online;` in lib.rs
-- [ ] 08-03-PLAN.md — P1-04/P1-05: End-to-end Protocol 1 positive test + tampered-lambda negative test in src/lib.rs (uses IdealPreprocessingBackend)
+- [x] 08-03-PLAN.md — P1-04/P1-05: End-to-end Protocol 1 positive test + tampered-lambda negative test in src/lib.rs (uses IdealPreprocessingBackend)
 
 **UI hint**: no
 
