@@ -126,7 +126,13 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         count: usize,
         chunking_factor: usize,
     ) -> (TensorFpreGen, TensorFpreEval) {
-        let _ = count; // ideal backend always returns one triple; count ignored
+        assert_eq!(
+            count, 1,
+            "IdealPreprocessingBackend::run: count > 1 is not yet supported; \
+             the ideal backend returns exactly one (TensorFpreGen, TensorFpreEval) pair. \
+             Use a loop calling run(n, m, 1, cf) for batch use."
+        );
+        let _ = count;
 
         let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
         fpre.generate_for_ideal_trusted_dealer(0, 0);
@@ -348,11 +354,18 @@ mod tests {
         // If this fails, the RNG seeding is broken (all bits are the same constant).
         let _ = any_gamma_set;    // not asserted — just checking no panic in access
         let _ = any_correlated_set;
-        // Structural check: gamma field exists and has correct type (accessed without panic)
-        assert_eq!(gen_out.gamma_auth_bit_shares.len(), 16);
+        // Verify that gamma and correlated shares are not byte-for-byte identical
+        // (independent random samples from different RNG seeds must differ).
+        let gamma_bits: Vec<bool> = gen_out.gamma_auth_bit_shares.iter()
+            .map(|s| s.value)
+            .collect();
+        let correlated_bits: Vec<bool> = gen_out.correlated_auth_bit_shares.iter()
+            .map(|s| s.value)
+            .collect();
         assert_ne!(
-            gen_out.gamma_auth_bit_shares[0].value as u8 + gen_out.correlated_auth_bit_shares[0].value as u8,
-            255u8, // can't both be true and false simultaneously in u8 arithmetic — just accessing both
+            gamma_bits,
+            correlated_bits,
+            "gamma and correlated auth bit shares must be independently sampled (different RNG seeds)"
         );
     }
 }
