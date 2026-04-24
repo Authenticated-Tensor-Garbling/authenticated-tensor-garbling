@@ -167,6 +167,7 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.gen_share).collect(),
+            gamma_auth_bit_shares: vec![],
         }, TensorFpreEval {
             n: self.n,
             m: self.m,
@@ -177,6 +178,7 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
+            gamma_auth_bit_shares: vec![],
         })
     }
 

@@ -61,6 +61,7 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
+            // TODO(Phase 8): forward fpre_gen.gamma_auth_bit_shares to a corresponding field on AuthTensorGen
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
         }
