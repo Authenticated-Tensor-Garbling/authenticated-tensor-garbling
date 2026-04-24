@@ -196,7 +196,8 @@ impl AuthTensorGen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth_tensor_fpre::TensorFpre};
+    use crate::auth_tensor_fpre::TensorFpre;
+    use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
 
     #[test]
     fn test_garble_first_half() {
@@ -228,5 +229,69 @@ mod tests {
 
         let (_chunk_levels, _chunk_cts) = gar.garble_first_half();
 
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_dimensions() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+
+        assert_eq!(gar.gamma_auth_bit_shares.len(), n * m,
+            "gamma_auth_bit_shares must be length n*m after new_from_fpre_gen");
+
+        let (gen_chunk_levels_1, gen_chunk_cts_1) = gar.garble_first_half();
+        let _ = (gen_chunk_levels_1, gen_chunk_cts_1);
+        let (gen_chunk_levels_2, gen_chunk_cts_2) = gar.garble_second_half();
+        let _ = (gen_chunk_levels_2, gen_chunk_cts_2);
+        gar.garble_final();
+
+        let lambda = gar.compute_lambda_gamma();
+        assert_eq!(lambda.len(), n * m,
+            "compute_lambda_gamma must return Vec<bool> of length n*m");
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_uses_column_major() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let _ = gar.garble_first_half();
+        let _ = gar.garble_second_half();
+        gar.garble_final();
+        let lambda = gar.compute_lambda_gamma();
+
+        // Probe one specific (i, j) entry.
+        let i = 2;
+        let j = 1;
+        let idx = j * n + i; // == 6
+        let expected = gar.first_half_out[(i, j)].lsb()
+                     ^ gar.gamma_auth_bit_shares[idx].bit();
+        assert_eq!(lambda[idx], expected,
+            "lambda[j*n+i] at (i=2, j=1) does not match D-04 formula");
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_full_consistency() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let _ = gar.garble_first_half();
+        let _ = gar.garble_second_half();
+        gar.garble_final();
+        let lambda = gar.compute_lambda_gamma();
+
+        for j in 0..m {
+            for i in 0..n {
+                let idx = j * n + i;
+                let expected = gar.first_half_out[(i, j)].lsb()
+                             ^ gar.gamma_auth_bit_shares[idx].bit();
+                assert_eq!(lambda[idx], expected,
+                    "D-04 formula mismatch at (i={}, j={}, idx={})", i, j, idx);
+            }
+        }
     }
 }
