@@ -26,6 +26,7 @@ pub struct AuthTensorGen {
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
+    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -44,6 +45,7 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
+            gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
         }
@@ -61,7 +63,7 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
-            // TODO(Phase 8): forward fpre_gen.gamma_auth_bit_shares to a corresponding field on AuthTensorGen
+            gamma_auth_bit_shares: fpre_gen.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
         }
@@ -191,12 +193,56 @@ impl AuthTensorGen {
             }
         }
     }
+
+    /// Computes the garbler's masked output share `[L_gamma]^gb` per (i,j).
+    ///
+    /// MUST be called AFTER `garble_final()` — `first_half_out` only holds
+    /// `[v_gamma D_gb]^gb` once `garble_final` has XORed in the correlated share.
+    /// Calling earlier returns garbage.
+    ///
+    /// Per CONTEXT.md D-04 (paper 5_online.tex line 132):
+    ///   `[L_gamma]^gb[j*n+i] = first_half_out[(i,j)].lsb()
+    ///                          XOR gamma_auth_bit_shares[j*n+i].bit()`
+    ///
+    /// Output is column-major: `vec[j * self.n + i]` corresponds to gate output (i, j).
+    ///
+    /// Note on D_gb vs D_ev: the paper writes `extbit([l_gamma D_gb])` but the Phase 7
+    /// `gamma_auth_bit_shares` field stores D_ev-authenticated shares. This is correct:
+    /// `AuthBitShare::bit()` returns `self.value`, which is the per-party local share
+    /// of the bit — independent of which delta authenticated the share. See
+    /// 08-RESEARCH.md Pitfall 1 for the full justification.
+    ///
+    /// # Panics
+    /// Panics if `gamma_auth_bit_shares.len() != self.n * self.m`. The
+    /// `UncompressedPreprocessingBackend` deliberately leaves this vec empty
+    /// (Phase 7 stub); use `IdealPreprocessingBackend` for any caller invoking
+    /// `compute_lambda_gamma`.
+    pub fn compute_lambda_gamma(&self) -> Vec<bool> {
+        assert_eq!(
+            self.gamma_auth_bit_shares.len(),
+            self.n * self.m,
+            "compute_lambda_gamma requires gamma_auth_bit_shares.len() == n*m; \
+             UncompressedPreprocessingBackend leaves this vec empty — \
+             use IdealPreprocessingBackend"
+        );
+
+        let mut out = Vec::with_capacity(self.n * self.m);
+        for j in 0..self.m {
+            for i in 0..self.n {
+                let v_extbit  = self.first_half_out[(i, j)].lsb();
+                let lg_extbit = self.gamma_auth_bit_shares[j * self.n + i].bit();
+                out.push(v_extbit ^ lg_extbit);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth_tensor_fpre::TensorFpre};
+    use crate::auth_tensor_fpre::TensorFpre;
+    use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
 
     #[test]
     fn test_garble_first_half() {
@@ -228,5 +274,69 @@ mod tests {
 
         let (_chunk_levels, _chunk_cts) = gar.garble_first_half();
 
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_dimensions() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+
+        assert_eq!(gar.gamma_auth_bit_shares.len(), n * m,
+            "gamma_auth_bit_shares must be length n*m after new_from_fpre_gen");
+
+        let (gen_chunk_levels_1, gen_chunk_cts_1) = gar.garble_first_half();
+        let _ = (gen_chunk_levels_1, gen_chunk_cts_1);
+        let (gen_chunk_levels_2, gen_chunk_cts_2) = gar.garble_second_half();
+        let _ = (gen_chunk_levels_2, gen_chunk_cts_2);
+        gar.garble_final();
+
+        let lambda = gar.compute_lambda_gamma();
+        assert_eq!(lambda.len(), n * m,
+            "compute_lambda_gamma must return Vec<bool> of length n*m");
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_uses_column_major() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let _ = gar.garble_first_half();
+        let _ = gar.garble_second_half();
+        gar.garble_final();
+        let lambda = gar.compute_lambda_gamma();
+
+        // Probe one specific (i, j) entry.
+        let i = 2;
+        let j = 1;
+        let idx = j * n + i; // == 6
+        let expected = gar.first_half_out[(i, j)].lsb()
+                     ^ gar.gamma_auth_bit_shares[idx].bit();
+        assert_eq!(lambda[idx], expected,
+            "lambda[j*n+i] at (i=2, j=1) does not match D-04 formula");
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_full_consistency() {
+        let n = 4;
+        let m = 3;
+        let (fpre_gen, _fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let _ = gar.garble_first_half();
+        let _ = gar.garble_second_half();
+        gar.garble_final();
+        let lambda = gar.compute_lambda_gamma();
+
+        for j in 0..m {
+            for i in 0..n {
+                let idx = j * n + i;
+                let expected = gar.first_half_out[(i, j)].lsb()
+                             ^ gar.gamma_auth_bit_shares[idx].bit();
+                assert_eq!(lambda[idx], expected,
+                    "D-04 formula mismatch at (i={}, j={}, idx={})", i, j, idx);
+            }
+        }
     }
 }
