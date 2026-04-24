@@ -89,6 +89,16 @@ impl TensorFpre {
     /// This is NOT the real preprocessing protocol — it is the ideal functionality
     /// (trusted dealer) that the online phase consumes directly in tests and benchmarks.
     pub fn generate_for_ideal_trusted_dealer(&mut self, x: usize, y: usize) -> (usize, usize) {
+        assert!(
+            self.n <= usize::BITS as usize - 1,
+            "generate_for_ideal_trusted_dealer: n={} exceeds usize bit width minus 1; \
+             x must be representable as usize", self.n
+        );
+        assert!(
+            self.m <= usize::BITS as usize - 1,
+            "generate_for_ideal_trusted_dealer: m={} exceeds usize bit width minus 1; \
+             y must be representable as usize", self.m
+        );
 
         let mut alpha: usize = 0;
         for i in 0..self.n {
