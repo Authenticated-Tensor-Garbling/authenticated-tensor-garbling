@@ -114,10 +114,11 @@ v1.1 requirements — see REQUIREMENTS.md (to be defined).
 **After v1.0 milestone:**
 - All 8 known algorithmic bugs resolved
 - All 34 v1 requirements validated
-- 74/74 tests passing
+- 95/95 tests passing (Phase 8 added 13 new tests)
 - Preprocessing pipeline is paper-correct end-to-end
+- Phase 8 complete: online phase for Protocol 1 — gamma_auth_bit_shares forwarded, compute_lambda_gamma on both structs, check_zero primitive, end-to-end P1-04/P1-05 integration tests
 
 Next milestone: After v1.1 — v2.0 focusing on real OT (Ferret/IKNP) and network layer.
 
 ---
-*Last updated: 2026-04-23 — v1.1 milestone started: full protocol demonstration + benchmarks.*
+*Last updated: 2026-04-24 — Phase 8 complete: Protocol 1 online phase implemented and verified.*
