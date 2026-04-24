@@ -14,12 +14,12 @@ use crate::{
 pub struct AuthTensorGen {
     cipher: &'static FixedKeyAes,
     chunking_factor: usize,
-    
+
     n: usize,
     m: usize,
-    
+
     pub delta_a: Delta,
-    
+
     pub x_labels: Vec<Block>,
     pub y_labels: Vec<Block>,
 
@@ -30,6 +30,10 @@ pub struct AuthTensorGen {
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
+
+    /// Set to `true` by `garble_final()`. `compute_lambda_gamma()` asserts
+    /// this flag to prevent silent garbage output when called out of order.
+    final_computed: bool,
 }
 
 impl AuthTensorGen {
@@ -48,6 +52,7 @@ impl AuthTensorGen {
             gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
+            final_computed: false,
         }
     }
 
@@ -66,6 +71,7 @@ impl AuthTensorGen {
             gamma_auth_bit_shares: fpre_gen.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
+            final_computed: false,
         }
     }
 
@@ -192,6 +198,7 @@ impl AuthTensorGen {
                     correlated_share;
             }
         }
+        self.final_computed = true;
     }
 
     /// Computes the garbler's masked output share `[L_gamma]^gb` per (i,j).
@@ -218,6 +225,11 @@ impl AuthTensorGen {
     /// (Phase 7 stub); use `IdealPreprocessingBackend` for any caller invoking
     /// `compute_lambda_gamma`.
     pub fn compute_lambda_gamma(&self) -> Vec<bool> {
+        assert!(
+            self.final_computed,
+            "compute_lambda_gamma called before garble_final — \
+             first_half_out is not yet the combined v_gamma encoding"
+        );
         assert_eq!(
             self.gamma_auth_bit_shares.len(),
             self.n * self.m,

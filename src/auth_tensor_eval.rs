@@ -23,6 +23,10 @@ pub struct AuthTensorEval {
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
+
+    /// Set to `true` by `evaluate_final()`. `compute_lambda_gamma()` asserts
+    /// this flag to prevent silent garbage output when called out of order.
+    final_computed: bool,
 }
 
 impl AuthTensorEval {
@@ -41,6 +45,7 @@ impl AuthTensorEval {
             gamma_auth_bit_shares: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
+            final_computed: false,
         }
     }
 
@@ -59,6 +64,7 @@ impl AuthTensorEval {
             gamma_auth_bit_shares: fpre_eval.gamma_auth_bit_shares,
             first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
+            final_computed: false,
         }
     }
 
@@ -162,6 +168,7 @@ impl AuthTensorEval {
                     self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
             }
         }
+        self.final_computed = true;
     }
 
     /// Reconstructs the masked output `L_gamma` per (i,j) given the garbler's
@@ -190,6 +197,11 @@ impl AuthTensorEval {
     /// - Panics if `gamma_auth_bit_shares.len() != self.n * self.m`
     ///   (UncompressedPreprocessingBackend stub leaves it empty — use IdealPreprocessingBackend).
     pub fn compute_lambda_gamma(&self, lambda_gb: &[bool]) -> Vec<bool> {
+        assert!(
+            self.final_computed,
+            "compute_lambda_gamma called before evaluate_final — \
+             first_half_out is not yet the combined v_gamma encoding"
+        );
         assert_eq!(
             lambda_gb.len(),
             self.n * self.m,
