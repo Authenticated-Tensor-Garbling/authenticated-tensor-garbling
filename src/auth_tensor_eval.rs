@@ -162,3 +162,75 @@ impl AuthTensorEval {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth_tensor_gen::AuthTensorGen;
+    use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
+
+    fn build_pair(n: usize, m: usize) -> (AuthTensorGen, AuthTensorEval) {
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+        (gb, ev)
+    }
+
+    fn run_full_garble_eval(gb: &mut AuthTensorGen, ev: &mut AuthTensorEval) {
+        let (cl1, ct1) = gb.garble_first_half();
+        ev.evaluate_first_half(cl1, ct1);
+        let (cl2, ct2) = gb.garble_second_half();
+        ev.evaluate_second_half(cl2, ct2);
+        gb.garble_final();
+        ev.evaluate_final();
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_reconstruction() {
+        let n = 4;
+        let m = 3;
+        let (mut gb, mut ev) = build_pair(n, m);
+        assert_eq!(ev.gamma_auth_bit_shares.len(), n * m,
+            "ev.gamma_auth_bit_shares must be length n*m after new_from_fpre_eval");
+
+        run_full_garble_eval(&mut gb, &mut ev);
+        let lambda_gb = gb.compute_lambda_gamma();
+        assert_eq!(lambda_gb.len(), n * m);
+
+        let result = ev.compute_lambda_gamma(&lambda_gb);
+        assert_eq!(result.len(), n * m,
+            "ev.compute_lambda_gamma must return Vec<bool> of length n*m");
+    }
+
+    #[test]
+    fn test_compute_lambda_gamma_xors_three_inputs() {
+        let n = 4;
+        let m = 3;
+        let (mut gb, mut ev) = build_pair(n, m);
+        run_full_garble_eval(&mut gb, &mut ev);
+        let lambda_gb = gb.compute_lambda_gamma();
+        let result = ev.compute_lambda_gamma(&lambda_gb);
+
+        // Probe one specific (i, j) entry to verify the three-way XOR per D-05.
+        let i = 2;
+        let j = 1;
+        let idx = j * n + i; // == 6
+        let expected = lambda_gb[idx]
+                     ^ ev.first_half_out[(i, j)].lsb()
+                     ^ ev.gamma_auth_bit_shares[idx].bit();
+        assert_eq!(result[idx], expected,
+            "ev.compute_lambda_gamma at (i=2, j=1) does not match D-05 formula");
+    }
+
+    #[test]
+    #[should_panic(expected = "compute_lambda_gamma: lambda_gb length must equal n*m")]
+    fn test_compute_lambda_gamma_panics_on_wrong_lambda_length() {
+        let n = 4;
+        let m = 3;
+        let (mut gb, mut ev) = build_pair(n, m);
+        run_full_garble_eval(&mut gb, &mut ev);
+        // Pass a slice of the wrong length (5 instead of n*m=12).
+        let bogus = vec![false; 5];
+        let _ = ev.compute_lambda_gamma(&bogus);
+    }
+}
