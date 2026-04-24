@@ -107,6 +107,55 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
     }
 }
 
+/// Backend that uses an ideal trusted-dealer oracle (in-process, not cryptographically secure).
+///
+/// Fixed seed 0 used internally — matches the `IdealBCot::new(0, 1)` precedent (see
+/// src/bcot.rs). For tests and benchmarks only. See CONTEXT.md D-03, D-07, D-08.
+///
+/// `gamma_auth_bit_shares` is populated with `n*m` independent random IT-MAC authenticated
+/// bits for l_gamma (the gate output mask). `gen_auth_bit()` calls MUST precede
+/// `into_gen_eval()` because `into_gen_eval(self)` consumes `fpre` by value.
+/// See RESEARCH.md Pitfall 2 and Pattern 3.
+pub struct IdealPreprocessingBackend;
+
+impl TensorPreprocessing for IdealPreprocessingBackend {
+    fn run(
+        &self,
+        n: usize,
+        m: usize,
+        count: usize,
+        chunking_factor: usize,
+    ) -> (TensorFpreGen, TensorFpreEval) {
+        let _ = count; // ideal backend always returns one triple; count ignored
+
+        let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
+        fpre.generate_for_ideal_trusted_dealer(0, 0);
+
+        // CRITICAL ORDERING: into_gen_eval(self) consumes fpre by value.
+        // All gen_auth_bit() calls must happen BEFORE into_gen_eval() is called.
+        // Use a secondary RNG (seed 42) to draw independent l_gamma bits — this
+        // RNG is separate from fpre's internal RNG to avoid interference.
+        let mut rng = ChaCha12Rng::seed_from_u64(42);
+        let mut gamma_auth_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
+        for _ in 0..(n * m) {
+            let l_gamma: bool = rng.random_bool(0.5);
+            gamma_auth_bits.push(fpre.gen_auth_bit(l_gamma));
+        }
+
+        // Now consume fpre — gen_auth_bit() can no longer be called after this line.
+        // Note: use `gen_out` / `eval_out` bindings because `gen` is a reserved keyword
+        // in Rust 2024 edition.
+        let (mut gen_out, mut eval_out) = fpre.into_gen_eval();
+
+        // Distribute gen_share / eval_share from collected gamma bits.
+        // Pattern: same as correlated_auth_bits distribution in into_gen_eval().
+        gen_out.gamma_auth_bit_shares = gamma_auth_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.gamma_auth_bit_shares = gamma_auth_bits.iter().map(|b| b.eval_share).collect();
+
+        (gen_out, eval_out)
+    }
+}
+
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor', Construction 4).
 ///
 /// Generates `count` authenticated tensor triples using:
