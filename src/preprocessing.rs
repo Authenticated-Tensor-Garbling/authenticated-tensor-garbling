@@ -219,6 +219,7 @@ pub fn run_preprocessing(
 mod tests {
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
+    use super::{TensorPreprocessing, UncompressedPreprocessingBackend, IdealPreprocessingBackend};
 
     #[test]
     fn test_run_preprocessing_dimensions() {
@@ -241,5 +242,48 @@ mod tests {
         let _gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let _ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         // No panic = success
+    }
+
+    // PRE-01: trait is object-safe — both backends work through a dyn reference.
+    // Note: bindings named `gen_out` / `eval_out` because `gen` is a reserved keyword
+    // in Rust 2024 edition (same reason as IdealPreprocessingBackend::run body).
+    #[test]
+    fn test_trait_dispatch_ideal() {
+        let backend: &dyn TensorPreprocessing = &IdealPreprocessingBackend;
+        let (gen_out, eval_out) = backend.run(4, 4, 1, 1);
+        assert_eq!(gen_out.n, 4);
+        assert_eq!(gen_out.m, 4);
+        assert_eq!(eval_out.n, 4);
+        assert_eq!(eval_out.m, 4);
+    }
+
+    #[test]
+    fn test_trait_dispatch_uncompressed() {
+        let backend: &dyn TensorPreprocessing = &UncompressedPreprocessingBackend;
+        let (gen_out, eval_out) = backend.run(4, 4, 1, 1);
+        assert_eq!(gen_out.n, 4);
+        assert_eq!(gen_out.m, 4);
+        assert_eq!(eval_out.n, 4);
+        assert_eq!(eval_out.m, 4);
+    }
+
+    // PRE-03: UncompressedPreprocessingBackend delegates to run_preprocessing exactly
+    #[test]
+    fn test_uncompressed_backend_delegates_to_run_preprocessing() {
+        let (gen_out, _eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
+        assert_eq!(gen_out.n, 4);
+        assert_eq!(gen_out.m, 4);
+        assert_eq!(gen_out.correlated_auth_bit_shares.len(), 16,
+            "correlated_auth_bit_shares must have n*m=16 entries");
+    }
+
+    // PRE-03 + PRE-04: uncompressed backend leaves gamma_auth_bit_shares empty (stub)
+    #[test]
+    fn test_uncompressed_backend_gamma_field_is_empty() {
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
+        assert_eq!(gen_out.gamma_auth_bit_shares.len(), 0,
+            "UncompressedPreprocessingBackend leaves gamma_auth_bit_shares empty (stub until Phase 8)");
+        assert_eq!(eval_out.gamma_auth_bit_shares.len(), 0,
+            "UncompressedPreprocessingBackend leaves gamma_auth_bit_shares empty (stub until Phase 8)");
     }
 }
