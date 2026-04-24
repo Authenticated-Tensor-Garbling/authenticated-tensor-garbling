@@ -9,7 +9,7 @@ use crate::sharing::AuthBitShare;
 use crate::delta::Delta;
 
 /// Verifies that the per-gate consistency-check vector reconstructs to zero
-/// AND that its IT-MAC under `delta_ev` is valid.
+/// AND that its IT-MAC under `delta_mac` is valid.
 ///
 /// `c_gamma_shares` is the caller-assembled vector of D_ev-authenticated
 /// shares of `c_gamma`, where (per Construction 3 in 5_online.tex line 206):
@@ -25,14 +25,14 @@ use crate::delta::Delta;
 /// in `c_gamma_shares` with:
 ///   - `share.value` = full reconstructed c_gamma bit (gen.value XOR ev.value)
 ///   - `share.key`   = XOR of all gen-side B-keys contributing to this gate
-///   - `share.mac`   = `share.key.auth(share.value, delta_ev)`  ← freshly computed
+///   - `share.mac`   = `share.key.auth(share.value, delta_mac)`  ← freshly computed
 ///
 /// **Do NOT** use the `AuthBitShare::add` (`+`) operator to combine
 /// cross-party shares directly. The two parties' MACs are authenticated
 /// under opposite deltas (gen side vs eval side in the bCOT structure) and
 /// will NOT combine correctly without recomputing the MAC — a naive XOR of
 /// gen.mac and ev.mac does not yield a valid IT-MAC under either party's
-/// delta. Always recompute `mac = key.auth(value, delta_ev)` after
+/// delta. Always recompute `mac = key.auth(value, delta_mac)` after
 /// accumulating the full reconstructed bit and the combined key.
 ///
 /// See `assemble_c_gamma_shares` in the test module (src/lib.rs) for the
@@ -41,22 +41,26 @@ use crate::delta::Delta;
 /// # Returns
 ///
 /// - `true`  ("pass" / "do not abort") if every share has `value == false`
-///   AND `mac == key.auth(value, delta_ev)`.
+///   AND `mac == key.auth(value, delta_mac)`.
 /// - `false` ("abort") on the first share that fails either check.
 ///
+/// `delta_mac` is the global correlation key under which the `c_gamma_shares`
+/// IT-MACs are authenticated (the verifying party's delta for the shares in
+/// question). In this codebase `delta_a` from `AuthTensorGen` is that delta.
+///
 /// Empty slice returns `true` (vacuously zero).
-pub fn check_zero(c_gamma_shares: &[AuthBitShare], delta_ev: &Delta) -> bool {
+pub fn check_zero(c_gamma_shares: &[AuthBitShare], delta_mac: &Delta) -> bool {
     for share in c_gamma_shares {
         // (1) Reconstructed bit must be 0. The caller pre-XORed the two
         // parties' shares, so `share.value` IS the reconstructed bit.
         if share.value {
             return false;
         }
-        // (2) IT-MAC invariant under delta_ev.
-        // mac == key XOR (value * delta_ev) === key.auth(value, delta_ev).
+        // (2) IT-MAC invariant under delta_mac.
+        // mac == key XOR (value * delta_mac) === key.auth(value, delta_mac).
         // When value is false (the only path that reaches here) this
         // simplifies to `mac == key` (XOR with zero block).
-        let want = share.key.auth(share.value, delta_ev);
+        let want = share.key.auth(share.value, delta_mac);
         if share.mac != want {
             return false;
         }
