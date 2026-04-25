@@ -76,7 +76,13 @@ Plans:
   3. Protocol 2 evaluate (_p2 variant) produces output wire shares that are D_ev-authenticated (MAC check passes)
   4. Protocol 2 consistency check passes for honest parties and the Protocol 1 tests remain unmodified and green
   5. A single end-to-end Protocol 2 test verifies garbler XOR evaluator output equals the correct tensor product under the _p2 variant path
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [x] 09-01-PLAN.md — P2-01: Rename gamma_auth_bit_shares -> gamma_d_ev_shares + add three new D_ev preprocessing fields (alpha/beta/correlated_d_ev_shares) + IdealPreprocessingBackend gen for all four; atomic across preprocessing.rs, auth_tensor_gen/eval.rs, auth_tensor_pre/fpre.rs, lib.rs
+- [ ] 09-02-PLAN.md — P2-01: gen_unary_outer_product_wide and eval_unary_outer_product_wide in tensor_ops.rs (κ+ρ wide leaf expansion via even/odd TCCR tweak); unit tests for tweak independence + round-trip
+- [ ] 09-03-PLAN.md — P2-02/P2-03: _p2 garble/evaluate methods on AuthTensorGen and AuthTensorEval (garble_first_half_p2 / garble_second_half_p2 / garble_final_p2; evaluate_*_p2); D_ev accumulator matrices; wide chunked helpers
+- [ ] 09-04-PLAN.md — P2-04/P2-05: assemble_c_gamma_shares_p2 helper + test_auth_tensor_product_full_protocol_2 integration test (check_zero under delta_b; D_gb correctness mirroring P1-04)
 
 ### Phase 10: Wall-Clock Benchmarks
 **Goal**: All garbling benchmarks correctly measure wall-clock time (no dead-code elimination, no async overhead), preprocessing and online phases are isolated into separate groups, and distributed half gates are implemented and compared against naive tensor at ideal chunk sizes
@@ -102,7 +108,7 @@ Plans:
 | 6. M2 Pi_aTensor' Permutation Bucketing + Benches | v1.0 | 3/3 | Complete | 2026-04-23 |
 | 7. Preprocessing Trait + Ideal Backends | v1.1 | 0/3 | Not started | - |
 | 8. Open() + Protocol 1 Garble/Eval/Check | v1.1 | 0/3 | Planned | - |
-| 9. Protocol 2 Garble/Eval/Check | v1.1 | 0/? | Not started | - |
+| 9. Protocol 2 Garble/Eval/Check | v1.1 | 0/4 | Planned | - |
 | 10. Wall-Clock Benchmarks | v1.1 | 0/? | Not started | - |
 
 ## References
