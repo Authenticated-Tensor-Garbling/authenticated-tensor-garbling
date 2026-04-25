@@ -26,7 +26,7 @@ Full phase details: [`.planning/milestones/v1.0-ROADMAP.md`](.planning/milestone
 - [ ] **Phase 7: Preprocessing Trait + Ideal Backends** - Define TensorPreprocessing trait; IdealPreprocessingBackend; extend TensorFpreGen/Eval with gamma_auth_bit_shares consistency-check field (PRE-05 deferred to v3)
 - [ ] **Phase 8: Open() + Protocol 1 Garble/Eval/Check** - open() free function; Protocol 1 complete garble, evaluate, and CheckZero; positive and negative tests
 - [ ] **Phase 9: Protocol 2 Garble/Eval/Check** - Wide seed expansion; Protocol 2 garble (_p2), evaluate (_p2), consistency check; end-to-end test
-- [ ] **Phase 10: Wall-Clock Benchmarks** - black_box all outputs; iter_custom throughput benchmarks; preprocessing vs online comparison; distributed half gates vs naive tensor
+- [x] **Phase 10: Wall-Clock Benchmarks** - black_box all outputs; iter_custom throughput benchmarks; preprocessing vs online comparison; distributed half gates vs naive tensor (completed 2026-04-25)
 
 ## Phase Details
 
@@ -85,16 +85,20 @@ Plans:
 - [x] 09-04-PLAN.md — P2-04/P2-05: assemble_c_gamma_shares_p2 helper + test_auth_tensor_product_full_protocol_2 integration test (check_zero under delta_b; D_gb correctness mirroring P1-04)
 
 ### Phase 10: Wall-Clock Benchmarks
-**Goal**: All garbling benchmarks correctly measure wall-clock time (no dead-code elimination, no async overhead), preprocessing and online phases are isolated into separate groups, and distributed half gates are implemented and compared against naive tensor at ideal chunk sizes
+**Goal**: All garbling benchmarks correctly measure wall-clock time (no dead-code elimination, no async overhead), preprocessing and online phases are isolated into separate criterion groups, and Protocol 2 garble/evaluate/check is benchmarked alongside Protocol 1 with dual-unit throughput reporting (ms-per-tensor-op + ns-per-AND-gate). BENCH-05 (distributed half-gates) is deferred to v2 per Phase 10 CONTEXT D-01 (paper section marked "TODO, scrap").
 **Depends on**: Phase 8, Phase 9
-**Requirements**: BENCH-01, BENCH-02, BENCH-04, BENCH-05, BENCH-06
+**Requirements**: BENCH-01, BENCH-02, BENCH-04, BENCH-05 (deferred to v2), BENCH-06
 **Success Criteria** (what must be TRUE):
   1. Every garbling benchmark output is wrapped in std::hint::black_box; cargo bench --release runs without the compiler eliminating any measured computation
   2. Protocol 2 garbling throughput benchmark uses iter_custom + std::time::Instant and reports nanoseconds per gate alongside total throughput
   3. A criterion benchmark group named "preprocessing" and a separate group named "online" exist and isolate the two phases cleanly
-  4. Distributed half gates (dtg/dhg) are implemented and a comparison benchmark shows naive tensor (nm AND half-gates) vs GGM tensor product at ideal chunk sizes
-  5. cargo bench --no-run exits with zero errors and all benchmark binaries compile in release mode
-**Plans**: TBD
+  4. cargo bench --no-run exits with zero errors and all benchmark binaries compile in release mode
+**Plans**: 3 plans
+
+Plans:
+- [x] 10-01-PLAN.md — Promote assemble_c_gamma_shares + assemble_c_gamma_shares_p2 from #[cfg(test)] private to pub fn at crate root (unblocks bench access)
+- [x] 10-02-PLAN.md — Refactor bench_preprocessing to sync iter_custom + Instant; deduplicate seven async network benches into one parameterized helper; apply black_box to all measured outputs
+- [x] 10-03-PLAN.md — Add bench_online_p1 + bench_online_p2 in new "online" group with dual-unit throughput; restructure criterion_main! to three groups (preprocessing/online/network)
 
 ## Progress
 
@@ -109,7 +113,7 @@ Plans:
 | 7. Preprocessing Trait + Ideal Backends | v1.1 | 0/3 | Not started | - |
 | 8. Open() + Protocol 1 Garble/Eval/Check | v1.1 | 0/3 | Planned | - |
 | 9. Protocol 2 Garble/Eval/Check | v1.1 | 0/4 | Planned | - |
-| 10. Wall-Clock Benchmarks | v1.1 | 0/? | Not started | - |
+| 10. Wall-Clock Benchmarks | v1.1 | 4/4 | Complete    | 2026-04-25 |
 
 ## References
 

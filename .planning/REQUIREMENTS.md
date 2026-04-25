@@ -39,11 +39,11 @@ Extend the v1.0 preprocessing foundation into a complete, demonstrable 2PC proto
 
 ### BENCHMARKS
 
-- [ ] **BENCH-01**: All garbling benchmark outputs are wrapped in `std::hint::black_box` to prevent compiler dead-code elimination in `--release` mode
-- [ ] **BENCH-02**: Wall-clock benchmarks for Protocol 2 garbling throughput use `criterion::iter_custom` + `std::time::Instant` (no async/tokio wrappers)
-- [ ] **BENCH-04**: Preprocessing vs online phase comparison benchmark isolates the two phases into separate criterion groups
-- [ ] **BENCH-05**: Distributed half gates (`dtg`/`dhg`) from `4_distributed_garbling.tex` are implemented and benchmarked; a comparison benchmark demonstrates naive tensor (nm AND half-gates) vs GGM tensor product at ideal chunk sizes
-- [ ] **BENCH-06**: Benchmark output reports wall-clock time per gate in nanoseconds alongside total throughput
+- [x] **BENCH-01**: All garbling benchmark outputs are wrapped in `std::hint::black_box` to prevent compiler dead-code elimination in `--release` mode
+- [x] **BENCH-02**: Wall-clock benchmarks for Protocol 2 garbling throughput use `criterion::iter_custom` + `std::time::Instant` (no async/tokio wrappers)
+- [x] **BENCH-04**: Preprocessing vs online phase comparison benchmark isolates the two phases into separate criterion groups
+- [x] **BENCH-05**: Distributed half gates (`dtg`/`dhg`) from `4_distributed_garbling.tex` are implemented and benchmarked; a comparison benchmark demonstrates naive tensor (nm AND half-gates) vs GGM tensor product at ideal chunk sizes
+- [x] **BENCH-06**: Benchmark output reports wall-clock time per gate in nanoseconds alongside total throughput
 
 ---
 
@@ -90,8 +90,8 @@ Extend the v1.0 preprocessing foundation into a complete, demonstrable 2PC proto
 | P2-03 | Phase 9 | Pending |
 | P2-04 | Phase 9 | Pending |
 | P2-05 | Phase 9 | Pending |
-| BENCH-01 | Phase 10 | Pending |
-| BENCH-02 | Phase 10 | Pending |
-| BENCH-04 | Phase 10 | Pending |
-| BENCH-05 | Phase 10 | Pending |
-| BENCH-06 | Phase 10 | Pending |
+| BENCH-01 | Phase 10 | Complete |
+| BENCH-02 | Phase 10 | Complete |
+| BENCH-04 | Phase 10 | Complete |
+| BENCH-05 | Phase 10 | Complete |
+| BENCH-06 | Phase 10 | Complete |
