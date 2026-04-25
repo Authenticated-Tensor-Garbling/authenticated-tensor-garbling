@@ -17,6 +17,7 @@ use authenticated_tensor_garbling::{
     assemble_c_gamma_shares,
     assemble_c_gamma_shares_p2,
 };
+use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
 
 use once_cell::sync::Lazy;
 
@@ -61,6 +62,34 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
     fpre.generate_for_ideal_trusted_dealer(X_INPUT, Y_INPUT);
     let (_, fpre_eval) = fpre.into_gen_eval();
     AuthTensorEval::new_from_fpre_eval(fpre_eval)
+}
+
+/// Build a CORRELATED (AuthTensorGen, AuthTensorEval) pair for the online-phase
+/// benches.
+///
+/// Unlike `setup_auth_gen` / `setup_auth_eval` — which each spin up an independent
+/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_d_ev_shares` empty per
+/// `src/auth_tensor_fpre.rs:180-183, 194-197`) — this helper invokes the ideal
+/// trusted-dealer backend `IdealPreprocessingBackend::run`, which populates the
+/// four D_ev field pairs (`alpha_d_ev_shares` length n, `beta_d_ev_shares` length m,
+/// `correlated_d_ev_shares` length n*m, `gamma_d_ev_shares` length n*m) on BOTH
+/// the generator and the evaluator with matching IT-MAC shares.
+///
+/// Required for any online benchmark that calls `assemble_c_gamma_shares` (P1) or
+/// `assemble_c_gamma_shares_p2` (P2), both of which assert
+/// `gamma_d_ev_shares.len() == n * m` on the gen and eval inputs (`src/lib.rs:109`,
+/// `src/lib.rs:218-219`). Without a correlated pair, those asserts panic on the
+/// first iteration.
+///
+/// `count = 1` matches `IdealPreprocessingBackend`'s only supported batch size
+/// (see `src/preprocessing.rs:145-150`). The `chunking_factor` is forwarded
+/// unchanged.
+fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen, AuthTensorEval) {
+    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, chunking_factor);
+    (
+        AuthTensorGen::new_from_fpre_gen(fpre_gen),
+        AuthTensorEval::new_from_fpre_eval(fpre_eval),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +202,7 @@ fn bench_online_p1(c: &mut Criterion) {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
                             // Setup OUTSIDE timed region.
-                            let mut generator = setup_auth_gen(n, m, chunking_factor);
-                            let mut evaluator = setup_auth_eval(n, m, chunking_factor);
+                            let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
 
                             // For benchmarking the per-gate compute
                             // cost we use FIXED zero masks for
@@ -284,8 +312,7 @@ fn bench_online_p2(c: &mut Criterion) {
                     b.iter_custom(|iters| {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
-                            let mut generator = setup_auth_gen(n, m, chunking_factor);
-                            let mut evaluator = setup_auth_eval(n, m, chunking_factor);
+                            let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
 
                             // l_gamma_pub for the P2 check is the same
                             // reconstruction shape as P1 (length n*m,
