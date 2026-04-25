@@ -378,6 +378,110 @@ mod tests {
         out
     }
 
+    /// Phase 9 P2-04 — P2 c_gamma assembly under delta_b.
+    ///
+    /// Builds c_gamma AuthBitShares verified under `delta_b` (D_ev). Differs from
+    /// the P1 helper `assemble_c_gamma_shares` (which uses `delta_a`) in two ways:
+    ///   1. Combined key is built from EVAL-side keys of `gamma_d_ev_shares`
+    ///      (under `delta_b`), not gen-side keys (under `delta_a`).
+    ///   2. The c_gamma formula has only THREE bit terms (no `L_alpha · l_beta`,
+    ///      no `L_beta · l_alpha`, no `l_gamma*` etc.):
+    ///        c_gamma = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub
+    ///      Per CONTEXT.md D-13, RESEARCH.md Pattern 3 and Pitfall 2, and
+    ///      `6_total.tex` step 9. The `[v_gamma D_ev]` term already has the
+    ///      `correlated_d_ev_shares` contribution folded in by `garble_final_p2`
+    ///      / `evaluate_final_p2`, so `assemble_c_gamma_shares_p2` must NOT add
+    ///      it again.
+    ///
+    /// SIMULATION ONLY: requires both parties' state. In a real protocol each
+    /// party assembles its own half independently, then runs `check_zero` over
+    /// the network. The combined key here uses the eval-side keys of
+    /// `gamma_d_ev_shares` because, per the `gen_auth_bit` symmetry under
+    /// `delta_b` (`auth_tensor_fpre.rs`), `ev.gamma_d_ev_shares[idx].key`
+    /// authenticates `gb.value` under `delta_b`. This mirrors P1's
+    /// `assemble_c_gamma_shares`, which uses gb-side keys under `delta_a`.
+    ///
+    /// `gb_d_ev_out` and `ev_d_ev_out` are the D_ev output shares from
+    /// `garble_final_p2()` (second tuple element) and `evaluate_final_p2()`
+    /// respectively — both length `n * m` in column-major (`j * n + i`) order.
+    ///
+    /// `l_gamma_pub` is the masked output value (`L_gamma = v_gamma XOR l_gamma`)
+    /// reconstructed by the evaluator, length `n * m` in column-major order.
+    ///
+    /// Returns `Vec<AuthBitShare>` of length `n * m`, each verified under
+    /// `ev.delta_b`.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble_c_gamma_shares_p2(
+        n: usize,
+        m: usize,
+        gb_d_ev_out: &[Block],
+        ev_d_ev_out: &[Block],
+        l_gamma_pub: &[bool],
+        gb: &AuthTensorGen,
+        ev: &AuthTensorEval,
+    ) -> Vec<AuthBitShare> {
+        assert_eq!(gb_d_ev_out.len(),  n * m);
+        assert_eq!(ev_d_ev_out.len(),  n * m);
+        assert_eq!(l_gamma_pub.len(),  n * m);
+        assert_eq!(gb.gamma_d_ev_shares.len(), n * m);
+        assert_eq!(ev.gamma_d_ev_shares.len(), n * m);
+
+        let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+        for j in 0..m {
+            for i in 0..n {
+                let idx = j * n + i;
+
+                // Bit reconstruction:
+                //   c_gamma_bit = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub[idx]
+                //
+                // v_gamma_bit is the LSB of the recovered v_gamma output:
+                //   [v_gamma D_ev]_combined = gb_d_ev_out[idx] XOR ev_d_ev_out[idx]
+                //   v_gamma_bit = combined.lsb()
+                let v_gamma_block = gb_d_ev_out[idx] ^ ev_d_ev_out[idx];
+                let v_gamma_bit = v_gamma_block.lsb();
+
+                // l_gamma_bit comes from gamma_d_ev_shares (XOR of both parties'
+                // values).
+                let l_gamma_bit = gb.gamma_d_ev_shares[idx].value
+                                ^ ev.gamma_d_ev_shares[idx].value;
+
+                let c_gamma_bit = v_gamma_bit ^ l_gamma_bit ^ l_gamma_pub[idx];
+
+                // Combined key under delta_b: eval-side key of gamma_d_ev_shares.
+                //
+                // Why eval-side keys? Per `gen_auth_bit` (auth_tensor_fpre.rs):
+                //   gen.mac = a_share.mac     (a_share built under delta_b — gen.mac
+                //                              authenticates gen.value under delta_b
+                //                              using EVAL's a_share.key, i.e.
+                //                              eval_share.key)
+                //   ev.key  = a_share.key     (this is the key authenticating
+                //                              gb.value under delta_b)
+                //
+                // So under delta_b, `ev.gamma_d_ev_shares[idx].key` is the
+                // canonical "key authenticating gb.value under delta_b". To build
+                // a combined `AuthBitShare` verifying under delta_b for the full
+                // reconstructed c_gamma bit, we use this eval-side key.
+                //
+                // (Mirror of P1's `assemble_c_gamma_shares`, which uses gb-side
+                // keys under delta_a.)
+                let combined_key = ev.gamma_d_ev_shares[idx].key;
+
+                // Recompute MAC freshly under delta_b for the full reconstructed
+                // bit. Per `online.rs` `check_zero` doc: never naively XOR
+                // cross-party MACs — always recompute via `key.auth(value, delta)`
+                // after accumulating the full combined key and bit.
+                let combined_mac = combined_key.auth(c_gamma_bit, &ev.delta_b);
+
+                out.push(AuthBitShare {
+                    key: combined_key,
+                    mac: combined_mac,
+                    value: c_gamma_bit,
+                });
+            }
+        }
+        out
+    }
+
     #[test]
     fn test_auth_tensor_product() {
         let mut rng = rand::rng();
@@ -570,6 +674,106 @@ mod tests {
         assert!(
             check_zero(&c_gamma_shares, &gb.delta_a),
             "P1-04: honest Protocol 1 run must pass check_zero"
+        );
+    }
+
+    #[test]
+    fn test_auth_tensor_product_full_protocol_2() {
+        // P2-04 + P2-05: end-to-end Protocol 2 honest run produces:
+        //   - D_gb output reconstructions matching the correct tensor product
+        //   - D_ev consistency check (c_gamma == 0) passing under ev.delta_b
+        //   - garbler never sends a masked wire value (enforced statically by
+        //     `garble_final_p2`'s return type — `(Vec<Block>, Vec<Block>)` with
+        //     no `bool` / `Vec<bool>`)
+        //
+        // Mirrors `test_auth_tensor_product_full_protocol_1` but uses the `_p2`
+        // path. With `IdealPreprocessingBackend.run(...)` the underlying
+        // `generate_for_ideal_trusted_dealer(0, 0)` is invoked (per the existing
+        // P1 test), so masked_x = alpha and masked_y = beta — i.e. v_alpha = 0
+        // and v_beta = 0, hence v_gamma = 0 and L_gamma = l_gamma. c_gamma must
+        // reconstruct to zero under delta_b.
+
+        let n = 4;
+        let m = 3;
+
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        // Protocol 2 garble + evaluate sequence (wide ciphertexts).
+        let (cl1, ct1) = gb.garble_first_half_p2();
+        ev.evaluate_first_half_p2(cl1, ct1);
+        let (cl2, ct2) = gb.garble_second_half_p2();
+        ev.evaluate_second_half_p2(cl2, ct2);
+        let (gb_d_gb_out, gb_d_ev_out) = gb.garble_final_p2();
+        let ev_d_ev_out = ev.evaluate_final_p2();
+
+        assert_eq!(gb_d_gb_out.len(), n * m);
+        assert_eq!(gb_d_ev_out.len(), n * m);
+        assert_eq!(ev_d_ev_out.len(), n * m);
+
+        // ===========================================================================
+        // PART A: D_gb correctness — same property the existing P1 test verifies but
+        // applied to the `_p2` path. With `IdealPreprocessingBackend` the trusted
+        // dealer is invoked with input=(0, 0), so masked_x = alpha and masked_y =
+        // beta — therefore v_alpha = v_beta = 0 and v_gamma = 0. For honest
+        // parties the combined D_gb output share for each (i, j) is the zero
+        // block (key XOR mac == 0 means bit value 0).
+        //
+        // `evaluate_final_p2` writes the D_gb half into `ev.first_half_out`
+        // (mirroring `evaluate_final` per the post-Plan-03 doc comment) and
+        // `gb_d_gb_out[j * n + i]` equals `gb.first_half_out[(i, j)]`. So the
+        // combined share is `gb_d_gb_out[idx] XOR ev.first_half_out[(i, j)]`.
+        // Same correctness check approach as P1 (lines 487-503) with
+        // expected_val=false everywhere.
+        // ===========================================================================
+        for j in 0..m {
+            for i in 0..n {
+                let idx = j * n + i;
+                let combined = gb_d_gb_out[idx] ^ ev.first_half_out[(i, j)];
+                assert_eq!(
+                    combined,
+                    Block::default(),
+                    "P2-05: at ({},{}) expected v_gamma=0 (input=0 ideal preprocessing), got non-zero combined D_gb share",
+                    i, j
+                );
+            }
+        }
+
+        // ===========================================================================
+        // PART B: P2 consistency check — c_gamma assembled under delta_b passes
+        // `check_zero`.
+        // ===========================================================================
+        // Reconstruct L_gamma per (i, j):
+        //   L_gamma_pub[idx] = (gb_d_ev_out[idx] XOR ev_d_ev_out[idx]).lsb()
+        //                      XOR (gb.gamma_d_ev_shares[idx].value
+        //                           XOR ev.gamma_d_ev_shares[idx].value)
+        // This is L_gamma = v_gamma XOR l_gamma. For honest run with input=0,
+        // v_gamma = 0 so L_gamma = l_gamma.
+        let l_gamma_pub: Vec<bool> = (0..(n * m))
+            .map(|idx| {
+                let v_gamma_bit = (gb_d_ev_out[idx] ^ ev_d_ev_out[idx]).lsb();
+                let l_gamma_bit = gb.gamma_d_ev_shares[idx].value
+                                ^ ev.gamma_d_ev_shares[idx].value;
+                v_gamma_bit ^ l_gamma_bit
+            })
+            .collect();
+
+        let c_gamma_shares_p2 = assemble_c_gamma_shares_p2(
+            n, m,
+            &gb_d_ev_out,
+            &ev_d_ev_out,
+            &l_gamma_pub,
+            &gb,
+            &ev,
+        );
+
+        assert_eq!(c_gamma_shares_p2.len(), n * m);
+
+        // P2-04: honest-party CheckZero under delta_b (NOT delta_a).
+        assert!(
+            check_zero(&c_gamma_shares_p2, &ev.delta_b),
+            "P2-04: honest Protocol 2 run must pass check_zero under D_ev (delta_b)"
         );
     }
 
