@@ -80,7 +80,7 @@ Plans:
 
 Plans:
 - [x] 09-01-PLAN.md — P2-01: Rename gamma_auth_bit_shares -> gamma_d_ev_shares + add three new D_ev preprocessing fields (alpha/beta/correlated_d_ev_shares) + IdealPreprocessingBackend gen for all four; atomic across preprocessing.rs, auth_tensor_gen/eval.rs, auth_tensor_pre/fpre.rs, lib.rs
-- [ ] 09-02-PLAN.md — P2-01: gen_unary_outer_product_wide and eval_unary_outer_product_wide in tensor_ops.rs (κ+ρ wide leaf expansion via even/odd TCCR tweak); unit tests for tweak independence + round-trip
+- [x] 09-02-PLAN.md — P2-01: gen_unary_outer_product_wide and eval_unary_outer_product_wide in tensor_ops.rs (κ+ρ wide leaf expansion via even/odd TCCR tweak); unit tests for tweak independence + round-trip
 - [ ] 09-03-PLAN.md — P2-02/P2-03: _p2 garble/evaluate methods on AuthTensorGen and AuthTensorEval (garble_first_half_p2 / garble_second_half_p2 / garble_final_p2; evaluate_*_p2); D_ev accumulator matrices; wide chunked helpers
 - [ ] 09-04-PLAN.md — P2-04/P2-05: assemble_c_gamma_shares_p2 helper + test_auth_tensor_product_full_protocol_2 integration test (check_zero under delta_b; D_gb correctness mirroring P1-04)
 
