@@ -312,11 +312,11 @@ mod tests {
         assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
         assert_eq!(gb.beta_auth_bit_shares.len(),        m);
         assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
-        assert_eq!(gb.gamma_auth_bit_shares.len(),       n * m);
+        assert_eq!(gb.gamma_d_ev_shares.len(),           n * m);
         assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
         assert_eq!(ev.beta_auth_bit_shares.len(),        m);
         assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
-        assert_eq!(ev.gamma_auth_bit_shares.len(),       n * m);
+        assert_eq!(ev.gamma_d_ev_shares.len(),           n * m);
 
         let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
         for j in 0..m {
@@ -352,9 +352,9 @@ mod tests {
                              ^ ev.correlated_auth_bit_shares[idx].value;
 
                 // Term: l_gamma[(i,j)]   (always)
-                combined_key = combined_key + gb.gamma_auth_bit_shares[idx].key;
-                c_gamma_bit ^= gb.gamma_auth_bit_shares[idx].value
-                             ^ ev.gamma_auth_bit_shares[idx].value;
+                combined_key = combined_key + gb.gamma_d_ev_shares[idx].key;
+                c_gamma_bit ^= gb.gamma_d_ev_shares[idx].value
+                             ^ ev.gamma_d_ev_shares[idx].value;
 
                 // Fold the PUBLIC-bit value contribution.
                 // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
