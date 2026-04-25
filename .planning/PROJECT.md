@@ -121,4 +121,4 @@ v1.1 requirements — see REQUIREMENTS.md (to be defined).
 Next milestone: After v1.1 — v2.0 focusing on real OT (Ferret/IKNP) and network layer.
 
 ---
-*Last updated: 2026-04-24 — Phase 8 complete: Protocol 1 online phase implemented and verified.*
+*Last updated: 2026-04-25 — Phase 9 complete: Protocol 2 garble/eval implemented and verified (P2-01..P2-05).*
