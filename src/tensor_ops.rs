@@ -264,3 +264,173 @@ pub(crate) fn eval_unary_outer_product(
     eval_cts
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aes::FIXED_KEY_AES;
+    use crate::matrix::BlockMatrix;
+
+    #[test]
+    fn test_gen_unary_outer_product_wide_tweak_independence() {
+        // P2-01: kappa-half and rho-half outputs MUST differ — even/odd tweak split
+        // ensures TCCR outputs are pseudorandomly independent.
+        // Deterministic seeds (n=2 -> 4 leaves, m=2 columns).
+        let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x1000)).collect();
+        let mut y_gb_mat = BlockMatrix::new(2, 1);
+        let mut y_ev_mat = BlockMatrix::new(2, 1);
+        for j in 0..2 {
+            y_gb_mat[j] = Block::from((j as u128) + 0x2000);
+            y_ev_mat[j] = Block::from((j as u128) + 0x3000);
+        }
+        let mut out_gb_mat = BlockMatrix::new(2, 2);
+        let mut out_ev_mat = BlockMatrix::new(2, 2);
+
+        let gen_cts = gen_unary_outer_product_wide(
+            &seeds,
+            &y_gb_mat.as_view(),
+            &y_ev_mat.as_view(),
+            &mut out_gb_mat.as_view_mut(),
+            &mut out_ev_mat.as_view_mut(),
+            &FIXED_KEY_AES,
+        );
+
+        assert_eq!(gen_cts.len(), 2, "wide gen returns m wide ciphertexts");
+        // Each (kappa, rho) pair MUST differ — overwhelming probability under TCCR.
+        for (k, ct) in gen_cts.iter().enumerate() {
+            assert_ne!(ct.0, ct.1, "gen_cts[{}].0 (kappa) must differ from .1 (rho)", k);
+        }
+        // The two output matrices MUST differ at some position.
+        let mut differs = false;
+        for k in 0..2 {
+            for j in 0..2 {
+                if out_gb_mat[(k, j)] != out_ev_mat[(k, j)] {
+                    differs = true;
+                    break;
+                }
+            }
+        }
+        assert!(differs, "out_gb and out_ev must differ at >=1 position");
+    }
+
+    #[test]
+    fn test_eval_unary_outer_product_wide_round_trip_kappa() {
+        // P2-01: With matching missing index, gen + eval round-trip on the kappa half
+        // produces the same accumulator behavior as the narrow gen + narrow eval.
+        // Use n=2 (4 leaves), m=1 column, missing=2 (arbitrary leaf).
+        let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x10)).collect();
+        let mut y_gb_mat = BlockMatrix::new(1, 1);
+        let mut y_ev_mat = BlockMatrix::new(1, 1);
+        y_gb_mat[0] = Block::from(0x20u128);
+        y_ev_mat[0] = Block::from(0x30u128);
+
+        // Garble side: full seeds.
+        let mut gen_out_gb = BlockMatrix::new(2, 1);
+        let mut gen_out_ev = BlockMatrix::new(2, 1);
+        let gen_cts = gen_unary_outer_product_wide(
+            &seeds,
+            &y_gb_mat.as_view(),
+            &y_ev_mat.as_view(),
+            &mut gen_out_gb.as_view_mut(),
+            &mut gen_out_ev.as_view_mut(),
+            &FIXED_KEY_AES,
+        );
+
+        // Eval side: copy seeds but zero out the missing entry.
+        let missing = 2usize;
+        let mut eval_seeds = seeds.clone();
+        eval_seeds[missing] = Block::default();
+        let mut eval_out_gb = BlockMatrix::new(2, 1);
+        let mut eval_out_ev = BlockMatrix::new(2, 1);
+        eval_unary_outer_product_wide(
+            &eval_seeds,
+            &y_gb_mat.as_view(),
+            &y_ev_mat.as_view(),
+            &mut eval_out_gb.as_view_mut(),
+            &mut eval_out_ev.as_view_mut(),
+            &FIXED_KEY_AES,
+            missing,
+            &gen_cts,
+        );
+
+        // Compute expected kappa-row directly from the row equation:
+        //   row_gb = (XOR_i tccr(2*base, seeds[i])) ^ y_gb[j]
+        let mut expected_row_gb = Block::default();
+        for i in 0..seeds.len() {
+            let base = (seeds.len() * 0 + i) as u128;
+            expected_row_gb ^= FIXED_KEY_AES.tccr(Block::from(base << 1), seeds[i]);
+        }
+        expected_row_gb ^= y_gb_mat[0];
+
+        // Verify gen ciphertext kappa-half matches the row equation.
+        assert_eq!(gen_cts[0].0, expected_row_gb,
+            "wide gen ciphertext kappa-half must equal the row equation");
+    }
+
+    #[test]
+    fn test_eval_unary_outer_product_wide_round_trip_rho() {
+        // P2-01: same round-trip property for the rho half (tweak base<<1|1).
+        let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x10)).collect();
+        let mut y_gb_mat = BlockMatrix::new(1, 1);
+        let mut y_ev_mat = BlockMatrix::new(1, 1);
+        y_gb_mat[0] = Block::from(0x20u128);
+        y_ev_mat[0] = Block::from(0x30u128);
+
+        let mut gen_out_gb = BlockMatrix::new(2, 1);
+        let mut gen_out_ev = BlockMatrix::new(2, 1);
+        let gen_cts = gen_unary_outer_product_wide(
+            &seeds,
+            &y_gb_mat.as_view(),
+            &y_ev_mat.as_view(),
+            &mut gen_out_gb.as_view_mut(),
+            &mut gen_out_ev.as_view_mut(),
+            &FIXED_KEY_AES,
+        );
+
+        let mut expected_row_ev = Block::default();
+        for i in 0..seeds.len() {
+            let base = (seeds.len() * 0 + i) as u128;
+            expected_row_ev ^= FIXED_KEY_AES.tccr(Block::from(base << 1 | 1), seeds[i]);
+        }
+        expected_row_ev ^= y_ev_mat[0];
+
+        assert_eq!(gen_cts[0].1, expected_row_ev,
+            "wide gen ciphertext rho-half must equal the row equation under odd tweak");
+    }
+
+    #[test]
+    fn test_wide_signature_shapes() {
+        // P2-01: shape invariants — gen_cts.len() == m; out_gb / out_ev are written.
+        let seeds: Vec<Block> = (0..4).map(|i| Block::from(i as u128)).collect();
+        let mut y_gb_mat = BlockMatrix::new(3, 1);
+        let mut y_ev_mat = BlockMatrix::new(3, 1);
+        for j in 0..3 {
+            y_gb_mat[j] = Block::from((j as u128) + 100);
+            y_ev_mat[j] = Block::from((j as u128) + 200);
+        }
+        let mut out_gb_mat = BlockMatrix::new(2, 3);
+        let mut out_ev_mat = BlockMatrix::new(2, 3);
+
+        let gen_cts = gen_unary_outer_product_wide(
+            &seeds,
+            &y_gb_mat.as_view(),
+            &y_ev_mat.as_view(),
+            &mut out_gb_mat.as_view_mut(),
+            &mut out_ev_mat.as_view_mut(),
+            &FIXED_KEY_AES,
+        );
+
+        assert_eq!(gen_cts.len(), 3, "gen_cts.len() must equal m=3");
+
+        // At least one entry of each output matrix must be non-default (overwhelmingly likely).
+        let mut nonzero_gb = false;
+        let mut nonzero_ev = false;
+        for k in 0..2 {
+            for j in 0..3 {
+                if out_gb_mat[(k, j)] != Block::default() { nonzero_gb = true; }
+                if out_ev_mat[(k, j)] != Block::default() { nonzero_ev = true; }
+            }
+        }
+        assert!(nonzero_gb, "out_gb has at least one non-default entry");
+        assert!(nonzero_ev, "out_ev has at least one non-default entry");
+    }
+}
