@@ -264,6 +264,14 @@ pub(crate) fn eval_unary_outer_product(
     eval_cts
 }
 
+/// Domain-separation tag placed in bits 127..64 of the wide-function tweaks.
+///
+/// The narrow `gen_unary_outer_product` uses tweaks 0, 1, 2, … (values fit in
+/// the low 64 bits). Setting bit 64 ensures every wide tweak is disjoint from
+/// every narrow tweak, so TCCR outputs are PRF-independent between the two
+/// function families even if the same leaf seeds were hypothetically reused.
+const WIDE_DOMAIN: u128 = 1u128 << 64;
+
 /// Wide-leaf variant of `gen_unary_outer_product`. Expands each leaf seed into TWO
 /// pseudorandom Block values (κ-half via even tweak, ρ-half via odd tweak) and
 /// accumulates each half into a separate output matrix. Returns wide ciphertexts
@@ -271,9 +279,9 @@ pub(crate) fn eval_unary_outer_product(
 ///
 /// Phase 9 / P2-01. See CONTEXT.md D-01, D-02, D-03 and 6_total.tex Construction 4.
 ///
-/// Tweak convention (even/odd, matching `gen_populate_seeds_mem_optimized` lines 55-56):
-///   - κ-half:  cipher.tccr(Block::from(base << 1),     seeds[i])
-///   - ρ-half:  cipher.tccr(Block::from(base << 1 | 1), seeds[i])
+/// Tweak convention (domain-separated from narrow tweaks via `WIDE_DOMAIN`):
+///   - κ-half:  cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1)),     seeds[i])
+///   - ρ-half:  cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1 | 1)), seeds[i])
 /// where `base = seeds.len() * j + i`.
 ///
 /// Both `out_gb` and `out_ev` MUST be n×m column-major views of the same shape.
@@ -298,10 +306,10 @@ pub(crate) fn gen_unary_outer_product_wide(
         let mut row_ev: Block = Block::default();
         for i in 0..seeds.len() {
             let base = (seeds.len() * j + i) as u128;
-            // Even/odd tweak split: κ-half uses base<<1, ρ-half uses base<<1|1.
-            // CONTEXT.md D-03; matches gen_populate_seeds_mem_optimized convention.
-            let s_gb = cipher.tccr(Block::from(base << 1),     seeds[i]);
-            let s_ev = cipher.tccr(Block::from(base << 1 | 1), seeds[i]);
+            // Domain-separated even/odd tweak split: WIDE_DOMAIN bit 64 ensures
+            // wide tweaks never collide with narrow tweaks (CONTEXT.md D-03).
+            let s_gb = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1)),     seeds[i]);
+            let s_ev = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1 | 1)), seeds[i]);
             row_gb ^= s_gb;
             row_ev ^= s_ev;
 
@@ -355,8 +363,8 @@ pub(crate) fn eval_unary_outer_product_wide(
         for i in 0..seeds.len() {
             if i != missing {
                 let base = (seeds.len() * j + i) as u128;
-                let s_gb = cipher.tccr(Block::from(base << 1),     seeds[i]);
-                let s_ev = cipher.tccr(Block::from(base << 1 | 1), seeds[i]);
+                let s_gb = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1)),     seeds[i]);
+                let s_ev = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1 | 1)), seeds[i]);
                 eval_ct_gb ^= s_gb;
                 eval_ct_ev ^= s_ev;
                 for k in 0..out_gb.rows() {
@@ -476,11 +484,11 @@ mod tests {
         );
 
         // Compute expected kappa-row directly from the row equation:
-        //   row_gb = (XOR_i tccr(2*base, seeds[i])) ^ y_gb[j]
+        //   row_gb = (XOR_i tccr(WIDE_DOMAIN | (2*base), seeds[i])) ^ y_gb[j]
         let mut expected_row_gb = Block::default();
         for i in 0..seeds.len() {
             let base = (seeds.len() * 0 + i) as u128;
-            expected_row_gb ^= FIXED_KEY_AES.tccr(Block::from(base << 1), seeds[i]);
+            expected_row_gb ^= FIXED_KEY_AES.tccr(Block::from(WIDE_DOMAIN | (base << 1)), seeds[i]);
         }
         expected_row_gb ^= y_gb_mat[0];
 
@@ -512,7 +520,7 @@ mod tests {
         let mut expected_row_ev = Block::default();
         for i in 0..seeds.len() {
             let base = (seeds.len() * 0 + i) as u128;
-            expected_row_ev ^= FIXED_KEY_AES.tccr(Block::from(base << 1 | 1), seeds[i]);
+            expected_row_ev ^= FIXED_KEY_AES.tccr(Block::from(WIDE_DOMAIN | (base << 1 | 1)), seeds[i]);
         }
         expected_row_ev ^= y_ev_mat[0];
 
