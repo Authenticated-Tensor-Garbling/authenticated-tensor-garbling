@@ -2,14 +2,17 @@
 phase: 10-wall-clock-benchmarks
 reviewed: 2026-04-24T00:00:00Z
 depth: standard
-files_reviewed: 2
+files_reviewed: 5
 files_reviewed_list:
-  - src/lib.rs
   - benches/benchmarks.rs
+  - src/lib.rs
+  - src/auth_tensor_eval.rs
+  - src/auth_tensor_gen.rs
+  - src/tensor_ops.rs
 findings:
-  critical: 1
-  warning: 2
-  info: 2
+  critical: 0
+  warning: 1
+  info: 4
   total: 5
 status: issues_found
 ---
@@ -18,137 +21,143 @@ status: issues_found
 
 **Reviewed:** 2026-04-24
 **Depth:** standard
-**Files Reviewed:** 2
+**Files Reviewed:** 5
 **Status:** issues_found
 
 ## Summary
 
-Phase 10 promoted two simulation helpers (`assemble_c_gamma_shares` and `assemble_c_gamma_shares_p2`) to public crate-level functions and added Protocol 1 / Protocol 2 online-phase benchmarks to `benches/benchmarks.rs`. The `src/lib.rs` changes are structurally clean: the `pub fn` promotions, crate-level `use` imports, and test-module `use super::` wiring are all correct. The `SIMULATION ONLY` doc comment is present and accurate.
+Phase 10 added Protocol 1 / Protocol 2 online-phase wall-clock benchmarks (`bench_online_p1`, `bench_online_p2`) and the `setup_auth_pair` correlated-pair helper to `benches/benchmarks.rs`, and promoted `assemble_c_gamma_shares` / `assemble_c_gamma_shares_p2` to public crate-level functions in `src/lib.rs`. The three source-side files (`src/auth_tensor_eval.rs`, `src/auth_tensor_gen.rs`, `src/tensor_ops.rs`) required by the new benchmarks were reviewed at standard depth.
 
-The critical issue is in `benches/benchmarks.rs`: the two new online benchmarks (`bench_online_p1`, `bench_online_p2`) construct the generator and evaluator from **two independent, uncorrelated** `TensorFpre` instances (seeds 0 and 1 respectively). Both `assemble_c_gamma_shares` and `assemble_c_gamma_shares_p2` assert that `gamma_d_ev_shares.len() == n*m`, but `TensorFpre::into_gen_eval()` always produces an empty `gamma_d_ev_shares` (`vec![]`). The benchmarks will **panic** at the first iteration for every `(n, m)` pair. A secondary consequence is that even if the assert were removed, the generator and evaluator would not share correlated IT-MAC secrets, so `check_zero` would return `false` on every call — meaning the benchmarks would measure a pipelines that silently aborts rather than one that represents an honest run.
+The online benchmarks are structurally correct: `setup_auth_pair` is present (lines 87-93) and is used in both `bench_online_p1` (line 205) and `bench_online_p2` (line 315), producing correlated `(AuthTensorGen, AuthTensorEval)` pairs. The sentinel-vector allocations (`l_alpha_pub`, `l_beta_pub`, `l_gamma_pub`) are placed before `let start = Instant::now()` in both benchmarks, so they are correctly excluded from timing. The P1 `check_zero` call uses `generator.delta_a` and the P2 call uses `evaluator.delta_b`, matching the respective MAC structures.
 
-The networking benchmark (`bench_online_with_networking_for_size`) uses the same split-seed helpers but does not call `assemble_c_gamma_shares`, so it is not affected by the panic. Two info-level items are noted.
+The one warning concerns the pre-existing networking benchmark (`bench_online_with_networking_for_size`): it constructs generator and evaluator from independent `TensorFpre` instances with different random seeds, meaning their delta values are uncorrelated. The evaluator decodes the garbler's ciphertexts using MACs authenticated under a different delta, silently producing garbage wire labels. The computation runs to completion (no panic, same instruction count), but the evaluation does not represent a correct protocol execution. For a pure latency benchmark this may be acceptable, but it should be documented.
 
----
-
-## Critical Issues
-
-### CR-01: `bench_online_p1` / `bench_online_p2` panic at runtime — mismatched setup helpers produce empty `gamma_d_ev_shares`
-
-**File:** `benches/benchmarks.rs:52-64` (helpers), `benches/benchmarks.rs:176-177` (P1 use site), `benches/benchmarks.rs:287-288` (P2 use site)
-
-**Issue:** `setup_auth_gen` and `setup_auth_eval` each call `TensorFpre::new` with a different seed (0 vs 1), run `generate_for_ideal_trusted_dealer` independently, and call `into_gen_eval()` — which always leaves `gamma_d_ev_shares` (and all other `_d_ev_shares` fields) as empty `Vec`s. The benchmarks then pass the resulting `&generator` / `&evaluator` to `assemble_c_gamma_shares` (P1, line 210-217) and `assemble_c_gamma_shares_p2` (P2, line 311-318), both of which immediately assert:
-
-```rust
-assert_eq!(gb.gamma_d_ev_shares.len(), n * m);  // src/lib.rs:109
-assert_eq!(ev.gamma_d_ev_shares.len(), n * m);  // src/lib.rs:113
-```
-
-These asserts fire for every `(n, m)` pair on the first benchmark iteration, producing a panic rather than a measurement. Furthermore, even if the asserts were suppressed, the two `TensorFpre` instances were seeded independently so the generator and evaluator do not share correlated MACs — `check_zero` would return `false` on every call (silently measuring an aborting pipeline).
-
-The correct setup for the online benchmarks is the same pattern used by the integration tests: a single `TensorFpre` instance (or `IdealPreprocessingBackend`) that produces a matching `(fpre_gen, fpre_eval)` pair.
-
-**Fix:** Replace `setup_auth_gen` / `setup_auth_eval` with a single paired-setup helper in the online benchmarks, mirroring `IdealPreprocessingBackend.run()`:
-
-```rust
-fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize)
-    -> (AuthTensorGen, AuthTensorEval)
-{
-    use authenticated_tensor_garbling::preprocessing::{
-        IdealPreprocessingBackend, TensorPreprocessing,
-    };
-    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, chunking_factor);
-    (
-        AuthTensorGen::new_from_fpre_gen(fpre_gen),
-        AuthTensorEval::new_from_fpre_eval(fpre_eval),
-    )
-}
-```
-
-Then in `bench_online_p1` and `bench_online_p2`, replace the two separate setup calls:
-
-```rust
-// Before (panics):
-let mut generator = setup_auth_gen(n, m, chunking_factor);
-let mut evaluator = setup_auth_eval(n, m, chunking_factor);
-
-// After (correlated pair):
-let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
-```
-
-Note: `setup_auth_gen` / `setup_auth_eval` can remain for `bench_online_with_networking_for_size`, which only measures the garble/evaluate pipeline and never calls `assemble_c_gamma_shares`.
+The `src/auth_tensor_eval.rs`, `src/auth_tensor_gen.rs`, and `src/tensor_ops.rs` files are structurally clean. Four info-level items are noted: a `check_ok` black-box without a debug assertion, a doc inaccuracy on `final_computed`, a documentation gap on the networking benchmark's uncorrelated setup, and a missing guard against `chunking_factor = 0` in the loop-bound division.
 
 ---
 
 ## Warnings
 
-### WR-01: `iter_custom` accumulates setup time when `black_box` calls are placed before `total += start.elapsed()`
+### WR-01: Networking benchmark uses uncorrelated generator/evaluator pairs — evaluation produces garbage wire labels
 
-**File:** `benches/benchmarks.rs:194-229` (P1), `benches/benchmarks.rs:300-329` (P2)
+**File:** `benches/benchmarks.rs:397-444`
 
-**Issue:** In both online benchmarks the `black_box` calls on `c_gamma`, `check_ok`, `&generator`, and `&evaluator` are placed *after* `total += start.elapsed()`, which is correct for excluding them from timing. However, `start = Instant::now()` is placed *after* the setup calls (`setup_auth_gen`, `setup_auth_eval`) but the `l_alpha_pub` / `l_beta_pub` / `l_gamma_pub` `vec!` allocations happen between `start` and the garble calls (lines 191-193 in P1, lines 298-299 in P2). These zero-vector allocations are trivially fast, but they are inside the timed region. More importantly, the `setup_auth_gen` / `setup_auth_eval` calls (which are the expensive part) are correctly outside the timed region, so once CR-01 is fixed by replacing them with `setup_auth_pair` the pre-allocated sentinel vectors should move outside `start` as well for clean timing.
+**Issue:** `bench_online_with_networking_for_size` calls `setup_auth_gen(n, m, chunking_factor)` (lines 397 and 420) and `setup_auth_eval(n, m, chunking_factor)` (line 421) independently. Each call creates a `TensorFpre` instance with a different RNG seed (`seed=0` vs `seed=1`), so the two instances generate independent `delta_a` values. When `evaluator.evaluate_first_half` processes the generator's `chunk_levels` (built under `delta_a_seed0`), `eval_populate_seeds_mem_optimized` uses `evaluator.x_labels` — MACs authenticated under `delta_a_seed1`. The GGM tree reconstruction runs without panicking (same code paths, same instruction count) but produces incorrect leaf seeds. `evaluate_final` then XOR-combines with `correlated_auth_bit_shares.mac` from the seed-1 instance, accumulating further garbage. The timing numbers for garble + network delay are representative of real compute load (same operations are executed), but the evaluate side does not represent a valid protocol participant.
 
-**Fix:** Move the sentinel-vector allocations outside the timed region (before `let start = Instant::now()`):
+**Fix:** Document the intentional mismatch at the call site, or replace the setup with `setup_auth_pair` for fully representative timing. If the intent is network-latency-only measurement (not correctness), add a comment:
 
 ```rust
-// Before start:
-let l_alpha_pub: Vec<bool> = vec![false; n];
-let l_beta_pub:  Vec<bool> = vec![false; m];
-// (P2: l_gamma_pub: Vec<bool> = vec![false; n * m])
-
-let start = Instant::now();
-// ... garble/evaluate calls ...
+// NOTE: generator and evaluator are intentionally uncorrelated — each is
+// constructed from an independent TensorFpre instance. The evaluator's
+// wire-label decoding produces garbage because the MACs were authenticated
+// under a different delta. This benchmark measures garble-time + network-
+// transfer latency only; correctness of the evaluate output is not tested.
+let mut generator = setup_auth_gen(n, m, chunking_factor);
+// ... sizing run ...
 ```
 
-### WR-02: `bench_online_with_networking_for_size` holds stale garble state across the outer `chunking_factor` loop
-
-**File:** `benches/benchmarks.rs:370-417`
-
-**Issue:** At lines 370-379 a `generator` is set up outside the timed loop solely to measure byte counts. The generator is mutated by `garble_first_half()` / `garble_second_half()` / `garble_final()` — consuming the `final_computed` flag (line 57 of `auth_tensor_gen.rs`). This "sizing run" generator is then dropped, which is fine. However, `total_bytes` is computed from ciphertext sizes that depend on `chunking_factor`-specific tree structure, and the byte-size precomputation is repeated for **each** chunking factor inside the outer loop — a new `generator` is created per iteration. There is no bug in the counting logic itself, but `garble_first_half()` / `garble_second_half()` return `Vec<Vec<Block>>` values that are dropped immediately after size measurement (they are not reused in the timed loop). This is correct but the code structure suggests intent to reuse them, which would be wrong. A comment clarifying that `first_levels` / `first_cts` are used only for size measurement (not fed to any evaluator) would prevent future misuse.
-
-**Fix:** Add a comment to the precomputation block:
+And in `iter_batched`:
 
 ```rust
-// Sizing run only — compute total ciphertext byte count for the network simulator.
-// These garble outputs are NOT reused in the timed benchmark loop; a fresh pair
-// of (generator, evaluator) is set up per iteration inside iter_batched.
-let mut generator = setup_auth_gen(n, m, chunking_factor);
-let (first_levels, first_cts) = generator.garble_first_half();
-// ...
+|| {
+    // Uncorrelated setup: timing-only benchmark, not a correctness check.
+    (
+        setup_auth_gen(n, m, chunking_factor),
+        setup_auth_eval(n, m, chunking_factor),
+        SimpleNetworkSimulator::new(100.0, 0),
+    )
+},
 ```
 
 ---
 
 ## Info
 
-### IN-01: Crate-level `use` imports in `src/lib.rs` are private (`use`, not `pub use`) but `Block` was already imported before Phase 10
+### IN-01: `check_ok` in online benchmarks is consumed by `black_box` without a debug assertion
 
-**File:** `src/lib.rs:28-32`
+**File:** `benches/benchmarks.rs:246-252` (P1), `benches/benchmarks.rs:346-352` (P2)
 
-**Issue:** The `use crate::block::Block` import at line 28 predates Phase 10 (it was already needed for `MAC_ZERO` / `MAC_ONE`). Phase 10 added lines 29-32. All five `use` items at crate root are private (`use`, not `pub use`), which is correct — the two `pub fn` helpers use these types in their signatures, but the types are already part of the public API through their own `pub mod` declarations (`pub mod auth_tensor_gen`, etc.). No re-export is needed. This is correct, but worth confirming explicitly: callers of `assemble_c_gamma_shares` must import `AuthTensorGen` / `AuthTensorEval` / `AuthBitShare` from their respective modules, not from the crate root.
-
-**Fix:** No code change required. Optionally add a short comment noting these are module-level convenience imports for the two `pub fn` helpers, not re-exports:
-
-```rust
-// Imports used by the crate-root pub fn helpers (assemble_c_gamma_shares*).
-// These types are re-exported from their respective pub mod declarations.
-use crate::auth_tensor_gen::AuthTensorGen;
-```
-
-### IN-02: `check_ok` result is consumed by `black_box` but never inspected in the online benchmarks
-
-**File:** `benches/benchmarks.rs:218-224` (P1), `benches/benchmarks.rs:319-325` (P2)
-
-**Issue:** The `check_ok: bool` result of `check_zero` is consumed by `black_box(check_ok)` to prevent dead-code elimination, which is correct practice for benchmarks. However, after CR-01 is fixed (correlated pairs), an unexpected `false` return would silently produce a benchmark that measures an aborting pipeline without any signal to the user. A debug-assertion or a panic on `!check_ok` would make protocol failures immediately visible during development without affecting release-mode benchmark timing.
+**Issue:** The `check_ok: bool` result of `check_zero` is consumed by `black_box(check_ok)` to prevent dead-code elimination, which is correct benchmark practice. However, if the correlated setup in `setup_auth_pair` were ever broken or replaced with an uncorrelated helper, `check_zero` would silently return `false` on every iteration and the benchmark would measure a pipeline that always aborts — without any diagnostic output. A `debug_assert!` would catch this class of regression immediately in debug/test builds without adding overhead to release-mode benchmark runs.
 
 **Fix:** Add a `debug_assert!` after `check_zero` and before `total += start.elapsed()`:
 
 ```rust
 let check_ok = check_zero(&c_gamma, &generator.delta_a);
 debug_assert!(check_ok, "honest P1 run must pass check_zero; \
-    setup may be using uncorrelated gen/eval pair");
+    check that setup_auth_pair produces a correlated gen/eval pair");
 total += start.elapsed();
 let _ = black_box(check_ok);
+```
+
+Apply the same pattern in `bench_online_p2` using `&evaluator.delta_b`.
+
+### IN-02: `final_computed` doc comment is incomplete — `garble_final_p2` / `evaluate_final_p2` also set it
+
+**File:** `src/auth_tensor_gen.rs:54-56`, `src/auth_tensor_eval.rs:46-48`
+
+**Issue:** The doc comment on `final_computed` states "Set to `true` by `garble_final()`" (gen) and "Set to `true` by `evaluate_final()`" (eval). Both `garble_final_p2` (line 434 in gen) and `evaluate_final_p2` (line 406 in eval) also set this flag to `true`. As a result, `compute_lambda_gamma` will not panic if called after `garble_final_p2` / `evaluate_final_p2`. In practice this is harmless because `garble_final_p2` writes `first_half_out` via the same D_gb path as `garble_final`, so the underlying data is correct. However, the doc comment misleads readers about which methods advance the flag.
+
+**Fix:** Update the doc comment to enumerate all methods that advance the flag:
+
+```rust
+/// Set to `true` by `garble_final()` or `garble_final_p2()`. Guards
+/// `compute_lambda_gamma()` against being called before the D_gb output
+/// is fully accumulated in `first_half_out`.
+final_computed: bool,
+```
+
+Apply the same update to `AuthTensorEval`:
+
+```rust
+/// Set to `true` by `evaluate_final()` or `evaluate_final_p2()`. Guards
+/// `compute_lambda_gamma()` against being called before the D_gb output
+/// is fully accumulated in `first_half_out`.
+final_computed: bool,
+```
+
+### IN-03: `gen_populate_seeds_mem_optimized` and `eval_populate_seeds_mem_optimized` have no guard against empty input slice
+
+**File:** `src/tensor_ops.rs:29`, `src/tensor_ops.rs:155`
+
+**Issue:** Both `gen_populate_seeds_mem_optimized` (line 29: `x[n-1]`) and `eval_populate_seeds_mem_optimized` (line 155: `a_bits[n-1]`, `x[n-1]`) index `x[n-1]` unconditionally, where `n = x.len()`. If `n = 0` (an empty slice is passed), the access panics with an index-out-of-bounds error. In the current codebase this cannot be triggered through normal use: `chunking_factor >= 1` is enforced by all benchmark and test entry points, and `x.rows() > 0` is guaranteed by `n, m >= 1`. However, there is no compile-time or runtime assertion enforcing `n > 0` in either function, so a future caller passing an empty slice would get an opaque panic rather than a clear error message.
+
+**Fix:** Add a `debug_assert!` at the entry of each function:
+
+```rust
+pub(crate) fn gen_populate_seeds_mem_optimized(
+    x: &[Block],
+    cipher: &FixedKeyAes,
+    delta: Delta,
+) -> (Vec<Block>, Vec<(Block, Block)>) {
+    let n: usize = x.len();
+    debug_assert!(n > 0, "gen_populate_seeds_mem_optimized: x must be non-empty");
+    // ...
+}
+```
+
+And in `eval_populate_seeds_mem_optimized`:
+
+```rust
+debug_assert!(n > 0, "eval_populate_seeds_mem_optimized: x must be non-empty");
+debug_assert_eq!(a_bits.len(), n, "a_bits must have same length as MAC blocks");
+```
+
+### IN-04: Networking benchmark sizing run lacks a comment clarifying that garble outputs are not reused
+
+**File:** `benches/benchmarks.rs:397-411`
+
+**Issue:** Inside the outer `chunking_factor` loop, `bench_online_with_networking_for_size` creates a `generator`, runs `garble_first_half()` / `garble_second_half()` / `garble_final()`, and extracts ciphertext byte counts. The resulting `first_levels`, `first_cts`, `second_levels`, `second_cts` variables are used only for their `.len()` values and then dropped. A reader familiar with the P1 integration tests might expect these outputs to be fed to the evaluator in the timed loop — which would be wrong (the timed loop creates fresh pairs via `setup_auth_gen` / `setup_auth_eval` in `iter_batched`). A brief comment prevents this misreading.
+
+**Fix:** Add a comment on the sizing-run block:
+
+```rust
+// Sizing run only — garble once to compute total ciphertext byte count for the
+// network simulator. These outputs are NOT fed to the evaluator; `iter_batched`
+// sets up a fresh (generator, evaluator) pair for each timed iteration below.
+let mut generator = setup_auth_gen(n, m, chunking_factor);
+let (first_levels, first_cts) = generator.garble_first_half();
+let (second_levels, second_cts) = generator.garble_second_half();
+generator.garble_final();
 ```
 
 ---
