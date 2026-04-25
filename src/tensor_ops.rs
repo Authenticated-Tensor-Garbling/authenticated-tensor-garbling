@@ -264,6 +264,129 @@ pub(crate) fn eval_unary_outer_product(
     eval_cts
 }
 
+/// Wide-leaf variant of `gen_unary_outer_product`. Expands each leaf seed into TWO
+/// pseudorandom Block values (κ-half via even tweak, ρ-half via odd tweak) and
+/// accumulates each half into a separate output matrix. Returns wide ciphertexts
+/// as `Vec<(Block, Block)>` where `.0` is the κ-half and `.1` is the ρ-half.
+///
+/// Phase 9 / P2-01. See CONTEXT.md D-01, D-02, D-03 and 6_total.tex Construction 4.
+///
+/// Tweak convention (even/odd, matching `gen_populate_seeds_mem_optimized` lines 55-56):
+///   - κ-half:  cipher.tccr(Block::from(base << 1),     seeds[i])
+///   - ρ-half:  cipher.tccr(Block::from(base << 1 | 1), seeds[i])
+/// where `base = seeds.len() * j + i`.
+///
+/// Both `out_gb` and `out_ev` MUST be n×m column-major views of the same shape.
+/// `y_d_gb` and `y_d_ev` MUST each have length m.
+pub(crate) fn gen_unary_outer_product_wide(
+    seeds: &[Block],
+    y_d_gb: &MatrixViewRef<Block>,
+    y_d_ev: &MatrixViewRef<Block>,
+    out_gb: &mut MatrixViewMut<Block>,
+    out_ev: &mut MatrixViewMut<Block>,
+    cipher: &FixedKeyAes,
+) -> Vec<(Block, Block)> {
+    let m = y_d_gb.len();
+    debug_assert_eq!(y_d_ev.len(), m, "y_d_gb and y_d_ev must have the same length m");
+    debug_assert_eq!(out_gb.rows(), out_ev.rows(),
+        "out_gb and out_ev must have the same number of rows");
+
+    let mut gen_cts: Vec<(Block, Block)> = Vec::with_capacity(m);
+
+    for j in 0..m {
+        let mut row_gb: Block = Block::default();
+        let mut row_ev: Block = Block::default();
+        for i in 0..seeds.len() {
+            let base = (seeds.len() * j + i) as u128;
+            // Even/odd tweak split: κ-half uses base<<1, ρ-half uses base<<1|1.
+            // CONTEXT.md D-03; matches gen_populate_seeds_mem_optimized convention.
+            let s_gb = cipher.tccr(Block::from(base << 1),     seeds[i]);
+            let s_ev = cipher.tccr(Block::from(base << 1 | 1), seeds[i]);
+            row_gb ^= s_gb;
+            row_ev ^= s_ev;
+
+            // Distribute both halves to the same indexed positions.
+            for k in 0..out_gb.rows() {
+                if ((i >> k) & 1) == 1 {
+                    out_gb[(k, j)] ^= s_gb;
+                    out_ev[(k, j)] ^= s_ev;
+                }
+            }
+        }
+        row_gb ^= y_d_gb[j];
+        row_ev ^= y_d_ev[j];
+        gen_cts.push((row_gb, row_ev));
+    }
+
+    gen_cts
+}
+
+/// Wide-leaf variant of `eval_unary_outer_product`. Mirrors
+/// `gen_unary_outer_product_wide` — reconstructs the missing-leaf contribution
+/// into BOTH `out_gb` and `out_ev` using the wide ciphertexts
+/// `gen_cts: &[(Block, Block)]`.
+///
+/// Phase 9 / P2-01. See CONTEXT.md D-01, D-03 and 6_total.tex Construction 4 step 4.
+///
+/// Preconditions:
+/// - `seeds[missing] == Block::default()` (sentinel set by `eval_populate_seeds_mem_optimized`)
+/// - `y_d_gb.len() == m == y_d_ev.len() == gen_cts.len()`
+pub(crate) fn eval_unary_outer_product_wide(
+    seeds: &[Block],
+    y_d_gb: &MatrixViewRef<Block>,
+    y_d_ev: &MatrixViewRef<Block>,
+    out_gb: &mut MatrixViewMut<Block>,
+    out_ev: &mut MatrixViewMut<Block>,
+    cipher: &FixedKeyAes,
+    missing: usize,
+    gen_cts: &[(Block, Block)],
+) -> Vec<(Block, Block)> {
+    debug_assert_eq!(seeds[missing], Block::default(),
+        "seeds[missing] must be Block::default() sentinel");
+    let m = y_d_gb.len();
+    debug_assert_eq!(y_d_ev.len(), m, "y_d_gb and y_d_ev must have the same length m");
+    debug_assert_eq!(gen_cts.len(), m, "gen_cts must have length m (one wide ct per column)");
+
+    let mut eval_cts: Vec<(Block, Block)> = Vec::with_capacity(m);
+
+    for j in 0..m {
+        let mut eval_ct_gb = Block::default();
+        let mut eval_ct_ev = Block::default();
+        for i in 0..seeds.len() {
+            if i != missing {
+                let base = (seeds.len() * j + i) as u128;
+                let s_gb = cipher.tccr(Block::from(base << 1),     seeds[i]);
+                let s_ev = cipher.tccr(Block::from(base << 1 | 1), seeds[i]);
+                eval_ct_gb ^= s_gb;
+                eval_ct_ev ^= s_ev;
+                for k in 0..out_gb.rows() {
+                    if ((i >> k) & 1) == 1 {
+                        out_gb[(k, j)] ^= s_gb;
+                        out_ev[(k, j)] ^= s_ev;
+                    }
+                }
+            }
+        }
+        // Apply the wide ciphertext + y correction to recover the missing leaf's
+        // contribution to the column accumulator. (Same XOR pattern as narrow eval
+        // line 254, split across kappa/rho halves per 6_total.tex Construction 4 step 4.)
+        eval_ct_gb ^= gen_cts[j].0 ^ y_d_gb[j];
+        eval_ct_ev ^= gen_cts[j].1 ^ y_d_ev[j];
+        eval_cts.push((eval_ct_gb, eval_ct_ev));
+
+        // Distribute the recovered missing-leaf contribution to rows where missing
+        // has bit k set.
+        for k in 0..out_gb.rows() {
+            if ((missing >> k) & 1) == 1 {
+                out_gb[(k, j)] ^= eval_ct_gb;
+                out_ev[(k, j)] ^= eval_ct_ev;
+            }
+        }
+    }
+
+    eval_cts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
