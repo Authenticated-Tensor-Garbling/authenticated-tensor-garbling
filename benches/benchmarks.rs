@@ -392,6 +392,12 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
     let block_sz = size_of::<Block>();
 
     for chunking_factor in 1..=8_usize {
+        // NOTE: generator and evaluator are intentionally uncorrelated — each is
+        // constructed from an independent TensorFpre instance. The evaluator's
+        // wire-label decoding produces garbage because the MACs were authenticated
+        // under a different delta. This benchmark measures garble-time + network-
+        // transfer latency only; correctness of the evaluate output is not tested.
+        //
         // Pre-compute garble output byte count outside the timed loop for
         // accurate network-cost accounting (matches existing per-size approach).
         let mut generator = setup_auth_gen(n, m, chunking_factor);
@@ -416,6 +422,7 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
             |b, &chunking_factor| {
                 b.to_async(&*RT).iter_batched(
                     || {
+                        // Uncorrelated setup: timing-only benchmark, not a correctness check.
                         (
                             setup_auth_gen(n, m, chunking_factor),
                             setup_auth_eval(n, m, chunking_factor),
