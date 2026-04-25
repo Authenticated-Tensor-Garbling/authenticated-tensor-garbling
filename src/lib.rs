@@ -26,6 +26,10 @@ pub mod preprocessing;
 pub mod online;
 
 use crate::block::Block;
+use crate::auth_tensor_gen::AuthTensorGen;
+use crate::auth_tensor_eval::AuthTensorEval;
+use crate::sharing::AuthBitShare;
+use crate::keys::Key;
 
 #[allow(dead_code)]
 const CSP: usize = 128;
@@ -42,6 +46,233 @@ pub(crate) const MAC_ZERO: Block = Block::new([
 pub(crate) const MAC_ONE: Block = Block::new([
     219, 104, 26, 50, 91, 130, 201, 178, 144, 31, 95, 155, 206, 113, 5, 103,
 ]);
+
+/// Assembles the per-gate D_ev-authenticated `c_gamma_shares` vec for Protocol 1
+/// CheckZero per Construction 3 (5_online.tex line 206) and Phase 8 CONTEXT.md D-09.
+///
+/// For each (i, j) gate, c_gamma is the linear combination:
+///   c_gamma[(i,j)] = (L_alpha[i] AND L_beta[j])              [public bit]
+///                  XOR L_alpha[i] · l_beta[j]                 [shared, include iff L_alpha[i]]
+///                  XOR L_beta [j] · l_alpha[i]                [shared, include iff L_beta[j]]
+///                  XOR l_gamma_star[(i,j)]                    [shared, always — = l_alpha · l_beta]
+///                  XOR L_gamma[(i,j)]                          [public bit]
+///                  XOR l_gamma[(i,j)]                          [shared, always]
+///
+/// **In-process simulation approach:**
+///
+/// For the in-process integration test, both parties' preprocessing shares are
+/// available. We compute the FULL reconstructed c_gamma bit from both parties'
+/// share values, and assemble an IT-MAC share verified under `delta_a` using
+/// the evaluator's MAC structure (which is committed under delta_a per
+/// src/preprocessing.rs:61-71 and gen_auth_bit in auth_tensor_fpre.rs:66-86).
+///
+/// Specifically, per `gen_auth_bit`:
+///   gen_share.key = B's sender key Kb
+///   eval_share.mac = Kb.auth(eval.value, delta_a)
+///
+/// So `{ key: gb.key, mac: ev.mac }` satisfies `mac == key.auth(ev.value, delta_a)`.
+///
+/// The full c_gamma bit is `gb.value XOR ev.value`. In the in-process simulation
+/// this is computed directly; then the MAC is adjusted to reflect the full bit:
+///   combined.mac = combined.key.auth(c_gamma_bit, delta_a)
+///                = combined.key.auth(XOR(gb_i.v XOR ev_i.v), delta_a)
+///
+/// This produces valid `AuthBitShare`s that `check_zero` can verify:
+///   - value == 0 iff c_gamma_bit == 0
+///   - mac == key.auth(value, delta_a) always holds
+///
+/// The combined key is `XOR(gb_i.key)` (sum of gen-side keys, which are the
+/// evaluator's B-keys in the D_ev structure). The MAC is freshly computed from
+/// the full reconstructed value.
+///
+/// Returns a Vec<AuthBitShare> of length n*m in column-major order (j*n + i).
+// SIMULATION ONLY: This function requires both parties' private state and is
+// only valid inside #[cfg(test)]. In a real protocol each party assembles its
+// own half of c_gamma independently using only its own preprocessing shares,
+// then the parties run check_zero on the combined share over the network.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_c_gamma_shares(
+    n: usize,
+    m: usize,
+    l_alpha_pub: &[bool],          // length n — public masked alpha bits
+    l_beta_pub: &[bool],           // length m — public masked beta bits
+    l_gamma_pub: &[bool],          // length n*m — public masked gamma bits (column-major)
+    gb: &AuthTensorGen,
+    ev: &AuthTensorEval,
+) -> Vec<AuthBitShare> {
+    assert_eq!(l_alpha_pub.len(), n);
+    assert_eq!(l_beta_pub.len(),  m);
+    assert_eq!(l_gamma_pub.len(), n * m);
+    assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
+    assert_eq!(gb.beta_auth_bit_shares.len(),        m);
+    assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
+    assert_eq!(gb.gamma_d_ev_shares.len(),           n * m);
+    assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
+    assert_eq!(ev.beta_auth_bit_shares.len(),        m);
+    assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
+    assert_eq!(ev.gamma_d_ev_shares.len(),           n * m);
+
+    let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+    for j in 0..m {
+        for i in 0..n {
+            let idx = j * n + i;
+
+            // Accumulate the combined key (XOR of gen-side B-keys) and the
+            // full reconstructed c_gamma bit (XOR of both parties' values).
+            // The gen-side keys are the D_ev-structure keys (B's keys, Kb_i)
+            // that authenticate the eval's share values under delta_a.
+            let mut combined_key = Key::from(Block::ZERO);
+            let mut c_gamma_bit = false;
+
+            // Term: L_alpha[i] · l_beta[j]   (include iff L_alpha[i] is true)
+            if l_alpha_pub[i] {
+                combined_key = combined_key + gb.beta_auth_bit_shares[j].key;
+                c_gamma_bit ^= gb.beta_auth_bit_shares[j].value
+                             ^ ev.beta_auth_bit_shares[j].value;
+            }
+
+            // Term: L_beta[j] · l_alpha[i]   (include iff L_beta[j] is true)
+            if l_beta_pub[j] {
+                combined_key = combined_key + gb.alpha_auth_bit_shares[i].key;
+                c_gamma_bit ^= gb.alpha_auth_bit_shares[i].value
+                             ^ ev.alpha_auth_bit_shares[i].value;
+            }
+
+            // Term: l_gamma*[(i,j)] = l_alpha[i] · l_beta[j]   (always)
+            combined_key = combined_key + gb.correlated_auth_bit_shares[idx].key;
+            c_gamma_bit ^= gb.correlated_auth_bit_shares[idx].value
+                         ^ ev.correlated_auth_bit_shares[idx].value;
+
+            // Term: l_gamma[(i,j)]   (always)
+            combined_key = combined_key + gb.gamma_d_ev_shares[idx].key;
+            c_gamma_bit ^= gb.gamma_d_ev_shares[idx].value
+                         ^ ev.gamma_d_ev_shares[idx].value;
+
+            // Fold the PUBLIC-bit value contribution.
+            // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
+            // the bit value — no IT-MAC structure.
+            let public_bit = (l_alpha_pub[i] & l_beta_pub[j]) ^ l_gamma_pub[idx];
+            c_gamma_bit ^= public_bit;
+
+            // Build a properly-formed AuthBitShare verified under delta_a.
+            // key = XOR(gen-side B-keys), mac = key.auth(c_gamma_bit, delta_a).
+            // value = c_gamma_bit.
+            let combined_mac = combined_key.auth(c_gamma_bit, &gb.delta_a);
+            let share = AuthBitShare {
+                key: combined_key,
+                mac: combined_mac,
+                value: c_gamma_bit,
+            };
+
+            out.push(share);
+        }
+    }
+    out
+}
+
+/// Phase 9 P2-04 — P2 c_gamma assembly under delta_b.
+///
+/// Builds c_gamma AuthBitShares verified under `delta_b` (D_ev). Differs from
+/// the P1 helper `assemble_c_gamma_shares` (which uses `delta_a`) in two ways:
+///   1. Combined key is built from EVAL-side keys of `gamma_d_ev_shares`
+///      (under `delta_b`), not gen-side keys (under `delta_a`).
+///   2. The c_gamma formula has only THREE bit terms (no `L_alpha · l_beta`,
+///      no `L_beta · l_alpha`, no `l_gamma*` etc.):
+///        c_gamma = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub
+///      Per CONTEXT.md D-13, RESEARCH.md Pattern 3 and Pitfall 2, and
+///      `6_total.tex` step 9. The `[v_gamma D_ev]` term already has the
+///      `correlated_d_ev_shares` contribution folded in by `garble_final_p2`
+///      / `evaluate_final_p2`, so `assemble_c_gamma_shares_p2` must NOT add
+///      it again.
+///
+/// SIMULATION ONLY: requires both parties' state. In a real protocol each
+/// party assembles its own half independently, then runs `check_zero` over
+/// the network. The combined key here uses the eval-side keys of
+/// `gamma_d_ev_shares` because, per the `gen_auth_bit` symmetry under
+/// `delta_b` (`auth_tensor_fpre.rs`), `ev.gamma_d_ev_shares[idx].key`
+/// authenticates `gb.value` under `delta_b`. This mirrors P1's
+/// `assemble_c_gamma_shares`, which uses gb-side keys under `delta_a`.
+///
+/// `gb_d_ev_out` and `ev_d_ev_out` are the D_ev output shares from
+/// `garble_final_p2()` (second tuple element) and `evaluate_final_p2()`
+/// respectively — both length `n * m` in column-major (`j * n + i`) order.
+///
+/// `l_gamma_pub` is the masked output value (`L_gamma = v_gamma XOR l_gamma`)
+/// reconstructed by the evaluator, length `n * m` in column-major order.
+///
+/// Returns `Vec<AuthBitShare>` of length `n * m`, each verified under
+/// `ev.delta_b`.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_c_gamma_shares_p2(
+    n: usize,
+    m: usize,
+    gb_d_ev_out: &[Block],
+    ev_d_ev_out: &[Block],
+    l_gamma_pub: &[bool],
+    gb: &AuthTensorGen,
+    ev: &AuthTensorEval,
+) -> Vec<AuthBitShare> {
+    assert_eq!(gb_d_ev_out.len(),  n * m);
+    assert_eq!(ev_d_ev_out.len(),  n * m);
+    assert_eq!(l_gamma_pub.len(),  n * m);
+    assert_eq!(gb.gamma_d_ev_shares.len(), n * m);
+    assert_eq!(ev.gamma_d_ev_shares.len(), n * m);
+
+    let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+    for j in 0..m {
+        for i in 0..n {
+            let idx = j * n + i;
+
+            // Bit reconstruction:
+            //   c_gamma_bit = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub[idx]
+            //
+            // v_gamma_bit is the LSB of the recovered v_gamma output:
+            //   [v_gamma D_ev]_combined = gb_d_ev_out[idx] XOR ev_d_ev_out[idx]
+            //   v_gamma_bit = combined.lsb()
+            let v_gamma_block = gb_d_ev_out[idx] ^ ev_d_ev_out[idx];
+            let v_gamma_bit = v_gamma_block.lsb();
+
+            // l_gamma_bit comes from gamma_d_ev_shares (XOR of both parties'
+            // values).
+            let l_gamma_bit = gb.gamma_d_ev_shares[idx].value
+                            ^ ev.gamma_d_ev_shares[idx].value;
+
+            let c_gamma_bit = v_gamma_bit ^ l_gamma_bit ^ l_gamma_pub[idx];
+
+            // Combined key under delta_b: eval-side key of gamma_d_ev_shares.
+            //
+            // Why eval-side keys? Per `gen_auth_bit` (auth_tensor_fpre.rs):
+            //   gen.mac = a_share.mac     (a_share built under delta_b — gen.mac
+            //                              authenticates gen.value under delta_b
+            //                              using EVAL's a_share.key, i.e.
+            //                              eval_share.key)
+            //   ev.key  = a_share.key     (this is the key authenticating
+            //                              gb.value under delta_b)
+            //
+            // So under delta_b, `ev.gamma_d_ev_shares[idx].key` is the
+            // canonical "key authenticating gb.value under delta_b". To build
+            // a combined `AuthBitShare` verifying under delta_b for the full
+            // reconstructed c_gamma bit, we use this eval-side key.
+            //
+            // (Mirror of P1's `assemble_c_gamma_shares`, which uses gb-side
+            // keys under delta_a.)
+            let combined_key = ev.gamma_d_ev_shares[idx].key;
+
+            // Recompute MAC freshly under delta_b for the full reconstructed
+            // bit. Per `online.rs` `check_zero` doc: never naively XOR
+            // cross-party MACs — always recompute via `key.auth(value, delta)`
+            // after accumulating the full combined key and bit.
+            let combined_mac = combined_key.auth(c_gamma_bit, &ev.delta_b);
+
+            out.push(AuthBitShare {
+                key: combined_key,
+                mac: combined_mac,
+                value: c_gamma_bit,
+            });
+        }
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {
@@ -252,235 +483,7 @@ mod tests {
     use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
     use crate::online::check_zero;
     use crate::sharing::AuthBitShare;
-
-    /// Assembles the per-gate D_ev-authenticated `c_gamma_shares` vec for Protocol 1
-    /// CheckZero per Construction 3 (5_online.tex line 206) and Phase 8 CONTEXT.md D-09.
-    ///
-    /// For each (i, j) gate, c_gamma is the linear combination:
-    ///   c_gamma[(i,j)] = (L_alpha[i] AND L_beta[j])              [public bit]
-    ///                  XOR L_alpha[i] · l_beta[j]                 [shared, include iff L_alpha[i]]
-    ///                  XOR L_beta [j] · l_alpha[i]                [shared, include iff L_beta[j]]
-    ///                  XOR l_gamma_star[(i,j)]                    [shared, always — = l_alpha · l_beta]
-    ///                  XOR L_gamma[(i,j)]                          [public bit]
-    ///                  XOR l_gamma[(i,j)]                          [shared, always]
-    ///
-    /// **In-process simulation approach:**
-    ///
-    /// For the in-process integration test, both parties' preprocessing shares are
-    /// available. We compute the FULL reconstructed c_gamma bit from both parties'
-    /// share values, and assemble an IT-MAC share verified under `delta_a` using
-    /// the evaluator's MAC structure (which is committed under delta_a per
-    /// src/preprocessing.rs:61-71 and gen_auth_bit in auth_tensor_fpre.rs:66-86).
-    ///
-    /// Specifically, per `gen_auth_bit`:
-    ///   gen_share.key = B's sender key Kb
-    ///   eval_share.mac = Kb.auth(eval.value, delta_a)
-    ///
-    /// So `{ key: gb.key, mac: ev.mac }` satisfies `mac == key.auth(ev.value, delta_a)`.
-    ///
-    /// The full c_gamma bit is `gb.value XOR ev.value`. In the in-process simulation
-    /// this is computed directly; then the MAC is adjusted to reflect the full bit:
-    ///   combined.mac = combined.key.auth(c_gamma_bit, delta_a)
-    ///                = combined.key.auth(XOR(gb_i.v XOR ev_i.v), delta_a)
-    ///
-    /// This produces valid `AuthBitShare`s that `check_zero` can verify:
-    ///   - value == 0 iff c_gamma_bit == 0
-    ///   - mac == key.auth(value, delta_a) always holds
-    ///
-    /// The combined key is `XOR(gb_i.key)` (sum of gen-side keys, which are the
-    /// evaluator's B-keys in the D_ev structure). The MAC is freshly computed from
-    /// the full reconstructed value.
-    ///
-    /// Returns a Vec<AuthBitShare> of length n*m in column-major order (j*n + i).
-    // SIMULATION ONLY: This function requires both parties' private state and is
-    // only valid inside #[cfg(test)]. In a real protocol each party assembles its
-    // own half of c_gamma independently using only its own preprocessing shares,
-    // then the parties run check_zero on the combined share over the network.
-    #[allow(clippy::too_many_arguments)]
-    fn assemble_c_gamma_shares(
-        n: usize,
-        m: usize,
-        l_alpha_pub: &[bool],          // length n — public masked alpha bits
-        l_beta_pub: &[bool],           // length m — public masked beta bits
-        l_gamma_pub: &[bool],          // length n*m — public masked gamma bits (column-major)
-        gb: &AuthTensorGen,
-        ev: &AuthTensorEval,
-    ) -> Vec<AuthBitShare> {
-        assert_eq!(l_alpha_pub.len(), n);
-        assert_eq!(l_beta_pub.len(),  m);
-        assert_eq!(l_gamma_pub.len(), n * m);
-        assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
-        assert_eq!(gb.beta_auth_bit_shares.len(),        m);
-        assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
-        assert_eq!(gb.gamma_d_ev_shares.len(),           n * m);
-        assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
-        assert_eq!(ev.beta_auth_bit_shares.len(),        m);
-        assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
-        assert_eq!(ev.gamma_d_ev_shares.len(),           n * m);
-
-        let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
-        for j in 0..m {
-            for i in 0..n {
-                let idx = j * n + i;
-
-                // Accumulate the combined key (XOR of gen-side B-keys) and the
-                // full reconstructed c_gamma bit (XOR of both parties' values).
-                // The gen-side keys are the D_ev-structure keys (B's keys, Kb_i)
-                // that authenticate the eval's share values under delta_a.
-                use crate::keys::Key;
-                use crate::block::Block;
-                let mut combined_key = Key::from(Block::ZERO);
-                let mut c_gamma_bit = false;
-
-                // Term: L_alpha[i] · l_beta[j]   (include iff L_alpha[i] is true)
-                if l_alpha_pub[i] {
-                    combined_key = combined_key + gb.beta_auth_bit_shares[j].key;
-                    c_gamma_bit ^= gb.beta_auth_bit_shares[j].value
-                                 ^ ev.beta_auth_bit_shares[j].value;
-                }
-
-                // Term: L_beta[j] · l_alpha[i]   (include iff L_beta[j] is true)
-                if l_beta_pub[j] {
-                    combined_key = combined_key + gb.alpha_auth_bit_shares[i].key;
-                    c_gamma_bit ^= gb.alpha_auth_bit_shares[i].value
-                                 ^ ev.alpha_auth_bit_shares[i].value;
-                }
-
-                // Term: l_gamma*[(i,j)] = l_alpha[i] · l_beta[j]   (always)
-                combined_key = combined_key + gb.correlated_auth_bit_shares[idx].key;
-                c_gamma_bit ^= gb.correlated_auth_bit_shares[idx].value
-                             ^ ev.correlated_auth_bit_shares[idx].value;
-
-                // Term: l_gamma[(i,j)]   (always)
-                combined_key = combined_key + gb.gamma_d_ev_shares[idx].key;
-                c_gamma_bit ^= gb.gamma_d_ev_shares[idx].value
-                             ^ ev.gamma_d_ev_shares[idx].value;
-
-                // Fold the PUBLIC-bit value contribution.
-                // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
-                // the bit value — no IT-MAC structure.
-                let public_bit = (l_alpha_pub[i] & l_beta_pub[j]) ^ l_gamma_pub[idx];
-                c_gamma_bit ^= public_bit;
-
-                // Build a properly-formed AuthBitShare verified under delta_a.
-                // key = XOR(gen-side B-keys), mac = key.auth(c_gamma_bit, delta_a).
-                // value = c_gamma_bit.
-                let combined_mac = combined_key.auth(c_gamma_bit, &gb.delta_a);
-                let share = AuthBitShare {
-                    key: combined_key,
-                    mac: combined_mac,
-                    value: c_gamma_bit,
-                };
-
-                out.push(share);
-            }
-        }
-        out
-    }
-
-    /// Phase 9 P2-04 — P2 c_gamma assembly under delta_b.
-    ///
-    /// Builds c_gamma AuthBitShares verified under `delta_b` (D_ev). Differs from
-    /// the P1 helper `assemble_c_gamma_shares` (which uses `delta_a`) in two ways:
-    ///   1. Combined key is built from EVAL-side keys of `gamma_d_ev_shares`
-    ///      (under `delta_b`), not gen-side keys (under `delta_a`).
-    ///   2. The c_gamma formula has only THREE bit terms (no `L_alpha · l_beta`,
-    ///      no `L_beta · l_alpha`, no `l_gamma*` etc.):
-    ///        c_gamma = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub
-    ///      Per CONTEXT.md D-13, RESEARCH.md Pattern 3 and Pitfall 2, and
-    ///      `6_total.tex` step 9. The `[v_gamma D_ev]` term already has the
-    ///      `correlated_d_ev_shares` contribution folded in by `garble_final_p2`
-    ///      / `evaluate_final_p2`, so `assemble_c_gamma_shares_p2` must NOT add
-    ///      it again.
-    ///
-    /// SIMULATION ONLY: requires both parties' state. In a real protocol each
-    /// party assembles its own half independently, then runs `check_zero` over
-    /// the network. The combined key here uses the eval-side keys of
-    /// `gamma_d_ev_shares` because, per the `gen_auth_bit` symmetry under
-    /// `delta_b` (`auth_tensor_fpre.rs`), `ev.gamma_d_ev_shares[idx].key`
-    /// authenticates `gb.value` under `delta_b`. This mirrors P1's
-    /// `assemble_c_gamma_shares`, which uses gb-side keys under `delta_a`.
-    ///
-    /// `gb_d_ev_out` and `ev_d_ev_out` are the D_ev output shares from
-    /// `garble_final_p2()` (second tuple element) and `evaluate_final_p2()`
-    /// respectively — both length `n * m` in column-major (`j * n + i`) order.
-    ///
-    /// `l_gamma_pub` is the masked output value (`L_gamma = v_gamma XOR l_gamma`)
-    /// reconstructed by the evaluator, length `n * m` in column-major order.
-    ///
-    /// Returns `Vec<AuthBitShare>` of length `n * m`, each verified under
-    /// `ev.delta_b`.
-    #[allow(clippy::too_many_arguments)]
-    fn assemble_c_gamma_shares_p2(
-        n: usize,
-        m: usize,
-        gb_d_ev_out: &[Block],
-        ev_d_ev_out: &[Block],
-        l_gamma_pub: &[bool],
-        gb: &AuthTensorGen,
-        ev: &AuthTensorEval,
-    ) -> Vec<AuthBitShare> {
-        assert_eq!(gb_d_ev_out.len(),  n * m);
-        assert_eq!(ev_d_ev_out.len(),  n * m);
-        assert_eq!(l_gamma_pub.len(),  n * m);
-        assert_eq!(gb.gamma_d_ev_shares.len(), n * m);
-        assert_eq!(ev.gamma_d_ev_shares.len(), n * m);
-
-        let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
-        for j in 0..m {
-            for i in 0..n {
-                let idx = j * n + i;
-
-                // Bit reconstruction:
-                //   c_gamma_bit = v_gamma_bit XOR l_gamma_bit XOR L_gamma_pub[idx]
-                //
-                // v_gamma_bit is the LSB of the recovered v_gamma output:
-                //   [v_gamma D_ev]_combined = gb_d_ev_out[idx] XOR ev_d_ev_out[idx]
-                //   v_gamma_bit = combined.lsb()
-                let v_gamma_block = gb_d_ev_out[idx] ^ ev_d_ev_out[idx];
-                let v_gamma_bit = v_gamma_block.lsb();
-
-                // l_gamma_bit comes from gamma_d_ev_shares (XOR of both parties'
-                // values).
-                let l_gamma_bit = gb.gamma_d_ev_shares[idx].value
-                                ^ ev.gamma_d_ev_shares[idx].value;
-
-                let c_gamma_bit = v_gamma_bit ^ l_gamma_bit ^ l_gamma_pub[idx];
-
-                // Combined key under delta_b: eval-side key of gamma_d_ev_shares.
-                //
-                // Why eval-side keys? Per `gen_auth_bit` (auth_tensor_fpre.rs):
-                //   gen.mac = a_share.mac     (a_share built under delta_b — gen.mac
-                //                              authenticates gen.value under delta_b
-                //                              using EVAL's a_share.key, i.e.
-                //                              eval_share.key)
-                //   ev.key  = a_share.key     (this is the key authenticating
-                //                              gb.value under delta_b)
-                //
-                // So under delta_b, `ev.gamma_d_ev_shares[idx].key` is the
-                // canonical "key authenticating gb.value under delta_b". To build
-                // a combined `AuthBitShare` verifying under delta_b for the full
-                // reconstructed c_gamma bit, we use this eval-side key.
-                //
-                // (Mirror of P1's `assemble_c_gamma_shares`, which uses gb-side
-                // keys under delta_a.)
-                let combined_key = ev.gamma_d_ev_shares[idx].key;
-
-                // Recompute MAC freshly under delta_b for the full reconstructed
-                // bit. Per `online.rs` `check_zero` doc: never naively XOR
-                // cross-party MACs — always recompute via `key.auth(value, delta)`
-                // after accumulating the full combined key and bit.
-                let combined_mac = combined_key.auth(c_gamma_bit, &ev.delta_b);
-
-                out.push(AuthBitShare {
-                    key: combined_key,
-                    mac: combined_mac,
-                    value: c_gamma_bit,
-                });
-            }
-        }
-        out
-    }
+    use super::{assemble_c_gamma_shares, assemble_c_gamma_shares_p2};
 
     #[test]
     fn test_auth_tensor_product() {
