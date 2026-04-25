@@ -290,6 +290,11 @@ impl AuthTensorGen {
     /// Combines both half-outer-product outputs with the correlated preprocessing
     /// share to produce the garbled tensor gate output.
     pub fn garble_final(&mut self) {
+        assert!(
+            !self.final_computed,
+            "garble_final called twice on the same instance — \
+             first_half_out would be double-XOR'd; create a new instance per gate"
+        );
         for i in 0..self.n {
             for j in 0..self.m {
                 let correlated_share = if self.correlated_auth_bit_shares[j * self.n + i].bit() {
@@ -383,6 +388,11 @@ impl AuthTensorGen {
     /// `mac.as_block()` — no `delta_b` XOR. See
     /// `get_first_inputs_p2_y_d_ev` doc for derivation.
     pub fn garble_final_p2(&mut self) -> (Vec<Block>, Vec<Block>) {
+        assert!(
+            !self.final_computed,
+            "garble_final_p2 called twice on the same instance — \
+             first_half_out would be double-XOR'd; create a new instance per gate"
+        );
         // D_gb path: identical to existing `garble_final`.
         for i in 0..self.n {
             for j in 0..self.m {

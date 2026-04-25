@@ -289,6 +289,11 @@ impl AuthTensorEval {
     /// Combines both half-outer-product outputs with the correlated preprocessing
     /// MAC to produce the evaluator's share of the garbled tensor gate output.
     pub fn evaluate_final(&mut self) {
+        assert!(
+            !self.final_computed,
+            "evaluate_final called twice on the same instance — \
+             first_half_out would be double-XOR'd; create a new instance per gate"
+        );
         for i in 0..self.n {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^=
@@ -360,6 +365,11 @@ impl AuthTensorEval {
     /// struct does not gain new persistent fields beyond `first_half_out_ev` /
     /// `second_half_out_ev` (private accumulators).
     pub fn evaluate_final_p2(&mut self) -> Vec<Block> {
+        assert!(
+            !self.final_computed,
+            "evaluate_final_p2 called twice on the same instance — \
+             first_half_out would be double-XOR'd; create a new instance per gate"
+        );
         // D_gb path: identical to existing `evaluate_final`.
         for i in 0..self.n {
             for j in 0..self.m {
