@@ -238,7 +238,10 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: acc.gen_x_shares,
             beta_auth_bit_shares: acc.gen_y_shares,
             correlated_auth_bit_shares: acc.gen_z_shares,
-            gamma_auth_bit_shares: vec![], // stub: uncompressed path does not generate l_gamma yet (Phase 8)
+            alpha_d_ev_shares: vec![],      // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            beta_d_ev_shares: vec![],       // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            correlated_d_ev_shares: vec![], // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            gamma_d_ev_shares: vec![],      // RENAMED Phase 9 D-05; uncompressed path is stub
         },
         TensorFpreEval {
             n,
@@ -250,7 +253,10 @@ pub fn combine_leaky_triples(
             alpha_auth_bit_shares: acc.eval_x_shares,
             beta_auth_bit_shares: acc.eval_y_shares,
             correlated_auth_bit_shares: acc.eval_z_shares,
-            gamma_auth_bit_shares: vec![], // stub: uncompressed path does not generate l_gamma yet (Phase 8)
+            alpha_d_ev_shares: vec![],      // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            beta_d_ev_shares: vec![],       // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            correlated_d_ev_shares: vec![], // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
+            gamma_d_ev_shares: vec![],      // RENAMED Phase 9 D-05; uncompressed path is stub
         },
     )
 }
