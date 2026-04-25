@@ -121,4 +121,4 @@ v1.1 requirements — see REQUIREMENTS.md (to be defined).
 Next milestone: After v1.1 — v2.0 focusing on real OT (Ferret/IKNP) and network layer.
 
 ---
-*Last updated: 2026-04-25 — Phase 9 complete: Protocol 2 garble/eval implemented and verified (P2-01..P2-05).*
+*Last updated: 2026-04-25 — Phase 10 complete: Wall-clock benchmarks implemented and verified (BENCH-01, BENCH-02, BENCH-04, BENCH-06 satisfied; BENCH-05 deferred to v2). All four benchmark groups (preprocessing, online P1, online P2, network) produce real Criterion measurements; gamma_d_ev_shares panic closed via setup_auth_pair / IdealPreprocessingBackend.*
