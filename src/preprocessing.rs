@@ -34,13 +34,22 @@ pub struct TensorFpreGen {
     /// Garbler's `AuthBitShare` for each correlated bit alpha_i AND beta_j; length n*m,
     /// column-major index j*n + i. MAC committed under delta_b.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    /// Garbler's `AuthBitShare` for each gate-output mask l_gamma per (i,j) pair;
-    /// length n*m, column-major index j*n + i. MAC committed under delta_b (D_ev-authenticated).
-    /// Distinct from `correlated_auth_bit_shares` which encodes l_gamma* (the preprocessing
-    /// triple output mask). Populated by `IdealPreprocessingBackend`; initialized to `vec![]`
-    /// by `UncompressedPreprocessingBackend` (Phase 8 will fill in the real value).
-    /// See CONTEXT.md D-04, D-05 and REQUIREMENTS.md PRE-04.
-    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
+    /// Garbler's `AuthBitShare` for each `l_alpha` bit; length n, MAC committed under delta_b.
+    /// D_ev-authenticated counterpart to `alpha_auth_bit_shares` (which is D_gb-authenticated).
+    /// See CONTEXT.md D-04 (Phase 9). Required by Protocol 2 garble (`_p2` methods).
+    /// Populated by `IdealPreprocessingBackend`; left empty by `UncompressedPreprocessingBackend` stub.
+    pub alpha_d_ev_shares: Vec<AuthBitShare>,
+    /// Garbler's `AuthBitShare` for each `l_beta` bit; length m, MAC committed under delta_b.
+    /// D_ev-authenticated counterpart to `beta_auth_bit_shares`. See CONTEXT.md D-04.
+    pub beta_d_ev_shares: Vec<AuthBitShare>,
+    /// Garbler's `AuthBitShare` for each `l_gamma*` correlated bit; length n*m, column-major
+    /// index `j*n + i`. MAC committed under delta_b. D_ev counterpart to
+    /// `correlated_auth_bit_shares`. See CONTEXT.md D-04.
+    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Garbler's `AuthBitShare` for each gate-output mask `l_gamma`; length n*m, column-major.
+    /// MAC committed under delta_b. (Phase 9 D-05.)
+    /// Distinct from `correlated_d_ev_shares` (which encodes l_gamma* = l_alpha · l_beta).
+    pub gamma_d_ev_shares: Vec<AuthBitShare>,
 }
 
 pub struct TensorFpreEval {
@@ -65,10 +74,17 @@ pub struct TensorFpreEval {
     /// Evaluator's `AuthBitShare` for each correlated bit (column-major, length n*m,
     /// index j*n + i). MAC committed under delta_a.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    /// Evaluator's `AuthBitShare` for each gate-output mask l_gamma; length n*m,
-    /// column-major index j*n + i. MAC committed under delta_a (symmetric to TensorFpreGen).
-    /// See CONTEXT.md D-04, D-05.
-    pub gamma_auth_bit_shares: Vec<AuthBitShare>,
+    /// Evaluator's `AuthBitShare` for each `l_alpha` bit; length n, MAC committed under delta_a.
+    /// D_ev-authenticated counterpart to `alpha_auth_bit_shares`. See CONTEXT.md D-04 (Phase 9).
+    pub alpha_d_ev_shares: Vec<AuthBitShare>,
+    /// Evaluator's `AuthBitShare` for each `l_beta` bit; length m, MAC committed under delta_a.
+    pub beta_d_ev_shares: Vec<AuthBitShare>,
+    /// Evaluator's `AuthBitShare` for each `l_gamma*` correlated bit; length n*m, column-major.
+    /// MAC committed under delta_a.
+    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Evaluator's `AuthBitShare` for each `l_gamma` mask; length n*m, column-major.
+    /// MAC committed under delta_a. (Phase 9 D-05.)
+    pub gamma_d_ev_shares: Vec<AuthBitShare>,
 }
 
 /// Common interface for all preprocessing backends.
@@ -112,7 +128,7 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
 /// Fixed seed 0 used internally — matches the `IdealBCot::new(0, 1)` precedent (see
 /// src/bcot.rs). For tests and benchmarks only. See CONTEXT.md D-03, D-07, D-08.
 ///
-/// `gamma_auth_bit_shares` is populated with `n*m` independent random IT-MAC authenticated
+/// `gamma_d_ev_shares` is populated with `n*m` independent random IT-MAC authenticated
 /// bits for l_gamma (the gate output mask). `gen_auth_bit()` calls MUST precede
 /// `into_gen_eval()` because `into_gen_eval(self)` consumes `fpre` by value.
 /// See RESEARCH.md Pitfall 2 and Pattern 3.
@@ -139,13 +155,38 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
 
         // CRITICAL ORDERING: into_gen_eval(self) consumes fpre by value.
         // All gen_auth_bit() calls must happen BEFORE into_gen_eval() is called.
-        // Use a secondary RNG (seed 42) to draw independent l_gamma bits — this
-        // RNG is separate from fpre's internal RNG to avoid interference.
-        let mut rng = ChaCha12Rng::seed_from_u64(42);
-        let mut gamma_auth_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
+        //
+        // Phase 9 D-06: generate all four D_ev field pairs using fpre.gen_auth_bit().
+        // Use distinct ChaCha12Rng seeds (42, 43, 44, 45) so the four fields are
+        // independently random — same pattern as the existing gamma_d_ev_shares
+        // generation (seed 42).
+        let mut rng_alpha = ChaCha12Rng::seed_from_u64(43);
+        let mut alpha_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let l_alpha: bool = rng_alpha.random_bool(0.5);
+            alpha_d_ev_bits.push(fpre.gen_auth_bit(l_alpha));
+        }
+
+        let mut rng_beta = ChaCha12Rng::seed_from_u64(44);
+        let mut beta_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(m);
+        for _ in 0..m {
+            let l_beta: bool = rng_beta.random_bool(0.5);
+            beta_d_ev_bits.push(fpre.gen_auth_bit(l_beta));
+        }
+
+        let mut rng_corr = ChaCha12Rng::seed_from_u64(45);
+        let mut correlated_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
         for _ in 0..(n * m) {
-            let l_gamma: bool = rng.random_bool(0.5);
-            gamma_auth_bits.push(fpre.gen_auth_bit(l_gamma));
+            let l_corr: bool = rng_corr.random_bool(0.5);
+            correlated_d_ev_bits.push(fpre.gen_auth_bit(l_corr));
+        }
+
+        // gamma generation: D_ev-authenticated l_gamma shares (column-major n*m).
+        let mut rng_gamma = ChaCha12Rng::seed_from_u64(42);
+        let mut gamma_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
+        for _ in 0..(n * m) {
+            let l_gamma: bool = rng_gamma.random_bool(0.5);
+            gamma_d_ev_bits.push(fpre.gen_auth_bit(l_gamma));
         }
 
         // Now consume fpre — gen_auth_bit() can no longer be called after this line.
@@ -153,10 +194,15 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         // in Rust 2024 edition.
         let (mut gen_out, mut eval_out) = fpre.into_gen_eval();
 
-        // Distribute gen_share / eval_share from collected gamma bits.
-        // Pattern: same as correlated_auth_bits distribution in into_gen_eval().
-        gen_out.gamma_auth_bit_shares = gamma_auth_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.gamma_auth_bit_shares = gamma_auth_bits.iter().map(|b| b.eval_share).collect();
+        // Distribute gen_share / eval_share for each of the four D_ev fields.
+        gen_out.alpha_d_ev_shares       = alpha_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.alpha_d_ev_shares      = alpha_d_ev_bits.iter().map(|b| b.eval_share).collect();
+        gen_out.beta_d_ev_shares        = beta_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.beta_d_ev_shares       = beta_d_ev_bits.iter().map(|b| b.eval_share).collect();
+        gen_out.correlated_d_ev_shares  = correlated_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.correlated_d_ev_shares = correlated_d_ev_bits.iter().map(|b| b.eval_share).collect();
+        gen_out.gamma_d_ev_shares       = gamma_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.gamma_d_ev_shares      = gamma_d_ev_bits.iter().map(|b| b.eval_share).collect();
 
         (gen_out, eval_out)
     }
@@ -284,14 +330,14 @@ mod tests {
             "correlated_auth_bit_shares must have n*m=16 entries");
     }
 
-    // PRE-03 + PRE-04: uncompressed backend leaves gamma_auth_bit_shares empty (stub)
+    // PRE-03 + PRE-04: uncompressed backend leaves gamma_d_ev_shares empty (stub)
     #[test]
     fn test_uncompressed_backend_gamma_field_is_empty() {
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
-        assert_eq!(gen_out.gamma_auth_bit_shares.len(), 0,
-            "UncompressedPreprocessingBackend leaves gamma_auth_bit_shares empty (stub until Phase 8)");
-        assert_eq!(eval_out.gamma_auth_bit_shares.len(), 0,
-            "UncompressedPreprocessingBackend leaves gamma_auth_bit_shares empty (stub until Phase 8)");
+        assert_eq!(gen_out.gamma_d_ev_shares.len(), 0,
+            "UncompressedPreprocessingBackend leaves gamma_d_ev_shares empty (stub until Phase 8)");
+        assert_eq!(eval_out.gamma_d_ev_shares.len(), 0,
+            "UncompressedPreprocessingBackend leaves gamma_d_ev_shares empty (stub until Phase 8)");
     }
 
     // PRE-02: IdealPreprocessingBackend returns correctly dimensioned output.
@@ -310,26 +356,26 @@ mod tests {
         assert_eq!(eval_out.correlated_auth_bit_shares.len(), 16);
     }
 
-    // PRE-04: gamma_auth_bit_shares length is n*m on both sides
+    // PRE-04: gamma_d_ev_shares length is n*m on both sides
     #[test]
-    fn test_ideal_backend_gamma_auth_bit_shares_length() {
+    fn test_ideal_backend_gamma_d_ev_shares_length() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
-        assert_eq!(gen_out.gamma_auth_bit_shares.len(),  4 * 4,
-            "gen.gamma_auth_bit_shares must have n*m=16 entries");
-        assert_eq!(eval_out.gamma_auth_bit_shares.len(), 4 * 4,
-            "eval.gamma_auth_bit_shares must have n*m=16 entries");
+        assert_eq!(gen_out.gamma_d_ev_shares.len(),  4 * 4,
+            "gen.gamma_d_ev_shares must have n*m=16 entries");
+        assert_eq!(eval_out.gamma_d_ev_shares.len(), 4 * 4,
+            "eval.gamma_d_ev_shares must have n*m=16 entries");
     }
 
     // PRE-04 + D-09: IT-MAC invariant (mac = key XOR bit * delta) holds for all gamma shares.
     // WARNING: Do NOT call share.verify(delta) directly — it panics on correctly-formed
     // cross-party shares. Always use verify_cross_party (see RESEARCH.md Pitfall 3).
     #[test]
-    fn test_ideal_backend_gamma_auth_bit_shares_mac_invariant() {
+    fn test_ideal_backend_gamma_d_ev_shares_mac_invariant() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
         for k in 0..(4 * 4) {
             verify_cross_party(
-                &gen_out.gamma_auth_bit_shares[k],
-                &eval_out.gamma_auth_bit_shares[k],
+                &gen_out.gamma_d_ev_shares[k],
+                &eval_out.gamma_d_ev_shares[k],
                 &gen_out.delta_a,
                 &eval_out.delta_b,
             );
@@ -337,7 +383,61 @@ mod tests {
         // If no panic: all 16 gamma shares satisfy the IT-MAC invariant.
     }
 
-    // PRE-04 + D-05: gamma_auth_bit_shares (l_gamma) is a different random sample
+    // P2-01 (Phase 9 D-04, D-06): All three new D_ev field pairs are populated
+    // and have correct lengths n, m, n*m respectively.
+    #[test]
+    fn test_ideal_backend_d_ev_shares_lengths() {
+        let n = 4;
+        let m = 4;
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        assert_eq!(gen_out.alpha_d_ev_shares.len(),        n,
+            "gen.alpha_d_ev_shares must have length n");
+        assert_eq!(eval_out.alpha_d_ev_shares.len(),       n,
+            "eval.alpha_d_ev_shares must have length n");
+        assert_eq!(gen_out.beta_d_ev_shares.len(),         m,
+            "gen.beta_d_ev_shares must have length m");
+        assert_eq!(eval_out.beta_d_ev_shares.len(),        m,
+            "eval.beta_d_ev_shares must have length m");
+        assert_eq!(gen_out.correlated_d_ev_shares.len(),   n * m,
+            "gen.correlated_d_ev_shares must have length n*m");
+        assert_eq!(eval_out.correlated_d_ev_shares.len(),  n * m,
+            "eval.correlated_d_ev_shares must have length n*m");
+    }
+
+    // P2-01: All three new D_ev field pairs satisfy the IT-MAC invariant under delta_b.
+    // Reuses the helper pattern from test_ideal_backend_gamma_d_ev_shares_mac_invariant.
+    #[test]
+    fn test_ideal_backend_d_ev_shares_mac_invariant() {
+        let n = 4;
+        let m = 4;
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        for k in 0..n {
+            verify_cross_party(
+                &gen_out.alpha_d_ev_shares[k],
+                &eval_out.alpha_d_ev_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for k in 0..m {
+            verify_cross_party(
+                &gen_out.beta_d_ev_shares[k],
+                &eval_out.beta_d_ev_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &gen_out.correlated_d_ev_shares[k],
+                &eval_out.correlated_d_ev_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
+    }
+
+    // PRE-04 + D-05: gamma_d_ev_shares (l_gamma) is a different random sample
     // from correlated_auth_bit_shares (l_gamma*). Basic distinctness: not all-zero bits.
     #[test]
     fn test_ideal_backend_gamma_distinct_from_correlated() {
@@ -345,7 +445,7 @@ mod tests {
         // gamma bits: gen and eval shares XOR to the actual l_gamma bit (gen.value XOR eval.value)
         // correlated bits: same XOR gives l_gamma* bit
         // They are independent random samples; expect at least one to differ from false.
-        let any_gamma_set = gen_out.gamma_auth_bit_shares.iter()
+        let any_gamma_set = gen_out.gamma_d_ev_shares.iter()
             .any(|s| s.value);
         let any_correlated_set = gen_out.correlated_auth_bit_shares.iter()
             .any(|s| s.value);
@@ -356,7 +456,7 @@ mod tests {
         let _ = any_correlated_set;
         // Verify that gamma and correlated shares are not byte-for-byte identical
         // (independent random samples from different RNG seeds must differ).
-        let gamma_bits: Vec<bool> = gen_out.gamma_auth_bit_shares.iter()
+        let gamma_bits: Vec<bool> = gen_out.gamma_d_ev_shares.iter()
             .map(|s| s.value)
             .collect();
         let correlated_bits: Vec<bool> = gen_out.correlated_auth_bit_shares.iter()
