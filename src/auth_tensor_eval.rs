@@ -21,13 +21,13 @@ pub struct AuthTensorEval {
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
 
-    /// Evaluator's D_ev-authenticated shares of `l_alpha`; length n. Phase 9 P2-01.
-    pub alpha_d_ev_shares: Vec<AuthBitShare>,
-    /// Evaluator's D_ev-authenticated shares of `l_beta`; length m. Phase 9 P2-01.
-    pub beta_d_ev_shares: Vec<AuthBitShare>,
-    /// Evaluator's D_ev-authenticated shares of `l_gamma*`; length n*m, column-major.
-    /// Phase 9 P2-01.
-    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Precomputed D_ev labels for `l_alpha`; length n. Each entry = `eval_share.key ⊕ bit·D_ev`
+    /// of the D_gb auth bit (`K_a ⊕ b·D_ev`). Phase 9 P2-01.
+    pub alpha_d_ev_shares: Vec<Block>,
+    /// Precomputed D_ev labels for `l_beta`; length m. Phase 9 P2-01.
+    pub beta_d_ev_shares: Vec<Block>,
+    /// Precomputed D_ev labels for `l_gamma*`; length n*m, column-major. Phase 9 P2-01.
+    pub correlated_d_ev_shares: Vec<Block>,
     /// Evaluator's D_ev-authenticated shares of `l_gamma`; length n*m, column-major.
     /// (Phase 9 D-05.)
     pub gamma_d_ev_shares: Vec<AuthBitShare>,
@@ -262,16 +262,15 @@ impl AuthTensorEval {
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
-            y_ev[i] = *self.beta_d_ev_shares[i].mac.as_block();
+            y_ev[i] = self.beta_d_ev_shares[i];
         }
         y_ev
     }
 
-    /// Phase 9 P2-03 — y inputs (D_ev half) for `evaluate_second_half_p2`.
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y_ev[i] = *self.alpha_d_ev_shares[i].mac.as_block();
+            y_ev[i] = self.alpha_d_ev_shares[i];
         }
         y_ev
     }
@@ -379,16 +378,10 @@ impl AuthTensorEval {
             }
         }
 
-        // D_ev path: eval-side public-bit encoding under delta_b.
+        // D_ev path: precomputed label, read directly.
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share_d_ev =
-                    if self.correlated_d_ev_shares[j * self.n + i].bit() {
-                        self.delta_b.as_block()
-                            ^ self.correlated_d_ev_shares[j * self.n + i].key.as_block()
-                    } else {
-                        *self.correlated_d_ev_shares[j * self.n + i].key.as_block()
-                    };
+                let correlated_share_d_ev = self.correlated_d_ev_shares[j * self.n + i];
                 self.first_half_out_ev[(i, j)] ^=
                     self.second_half_out_ev[(j, i)] ^
                     correlated_share_d_ev;

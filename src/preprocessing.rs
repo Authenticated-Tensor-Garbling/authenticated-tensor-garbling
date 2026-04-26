@@ -34,18 +34,17 @@ pub struct TensorFpreGen {
     /// Garbler's `AuthBitShare` for each correlated bit alpha_i AND beta_j; length n*m,
     /// column-major index j*n + i. MAC committed under delta_b.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    /// Garbler's `AuthBitShare` for each `l_alpha` bit; length n, MAC committed under delta_b.
-    /// D_ev-authenticated counterpart to `alpha_auth_bit_shares` (which is D_gb-authenticated).
-    /// See CONTEXT.md D-04 (Phase 9). Required by Protocol 2 garble (`_p2` methods).
-    /// Populated by `IdealPreprocessingBackend`; left empty by `UncompressedPreprocessingBackend` stub.
-    pub alpha_d_ev_shares: Vec<AuthBitShare>,
-    /// Garbler's `AuthBitShare` for each `l_beta` bit; length m, MAC committed under delta_b.
-    /// D_ev-authenticated counterpart to `beta_auth_bit_shares`. See CONTEXT.md D-04.
-    pub beta_d_ev_shares: Vec<AuthBitShare>,
-    /// Garbler's `AuthBitShare` for each `l_gamma*` correlated bit; length n*m, column-major
-    /// index `j*n + i`. MAC committed under delta_b. D_ev counterpart to
-    /// `correlated_auth_bit_shares`. See CONTEXT.md D-04.
-    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Garbler's precomputed D_ev label for each `l_alpha` bit; length n.
+    /// Each entry is `gen_share.mac` of the corresponding D_gb auth bit, i.e. `K_a ⊕ a·D_ev`.
+    /// XORing with the evaluator's matching entry gives `l_alpha_i · D_ev`.
+    /// Derived inside `TensorFpre::into_gen_eval`; left empty by `UncompressedPreprocessingBackend`.
+    pub alpha_d_ev_shares: Vec<Block>,
+    /// Garbler's precomputed D_ev label for each `l_beta` bit; length m.
+    /// Same derivation as `alpha_d_ev_shares` but for beta.
+    pub beta_d_ev_shares: Vec<Block>,
+    /// Garbler's precomputed D_ev label for each `l_gamma*` correlated bit; length n*m,
+    /// column-major index `j*n + i`. Same derivation as `alpha_d_ev_shares`.
+    pub correlated_d_ev_shares: Vec<Block>,
     /// Garbler's `AuthBitShare` for each gate-output mask `l_gamma`; length n*m, column-major.
     /// MAC committed under delta_b. (Phase 9 D-05.)
     /// Distinct from `correlated_d_ev_shares` (which encodes l_gamma* = l_alpha · l_beta).
@@ -74,14 +73,16 @@ pub struct TensorFpreEval {
     /// Evaluator's `AuthBitShare` for each correlated bit (column-major, length n*m,
     /// index j*n + i). MAC committed under delta_a.
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
-    /// Evaluator's `AuthBitShare` for each `l_alpha` bit; length n, MAC committed under delta_a.
-    /// D_ev-authenticated counterpart to `alpha_auth_bit_shares`. See CONTEXT.md D-04 (Phase 9).
-    pub alpha_d_ev_shares: Vec<AuthBitShare>,
-    /// Evaluator's `AuthBitShare` for each `l_beta` bit; length m, MAC committed under delta_a.
-    pub beta_d_ev_shares: Vec<AuthBitShare>,
-    /// Evaluator's `AuthBitShare` for each `l_gamma*` correlated bit; length n*m, column-major.
-    /// MAC committed under delta_a.
-    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Evaluator's precomputed D_ev label for each `l_alpha` bit; length n.
+    /// Each entry is `eval_share.key ⊕ eval_share.value·D_ev` of the corresponding D_gb auth bit,
+    /// i.e. `K_a ⊕ b·D_ev`. XORing with the garbler's matching entry gives `l_alpha_i · D_ev`.
+    /// Derived inside `TensorFpre::into_gen_eval`; left empty by `UncompressedPreprocessingBackend`.
+    pub alpha_d_ev_shares: Vec<Block>,
+    /// Evaluator's precomputed D_ev label for each `l_beta` bit; length m.
+    pub beta_d_ev_shares: Vec<Block>,
+    /// Evaluator's precomputed D_ev label for each `l_gamma*` correlated bit; length n*m,
+    /// column-major index `j*n + i`.
+    pub correlated_d_ev_shares: Vec<Block>,
     /// Evaluator's `AuthBitShare` for each `l_gamma` mask; length n*m, column-major.
     /// MAC committed under delta_a. (Phase 9 D-05.)
     pub gamma_d_ev_shares: Vec<AuthBitShare>,
@@ -160,26 +161,8 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         // Use distinct ChaCha12Rng seeds (42, 43, 44, 45) so the four fields are
         // independently random — same pattern as the existing gamma_d_ev_shares
         // generation (seed 42).
-        let mut rng_alpha = ChaCha12Rng::seed_from_u64(43);
-        let mut alpha_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n);
-        for _ in 0..n {
-            let l_alpha: bool = rng_alpha.random_bool(0.5);
-            alpha_d_ev_bits.push(fpre.gen_auth_bit(l_alpha));
-        }
-
-        let mut rng_beta = ChaCha12Rng::seed_from_u64(44);
-        let mut beta_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(m);
-        for _ in 0..m {
-            let l_beta: bool = rng_beta.random_bool(0.5);
-            beta_d_ev_bits.push(fpre.gen_auth_bit(l_beta));
-        }
-
-        let mut rng_corr = ChaCha12Rng::seed_from_u64(45);
-        let mut correlated_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
-        for _ in 0..(n * m) {
-            let l_corr: bool = rng_corr.random_bool(0.5);
-            correlated_d_ev_bits.push(fpre.gen_auth_bit(l_corr));
-        }
+        // alpha/beta/correlated D_ev labels are derived from the D_gb auth bits inside
+        // into_gen_eval() — no gen_auth_bit calls needed here.
 
         // gamma generation: D_ev-authenticated l_gamma shares (column-major n*m).
         let mut rng_gamma = ChaCha12Rng::seed_from_u64(42);
@@ -194,15 +177,10 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         // in Rust 2024 edition.
         let (mut gen_out, mut eval_out) = fpre.into_gen_eval();
 
-        // Distribute gen_share / eval_share for each of the four D_ev fields.
-        gen_out.alpha_d_ev_shares       = alpha_d_ev_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.alpha_d_ev_shares      = alpha_d_ev_bits.iter().map(|b| b.eval_share).collect();
-        gen_out.beta_d_ev_shares        = beta_d_ev_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.beta_d_ev_shares       = beta_d_ev_bits.iter().map(|b| b.eval_share).collect();
-        gen_out.correlated_d_ev_shares  = correlated_d_ev_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.correlated_d_ev_shares = correlated_d_ev_bits.iter().map(|b| b.eval_share).collect();
-        gen_out.gamma_d_ev_shares       = gamma_d_ev_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.gamma_d_ev_shares      = gamma_d_ev_bits.iter().map(|b| b.eval_share).collect();
+        // Distribute gen_share / eval_share for gamma only.
+        // alpha/beta/correlated D_ev labels were populated by into_gen_eval().
+        gen_out.gamma_d_ev_shares  = gamma_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.gamma_d_ev_shares = gamma_d_ev_bits.iter().map(|b| b.eval_share).collect();
 
         (gen_out, eval_out)
     }
@@ -404,36 +382,33 @@ mod tests {
             "eval.correlated_d_ev_shares must have length n*m");
     }
 
-    // P2-01: All three new D_ev field pairs satisfy the IT-MAC invariant under delta_b.
-    // Reuses the helper pattern from test_ideal_backend_gamma_d_ev_shares_mac_invariant.
+    // P2-01: D_ev label pairs XOR to `bit * delta_b` — the core correctness invariant.
+    // gen_label XOR eval_label == lambda_i * D_ev for each alpha/beta/correlated bit.
     #[test]
-    fn test_ideal_backend_d_ev_shares_mac_invariant() {
+    fn test_ideal_backend_d_ev_shares_bit_correlation() {
+        use crate::block::Block;
         let n = 4;
         let m = 4;
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let delta_b = eval_out.delta_b;
+
         for k in 0..n {
-            verify_cross_party(
-                &gen_out.alpha_d_ev_shares[k],
-                &eval_out.alpha_d_ev_shares[k],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
-            );
+            let bit = gen_out.alpha_auth_bit_shares[k].bit() ^ eval_out.alpha_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.alpha_d_ev_shares[k] ^ eval_out.alpha_d_ev_shares[k], expected,
+                "alpha D_ev XOR mismatch at {k}");
         }
         for k in 0..m {
-            verify_cross_party(
-                &gen_out.beta_d_ev_shares[k],
-                &eval_out.beta_d_ev_shares[k],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
-            );
+            let bit = gen_out.beta_auth_bit_shares[k].bit() ^ eval_out.beta_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.beta_d_ev_shares[k] ^ eval_out.beta_d_ev_shares[k], expected,
+                "beta D_ev XOR mismatch at {k}");
         }
         for k in 0..(n * m) {
-            verify_cross_party(
-                &gen_out.correlated_d_ev_shares[k],
-                &eval_out.correlated_d_ev_shares[k],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
-            );
+            let bit = gen_out.correlated_auth_bit_shares[k].bit() ^ eval_out.correlated_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.correlated_d_ev_shares[k] ^ eval_out.correlated_d_ev_shares[k], expected,
+                "correlated D_ev XOR mismatch at {k}");
         }
     }
 

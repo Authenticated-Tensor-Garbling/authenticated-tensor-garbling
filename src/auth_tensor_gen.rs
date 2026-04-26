@@ -31,13 +31,13 @@ pub struct AuthTensorGen {
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
 
-    /// D_ev-authenticated shares of `l_alpha`; length n. Phase 9 P2-01.
-    pub alpha_d_ev_shares: Vec<AuthBitShare>,
-    /// D_ev-authenticated shares of `l_beta`; length m. Phase 9 P2-01.
-    pub beta_d_ev_shares: Vec<AuthBitShare>,
-    /// D_ev-authenticated shares of `l_gamma*` (correlated bit); length n*m, column-major.
-    /// Phase 9 P2-01.
-    pub correlated_d_ev_shares: Vec<AuthBitShare>,
+    /// Precomputed D_ev labels for `l_alpha`; length n. Each entry = `gen_share.mac` of
+    /// the D_gb auth bit (`K_a ⊕ a·D_ev`). Phase 9 P2-01.
+    pub alpha_d_ev_shares: Vec<Block>,
+    /// Precomputed D_ev labels for `l_beta`; length m. Phase 9 P2-01.
+    pub beta_d_ev_shares: Vec<Block>,
+    /// Precomputed D_ev labels for `l_gamma*`; length n*m, column-major. Phase 9 P2-01.
+    pub correlated_d_ev_shares: Vec<Block>,
     /// D_ev-authenticated shares of `l_gamma`; length n*m, column-major. (Phase 9 D-05.)
     pub gamma_d_ev_shares: Vec<AuthBitShare>,
 
@@ -323,17 +323,15 @@ impl AuthTensorGen {
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
-            y_ev[i] = *self.beta_d_ev_shares[i].mac.as_block();
+            y_ev[i] = self.beta_d_ev_shares[i];
         }
         y_ev
     }
 
-    /// Phase 9 P2-02 — y inputs (D_ev half) for `garble_second_half_p2`.
-    /// Symmetric to `get_first_inputs_p2_y_d_ev`, using `alpha_d_ev_shares`.
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y_ev[i] = *self.alpha_d_ev_shares[i].mac.as_block();
+            y_ev[i] = self.alpha_d_ev_shares[i];
         }
         y_ev
     }
@@ -414,7 +412,7 @@ impl AuthTensorGen {
         // the IT-MAC pair under `delta_b`.
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share_ev = *self.correlated_d_ev_shares[j * self.n + i].mac.as_block();
+                let correlated_share_ev = self.correlated_d_ev_shares[j * self.n + i];
                 self.first_half_out_ev[(i, j)] ^=
                     self.second_half_out_ev[(j, i)] ^
                     correlated_share_ev;

@@ -177,10 +177,16 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.gen_share).collect(),
-            alpha_d_ev_shares: vec![],      // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            beta_d_ev_shares: vec![],       // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            correlated_d_ev_shares: vec![], // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            gamma_d_ev_shares: vec![],      // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
+            alpha_d_ev_shares: self.alpha_auth_bits.iter()
+                .map(|b| *b.gen_share.mac.as_block())
+                .collect(),
+            beta_d_ev_shares: self.beta_auth_bits.iter()
+                .map(|b| *b.gen_share.mac.as_block())
+                .collect(),
+            correlated_d_ev_shares: self.correlated_auth_bits.iter()
+                .map(|b| *b.gen_share.mac.as_block())
+                .collect(),
+            gamma_d_ev_shares: vec![],
         }, TensorFpreEval {
             n: self.n,
             m: self.m,
@@ -191,10 +197,34 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
-            alpha_d_ev_shares: vec![],      // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            beta_d_ev_shares: vec![],       // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            correlated_d_ev_shares: vec![], // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
-            gamma_d_ev_shares: vec![],      // Phase 9: D_ev fields populated by IdealPreprocessingBackend; into_gen_eval leaves them empty
+            alpha_d_ev_shares: {
+                let delta_b = self.delta_b;
+                self.alpha_auth_bits.iter()
+                    .map(|b| {
+                        let k = *b.eval_share.key.as_block();
+                        if b.eval_share.bit() { k ^ *delta_b.as_block() } else { k }
+                    })
+                    .collect()
+            },
+            beta_d_ev_shares: {
+                let delta_b = self.delta_b;
+                self.beta_auth_bits.iter()
+                    .map(|b| {
+                        let k = *b.eval_share.key.as_block();
+                        if b.eval_share.bit() { k ^ *delta_b.as_block() } else { k }
+                    })
+                    .collect()
+            },
+            correlated_d_ev_shares: {
+                let delta_b = self.delta_b;
+                self.correlated_auth_bits.iter()
+                    .map(|b| {
+                        let k = *b.eval_share.key.as_block();
+                        if b.eval_share.bit() { k ^ *delta_b.as_block() } else { k }
+                    })
+                    .collect()
+            },
+            gamma_d_ev_shares: vec![],
         })
     }
 
