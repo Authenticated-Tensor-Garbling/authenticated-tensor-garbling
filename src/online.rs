@@ -5,8 +5,10 @@
 //! D-01 — they will live in this module once the message-passing design is
 //! settled.
 
-use crate::sharing::AuthBitShare;
+use crate::aes::FIXED_KEY_AES;
+use crate::block::Block;
 use crate::delta::Delta;
+use crate::sharing::AuthBitShare;
 
 /// Verifies that the per-gate consistency-check vector reconstructs to zero
 /// AND that its IT-MAC under `delta_mac` is valid.
@@ -35,8 +37,9 @@ use crate::delta::Delta;
 /// delta. Always recompute `mac = key.auth(value, delta_mac)` after
 /// accumulating the full reconstructed bit and the combined key.
 ///
-/// See `assemble_c_gamma_shares` in the test module (src/lib.rs) for the
-/// reference implementation of this pattern.
+/// See `assemble_e_input_wire_shares_p1` (paper-faithful P1) and
+/// `assemble_c_alpha_beta_shares_p2` (paper-faithful P2) in `src/lib.rs` for
+/// reference implementations of this pattern.
 ///
 /// # Returns
 ///
@@ -66,6 +69,32 @@ pub fn check_zero(c_gamma_shares: &[AuthBitShare], delta_mac: &Delta) -> bool {
         }
     }
     true
+}
+
+/// Hash a vector of consistency-check shares into a single 16-byte digest.
+///
+/// Models the paper's `H({V_w}_{w ∈ I ∪ W})` (`5_online.tex:226–247`,
+/// `6_total.tex:205–215`): each party hashes its assembled CheckZero shares
+/// locally and exchanges the digest; matching digests imply zero error on every
+/// wire (Lemma `lem:error` in `appendix_security.tex`).
+///
+/// Returns the 16-byte digest meant to be sent over the wire — this is **not**
+/// a bool. Use `check_zero` for the local zero-bit + MAC sanity check, and use
+/// this helper for the wire-side digest in benchmarks measuring the full
+/// online round-trip.
+///
+/// Construction: fold `share.mac` blocks through the fixed-key AES correlation-
+/// robust hash (`src/aes.rs:99–108`). The CR construction is the same primitive
+/// the paper assumes for `H_ccrnd`. The fold is `h_0 = 0; h_{i+1} = cr(h_i ⊕ mac_i)`,
+/// giving a one-pass O(n+m) hash whose cost shape matches a real `H` evaluation.
+///
+/// Empty slice returns `Block::default()` (all zeros).
+pub fn hash_check_zero(shares: &[AuthBitShare]) -> Block {
+    let mut h = Block::default();
+    for share in shares {
+        h = FIXED_KEY_AES.cr(h ^ *share.mac.as_block());
+    }
+    h
 }
 
 #[cfg(test)]

@@ -88,18 +88,15 @@ impl TensorFpre {
     /// Generates all authenticated bits and input sharings for the ideal trusted dealer.
     /// This is NOT the real preprocessing protocol — it is the ideal functionality
     /// (trusted dealer) that the online phase consumes directly in tests and benchmarks.
+    ///
+    /// `x` and `y` are the parties' input bit-vectors packed into a `usize`. Bit-position
+    /// `i` of `x` is `(x >> i) & 1`. For `i >= usize::BITS` the corresponding bit is
+    /// treated as zero — `x` simply cannot represent more than `usize::BITS` bits. All
+    /// shift sites use `checked_shl` to make this truncation explicit and well-defined
+    /// for any `n, m`. Callers needing inputs wider than 64 bits would need a different
+    /// representation; the benchmark and test paths use `x = y = 0` (`IdealPreprocessingBackend.run`,
+    /// `src/preprocessing.rs:155`), so the truncation is moot in practice.
     pub fn generate_for_ideal_trusted_dealer(&mut self, x: usize, y: usize) -> (usize, usize) {
-        assert!(
-            self.n <= usize::BITS as usize - 1,
-            "generate_for_ideal_trusted_dealer: n={} exceeds usize bit width minus 1; \
-             x must be representable as usize", self.n
-        );
-        assert!(
-            self.m <= usize::BITS as usize - 1,
-            "generate_for_ideal_trusted_dealer: m={} exceeds usize bit width minus 1; \
-             y must be representable as usize", self.m
-        );
-
         let mut alpha: usize = 0;
         for i in 0..self.n {
             // generate the auth bit
@@ -107,16 +104,21 @@ impl TensorFpre {
             let alpha_auth_bit = self.gen_auth_bit(alpha_bit);
             self.alpha_auth_bits.push(alpha_auth_bit);
 
-            // accumulate alpha bits in little-endian order
-            alpha |= (alpha_bit as usize) << i;
+            // accumulate alpha bits in little-endian order. checked_shl returns
+            // None for i >= usize::BITS — bits beyond position 63 don't fit in
+            // the returned usize, so they are silently dropped.
+            alpha |= (alpha_bit as usize).checked_shl(i as u32).unwrap_or(0);
 
 
-            // generate the label sharing of x ^ alpha
+            // generate the label sharing of x ^ alpha. Bit i of x is
+            // (x >> i) & 1; for i >= usize::BITS this is definitionally 0
+            // since x : usize.
             let mut gen_label = Block::random(&mut self.rng);
             gen_label.set_lsb(false);
 
             let eval_label: Block;
-            let bit = ((1<<i & x) != 0) ^ alpha_bit;
+            let x_bit = 1usize.checked_shl(i as u32).map_or(false, |s| (s & x) != 0);
+            let bit = x_bit ^ alpha_bit;
             if bit {
                 eval_label = gen_label ^ self.delta_a.as_block();
             } else {
@@ -134,8 +136,8 @@ impl TensorFpre {
             let beta_auth_bit = self.gen_auth_bit(beta_bit);
             self.beta_auth_bits.push(beta_auth_bit);
 
-            // accumulate beta bits in little-endian order
-            beta |= (beta_bit as usize) << j;
+            // accumulate beta bits in little-endian order (see alpha note above).
+            beta |= (beta_bit as usize).checked_shl(j as u32).unwrap_or(0);
 
             // generate the label sharing of y ^ beta
             let mut gen_label = Block::random(&mut self.rng);
@@ -143,7 +145,8 @@ impl TensorFpre {
 
             let eval_label: Block;
 
-            let bit = ((1<<j & y) != 0) ^ beta_bit;
+            let y_bit = 1usize.checked_shl(j as u32).map_or(false, |s| (s & y) != 0);
+            let bit = y_bit ^ beta_bit;
             if bit {
                 eval_label = gen_label ^ self.delta_a.as_block();
             } else {

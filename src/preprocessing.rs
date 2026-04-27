@@ -4,7 +4,7 @@
 //! real two-party preprocessing protocol produces, together with the `run_preprocessing`
 //! entry point. The ideal trusted-dealer functionality stays in `auth_tensor_fpre`.
 
-use crate::{block::Block, delta::Delta, sharing::AuthBitShare};
+use crate::{block::Block, delta::Delta, sharing::{AuthBitShare, build_share}};
 use crate::bcot::IdealBCot;
 use crate::leaky_tensor_pre::LeakyTensorPre;
 use crate::auth_tensor_pre::{combine_leaky_triples, bucket_size_for};
@@ -242,7 +242,129 @@ pub fn run_preprocessing(
         triples.push(ltp.generate());
     }
 
-    combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 42)
+    let (mut gen_out, mut eval_out) =
+        combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 42);
+
+    // Post-bucketing input-label population. Mirrors the input=0 convention
+    // used by `TensorFpre::generate_for_ideal_trusted_dealer` (auth_tensor_fpre.rs:114-126):
+    // each label encodes `(x ^ alpha) · delta_a` under delta_a, and with x=0
+    // the encoded bit equals the alpha (resp. beta) auth-bit value.
+    // Preprocessing is input-independent per paper Construction 2, so any
+    // honest x (here x=0) is a valid choice for the preprocessing-side labels.
+    let mut rng_labels = ChaCha12Rng::seed_from_u64(44);
+    let delta_a_block = *gen_out.delta_a.as_block();
+    let mut gen_alpha_labels = Vec::with_capacity(n);
+    let mut eval_alpha_labels = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut g = Block::random(&mut rng_labels);
+        g.set_lsb(false);
+        let alpha_bit = gen_out.alpha_auth_bit_shares[i].bit()
+                      ^ eval_out.alpha_auth_bit_shares[i].bit();
+        let e = if alpha_bit { g ^ delta_a_block } else { g };
+        gen_alpha_labels.push(g);
+        eval_alpha_labels.push(e);
+    }
+    gen_out.alpha_labels = gen_alpha_labels;
+    eval_out.alpha_labels = eval_alpha_labels;
+
+    let mut gen_beta_labels = Vec::with_capacity(m);
+    let mut eval_beta_labels = Vec::with_capacity(m);
+    for j in 0..m {
+        let mut g = Block::random(&mut rng_labels);
+        g.set_lsb(false);
+        let beta_bit = gen_out.beta_auth_bit_shares[j].bit()
+                     ^ eval_out.beta_auth_bit_shares[j].bit();
+        let e = if beta_bit { g ^ delta_a_block } else { g };
+        gen_beta_labels.push(g);
+        eval_beta_labels.push(e);
+    }
+    gen_out.beta_labels = gen_beta_labels;
+    eval_out.beta_labels = eval_beta_labels;
+
+    // Post-bucketing D_ev population. Mirrors the formulas in
+    // `TensorFpre::into_gen_eval` (auth_tensor_fpre.rs:180-226). Inputs (the
+    // auth-bit shares and `delta_b`) are already finalized at this point.
+    let delta_b = eval_out.delta_b;
+
+    let (g, e) = derive_d_ev_blocks(
+        &gen_out.alpha_auth_bit_shares,
+        &eval_out.alpha_auth_bit_shares,
+        &delta_b,
+    );
+    gen_out.alpha_d_ev_shares = g;
+    eval_out.alpha_d_ev_shares = e;
+
+    let (g, e) = derive_d_ev_blocks(
+        &gen_out.beta_auth_bit_shares,
+        &eval_out.beta_auth_bit_shares,
+        &delta_b,
+    );
+    gen_out.beta_d_ev_shares = g;
+    eval_out.beta_d_ev_shares = e;
+
+    let (g, e) = derive_d_ev_blocks(
+        &gen_out.correlated_auth_bit_shares,
+        &eval_out.correlated_auth_bit_shares,
+        &delta_b,
+    );
+    gen_out.correlated_d_ev_shares = g;
+    eval_out.correlated_d_ev_shares = e;
+
+    // Gamma: fresh n*m IT-MAC AuthBit pairs sampled from a dedicated ChaCha12Rng.
+    // Mirrors `TensorFpre::gen_auth_bit` (auth_tensor_fpre.rs:66-86) inline; using
+    // a distinct seed (43) from the bucketing permutation seed (42) above.
+    let mut rng_gamma = ChaCha12Rng::seed_from_u64(43);
+    let mut gen_gamma = Vec::with_capacity(n * m);
+    let mut eval_gamma = Vec::with_capacity(n * m);
+    for _ in 0..(n * m) {
+        let l_gamma: bool = rng_gamma.random_bool(0.5);
+        let a: bool = rng_gamma.random_bool(0.5);
+        let b: bool = l_gamma ^ a;
+        let a_share = build_share(&mut rng_gamma, a, &delta_b);
+        let b_share = build_share(&mut rng_gamma, b, &gen_out.delta_a);
+        gen_gamma.push(AuthBitShare {
+            key: b_share.key,
+            mac: a_share.mac,
+            value: a,
+        });
+        eval_gamma.push(AuthBitShare {
+            key: a_share.key,
+            mac: b_share.mac,
+            value: b,
+        });
+    }
+    gen_out.gamma_d_ev_shares = gen_gamma;
+    eval_out.gamma_d_ev_shares = eval_gamma;
+
+    (gen_out, eval_out)
+}
+
+/// Derive D_ev block pairs from paired auth-bit shares.
+///
+/// Mirrors `TensorFpre::into_gen_eval` (auth_tensor_fpre.rs:180-226):
+///   gen_d_ev[k]  = gen.mac
+///   eval_d_ev[k] = eval.key XOR (eval.bit() ? delta_b : 0)
+///
+/// Together they satisfy `gen ^ eval = full_bit · delta_b`, where
+/// `full_bit = gen.value ^ eval.value` (the IT-MAC identity in `gen_auth_bit`).
+fn derive_d_ev_blocks(
+    gen_shares: &[AuthBitShare],
+    eval_shares: &[AuthBitShare],
+    delta_b: &Delta,
+) -> (Vec<Block>, Vec<Block>) {
+    assert_eq!(gen_shares.len(), eval_shares.len());
+    let gen_blocks: Vec<Block> = gen_shares
+        .iter()
+        .map(|s| *s.mac.as_block())
+        .collect();
+    let eval_blocks: Vec<Block> = eval_shares
+        .iter()
+        .map(|s| {
+            let k = *s.key.as_block();
+            if s.bit() { k ^ *delta_b.as_block() } else { k }
+        })
+        .collect();
+    (gen_blocks, eval_blocks)
 }
 
 #[cfg(test)]
@@ -250,6 +372,7 @@ mod tests {
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
     use crate::auth_tensor_pre::verify_cross_party;
+    use crate::block::Block;
     use super::{TensorPreprocessing, UncompressedPreprocessingBackend, IdealPreprocessingBackend};
 
     #[test]
@@ -308,14 +431,82 @@ mod tests {
             "correlated_auth_bit_shares must have n*m=16 entries");
     }
 
-    // PRE-03 + PRE-04: uncompressed backend leaves gamma_d_ev_shares empty (stub)
+    // Uncompressed backend now populates all four D_ev fields post-bucketing.
+    // alpha/beta/correlated are derived from the auth-bit shares; gamma is
+    // freshly sampled from a dedicated ChaCha12Rng (seed 43) inside
+    // `run_preprocessing`, mirroring the ideal backend.
     #[test]
-    fn test_uncompressed_backend_gamma_field_is_empty() {
+    fn test_uncompressed_backend_gamma_field_is_populated() {
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
-        assert_eq!(gen_out.gamma_d_ev_shares.len(), 0,
-            "UncompressedPreprocessingBackend leaves gamma_d_ev_shares empty (stub until Phase 8)");
-        assert_eq!(eval_out.gamma_d_ev_shares.len(), 0,
-            "UncompressedPreprocessingBackend leaves gamma_d_ev_shares empty (stub until Phase 8)");
+        assert_eq!(gen_out.gamma_d_ev_shares.len(), 4 * 4,
+            "gen.gamma_d_ev_shares must have length n*m=16");
+        assert_eq!(eval_out.gamma_d_ev_shares.len(), 4 * 4,
+            "eval.gamma_d_ev_shares must have length n*m=16");
+    }
+
+    // Uncompressed backend: alpha/beta/correlated D_ev shares have correct lengths.
+    #[test]
+    fn test_uncompressed_backend_d_ev_shares_lengths() {
+        let n = 4;
+        let m = 3;
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        assert_eq!(gen_out.alpha_d_ev_shares.len(),       n);
+        assert_eq!(eval_out.alpha_d_ev_shares.len(),      n);
+        assert_eq!(gen_out.beta_d_ev_shares.len(),        m);
+        assert_eq!(eval_out.beta_d_ev_shares.len(),       m);
+        assert_eq!(gen_out.correlated_d_ev_shares.len(),  n * m);
+        assert_eq!(eval_out.correlated_d_ev_shares.len(), n * m);
+    }
+
+    // Uncompressed backend: alpha/beta/correlated D_ev label pairs XOR to
+    // `bit · delta_b`, where bit is the underlying auth bit's full value.
+    // Mirrors `test_ideal_backend_d_ev_shares_bit_correlation` for the
+    // uncompressed path.
+    #[test]
+    fn test_uncompressed_backend_d_ev_shares_bit_correlation() {
+        let n = 4;
+        let m = 3;
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        let delta_b = eval_out.delta_b;
+
+        for k in 0..n {
+            let bit = gen_out.alpha_auth_bit_shares[k].bit()
+                    ^ eval_out.alpha_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.alpha_d_ev_shares[k] ^ eval_out.alpha_d_ev_shares[k], expected,
+                "alpha D_ev XOR mismatch at {k}");
+        }
+        for k in 0..m {
+            let bit = gen_out.beta_auth_bit_shares[k].bit()
+                    ^ eval_out.beta_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.beta_d_ev_shares[k] ^ eval_out.beta_d_ev_shares[k], expected,
+                "beta D_ev XOR mismatch at {k}");
+        }
+        for k in 0..(n * m) {
+            let bit = gen_out.correlated_auth_bit_shares[k].bit()
+                    ^ eval_out.correlated_auth_bit_shares[k].bit();
+            let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
+            assert_eq!(gen_out.correlated_d_ev_shares[k] ^ eval_out.correlated_d_ev_shares[k], expected,
+                "correlated D_ev XOR mismatch at {k}");
+        }
+    }
+
+    // Uncompressed backend: every gamma share satisfies the IT-MAC invariant
+    // under both deltas. Mirrors `test_ideal_backend_gamma_d_ev_shares_mac_invariant`.
+    #[test]
+    fn test_uncompressed_backend_gamma_d_ev_shares_mac_invariant() {
+        let n = 4;
+        let m = 3;
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        for k in 0..(n * m) {
+            verify_cross_party(
+                &gen_out.gamma_d_ev_shares[k],
+                &eval_out.gamma_d_ev_shares[k],
+                &gen_out.delta_a,
+                &eval_out.delta_b,
+            );
+        }
     }
 
     // PRE-02: IdealPreprocessingBackend returns correctly dimensioned output.
