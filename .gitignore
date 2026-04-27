@@ -31,3 +31,7 @@ target
 # Bench outputs
 bench-*.log
 figures/
+
+# Tooling artifacts
+tools/.venv/
+tools/__pycache__/
