@@ -27,3 +27,7 @@ target
 # Added by cargo
 
 /target
+
+# Bench outputs
+bench-*.log
+figures/

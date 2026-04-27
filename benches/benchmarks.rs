@@ -1,6 +1,7 @@
+use std::cell::OnceCell;
 use std::hint::black_box;
 use std::mem::size_of;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 
@@ -12,12 +13,24 @@ use authenticated_tensor_garbling::{
     auth_tensor_fpre::TensorFpre,
     auth_tensor_gen::AuthTensorGen,
     block::Block,
-    online::check_zero,
+    online::hash_check_zero,
     preprocessing::run_preprocessing,
-    assemble_c_gamma_shares,
-    assemble_c_gamma_shares_p2,
+    assemble_e_input_wire_shares_p1,
+    assemble_c_alpha_beta_shares_p2,
 };
 use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
+
+// Network model from `appendix_experiments.tex` line 13: 100 Mbps, no jitter,
+// no delay. The new `online` group simulates transit deterministically by
+// computing `bytes * 8 / NETWORK_BANDWIDTH_BPS` ns per round and adding it
+// onto the measured compute time — no tokio, no scheduler jitter.
+const NETWORK_BANDWIDTH_BPS: u64 = 100_000_000;
+const BLOCK_BYTES: usize = size_of::<Block>();
+
+#[inline]
+fn transit_ns(bytes: usize) -> u64 {
+    (bytes as u64) * 8 * 1_000_000_000 / NETWORK_BANDWIDTH_BPS
+}
 
 use once_cell::sync::Lazy;
 
@@ -75,11 +88,11 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
 /// `correlated_d_ev_shares` length n*m, `gamma_d_ev_shares` length n*m) on BOTH
 /// the generator and the evaluator with matching IT-MAC shares.
 ///
-/// Required for any online benchmark that calls `assemble_c_gamma_shares` (P1) or
-/// `assemble_c_gamma_shares_p2` (P2), both of which assert
-/// `gamma_d_ev_shares.len() == n * m` on the gen and eval inputs (`src/lib.rs:109`,
-/// `src/lib.rs:218-219`). Without a correlated pair, those asserts panic on the
-/// first iteration.
+/// Required for any online benchmark that calls `assemble_e_input_wire_shares_p1`
+/// (paper-faithful P1) or `assemble_c_alpha_beta_shares_p2` (paper-faithful P2).
+/// Both helpers assert the `*_d_ev_shares` lengths (n and m) and the
+/// `*_auth_bit_shares` lengths. Without a correlated pair, those asserts
+/// panic on the first iteration.
 ///
 /// `count = 1` matches `IdealPreprocessingBackend`'s only supported batch size
 /// (see `src/preprocessing.rs:145-150`). The `chunking_factor` is forwarded
@@ -90,6 +103,37 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
         AuthTensorGen::new_from_fpre_gen(fpre_gen),
         AuthTensorEval::new_from_fpre_eval(fpre_eval),
     )
+}
+
+/// Total GC byte count for Protocol 1 garble output at `(n, m, chunking_factor)`.
+/// Sum is `chunk_levels.len() * 2 * BLOCK_BYTES + chunk_cts.len() * BLOCK_BYTES`
+/// per chunk over both halves, matching `bench_online_with_networking_for_size:413–417`.
+/// Output count is determined by `(n, m, chunking_factor)` alone, so this is
+/// called once per cell outside the timed iter loop.
+fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
+    let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (first_levels, first_cts) = generator.garble_first_half();
+    let (second_levels, second_cts) = generator.garble_second_half();
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * BLOCK_BYTES).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * BLOCK_BYTES).sum();
+    levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
+}
+
+/// Total GC byte count for Protocol 2 garble output. P2's `chunk_cts` is a
+/// `Vec<Vec<(Block, Block)>>` (wide ciphertexts per `6_total.tex:90`, the
+/// κ + ρ extension), so cts are multiplied by 2 — diverges from `gc_bytes_p1`
+/// where `chunk_cts: Vec<Vec<Block>>` (single blocks).
+fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
+    let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (first_levels, first_cts) = generator.garble_first_half_p2();
+    let (second_levels, second_cts) = generator.garble_second_half_p2();
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
 }
 
 // ---------------------------------------------------------------------------
@@ -157,40 +201,49 @@ fn bench_preprocessing(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 // "online" criterion group — Protocol 1 and Protocol 2
 //
-// Sync iter_custom + std::time::Instant benchmarks for the full online phase:
-// garble + evaluate + lambda reconstruction + c_gamma assembly + check_zero.
-// No tokio, no network simulation. Sweeps BENCHMARK_PARAMS × chunking_factor 1..=8.
+// Sync iter_custom + std::time::Instant benchmarks for the online phase
+// (garble + GC transfer + evaluate + consistency check) under a 100 Mbps
+// network model with deterministic computed transit times. Sweeps
+// BENCHMARK_PARAMS × chunking_factor 1..=8.
+//
+// Per-cell output (in addition to Criterion's own per-cell summary in µs):
+// one `KB,p{1|2},N=…,M=…,tile=…,kb=…` line emitted on first invocation of the
+// outer `bench_with_input` closure (deduped via OnceCell since Criterion calls
+// the closure once per sample). A plotting script joins these `KB,…` lines
+// with Criterion's `target/criterion/online/<id>/new/estimates.json` (ms in
+// `time.point_estimate`, ns) to regenerate the paper's
+// `Figures/{N}x{N}_wallclock_bar.pdf` / `_communication.pdf` series.
+//
+// Sample size: Criterion default (100). Large cells (256×256 × tile 8) take
+// minutes per cell — budget accordingly when running the full sweep.
 // ---------------------------------------------------------------------------
 
-/// Phase 10 BENCH-02 / BENCH-04 / BENCH-06 — Protocol 1 online-phase
-/// throughput benchmark. Sync `iter_custom + Instant` (no tokio, no
-/// network simulation). Sweeps BENCHMARK_PARAMS × chunking_factor 1..=8
-/// (D-13). Each measured iteration runs the full P1 pipeline:
-///   garble_first_half -> evaluate_first_half
-///   garble_second_half -> evaluate_second_half
-///   garble_final -> evaluate_final
-///   gen.compute_lambda_gamma -> ev.compute_lambda_gamma
-///   assemble_c_gamma_shares -> online::check_zero (under delta_a).
-/// Reports throughput two ways (D-11): ms-per-tensor-op (paper Table 1
-/// units) and ns-per-AND-gate (crypto literature units). Both are
-/// printed via println! after each iter_custom completes; Criterion's
-/// own AND-gates/s line is driven by Throughput::Elements (D-12).
+/// Protocol 1 online-phase throughput benchmark, paper-faithful per
+/// `5_online.tex` Construction `prot:krrw`. Each measured iteration runs:
+///   - garble_first_half / second_half / final  (gb compute)
+///   - GC transfer at 100 Mbps  (computed transit time)
+///   - evaluate_first_half / second_half / final  (ev compute)
+///   - ev → gb send-back of masked values `a⊕λ_a, b⊕λ_b`  (`5_online.tex:228`)
+///   - assemble_e_input_wire_shares_p1
+///   - both parties hash via `online::hash_check_zero`, gb sends 16-byte digest,
+///     ev compares  (paper-faithful `H({V_w})`, `5_online.tex:226–247`)
+///
+/// Reports ms-per-op, ns-per-AND, and KB-per-op per (n, m, tile_size).
 fn bench_online_p1(c: &mut Criterion) {
     let mut group = c.benchmark_group("online");
-    // Match Plan 02's preprocessing group convention.
     group.warm_up_time(std::time::Duration::from_secs(3));
     group.measurement_time(std::time::Duration::from_secs(20));
 
     for &(n, m) in BENCHMARK_PARAMS {
-        // BENCH-06 / D-12: Criterion auto-prints AND-gates/s when
-        // Throughput::Elements is set to the AND-gate count per call.
         group.throughput(Throughput::Elements((n * m) as u64));
 
-        if n * m > 4096 {
-            group.sample_size(10);
-        }
-
         for chunking_factor in 1usize..=8 {
+            // Criterion calls the `bench_with_input` closure once per sample
+            // (warm-up + measurement, ~30+ times per cell). Cache gc_bytes in
+            // a `OnceCell` so the (potentially expensive) garble-only setup
+            // runs once per cell, and emit the KB line on first init only.
+            let gc_cache: OnceCell<usize> = OnceCell::new();
+
             group.bench_with_input(
                 BenchmarkId::new(
                     format!("p1_garble_eval_check_{}x{}", n, m),
@@ -198,24 +251,31 @@ fn bench_online_p1(c: &mut Criterion) {
                 ),
                 &chunking_factor,
                 |b, &chunking_factor| {
+                    let gc_bytes = *gc_cache.get_or_init(|| {
+                        let bytes = gc_bytes_p1(n, m, chunking_factor);
+                        // P1 send-back of masked values ev → gb
+                        // (`5_online.tex:228`): (n + m) bits, ceil-div to bytes.
+                        let sendback_bytes = (n + m + 7) / 8;
+                        let comm_bytes_per_op = bytes + sendback_bytes + BLOCK_BYTES;
+                        // One KB line per cell — emitted lazily so we never
+                        // print for filtered-out cells.
+                        println!(
+                            "KB,p1,N={},M={},tile={},kb={:.4}",
+                            n, m, chunking_factor,
+                            (comm_bytes_per_op as f64) / 1024.0,
+                        );
+                        bytes
+                    });
+                    let sendback_bytes = (n + m + 7) / 8;
+                    let transit_per_iter = Duration::from_nanos(
+                        transit_ns(gc_bytes) + transit_ns(sendback_bytes) + transit_ns(BLOCK_BYTES),
+                    );
+
                     b.iter_custom(|iters| {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
-                            // Setup OUTSIDE timed region.
                             let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
 
-                            // For benchmarking the per-gate compute
-                            // cost we use FIXED zero masks for
-                            // l_alpha_pub / l_beta_pub. The c_gamma
-                            // assembly's INSTRUCTION COUNT does not
-                            // depend on whether the mask bits are 0 or
-                            // 1 — both branches do the same XOR work,
-                            // just selectively (under `if l_alpha_pub[i]`
-                            // / `if l_beta_pub[j]`). Using all-zeros
-                            // gives a consistent, reproducible cost
-                            // measurement. l_gamma_pub is reconstructed
-                            // exactly as the P1 integration test does
-                            // (gb.compute_lambda_gamma -> ev.compute_lambda_gamma).
                             let l_alpha_pub: Vec<bool> = vec![false; n];
                             let l_beta_pub:  Vec<bool> = vec![false; m];
 
@@ -228,47 +288,39 @@ fn bench_online_p1(c: &mut Criterion) {
                             generator.garble_final();
                             evaluator.evaluate_final();
 
-                            // Lambda_gamma reconstruction (consumes
-                            // garbled output state on both sides).
-                            let lambda_gb = generator.compute_lambda_gamma();
-                            let l_gamma_pub = evaluator
-                                .compute_lambda_gamma(&lambda_gb);
+                            let gb_v_alpha_d_ev: Vec<Block> = generator.alpha_d_ev_shares.clone();
+                            let ev_v_alpha_d_ev: Vec<Block> = evaluator.alpha_d_ev_shares.clone();
+                            let gb_v_beta_d_ev:  Vec<Block> = generator.beta_d_ev_shares.clone();
+                            let ev_v_beta_d_ev:  Vec<Block> = evaluator.beta_d_ev_shares.clone();
 
-                            // c_gamma assembly + check_zero (D-09).
-                            let c_gamma = assemble_c_gamma_shares(
+                            let e_shares = assemble_e_input_wire_shares_p1(
                                 n, m,
+                                &gb_v_alpha_d_ev,
+                                &ev_v_alpha_d_ev,
+                                &gb_v_beta_d_ev,
+                                &ev_v_beta_d_ev,
                                 &l_alpha_pub,
                                 &l_beta_pub,
-                                &l_gamma_pub,
                                 &generator,
                                 &evaluator,
                             );
-                            let check_ok = check_zero(&c_gamma, &generator.delta_a);
 
-                            total += start.elapsed();
+                            // Both parties compute H({V_w}) locally, gb sends
+                            // its 16-byte digest, ev compares. In simulation
+                            // both calls operate on the same assembled shares
+                            // (gb's view ⊕ ev's view), giving the right per-
+                            // party hashing cost shape.
+                            let h_gb = hash_check_zero(&e_shares);
+                            let h_ev = hash_check_zero(&e_shares);
+                            let check_ok = h_gb == h_ev;
 
-                            // BENCH-01 / D-04: black_box every output.
-                            let _ = black_box(c_gamma);
+                            total += start.elapsed() + transit_per_iter;
+
+                            let _ = black_box(e_shares);
                             let _ = black_box(check_ok);
-                            // Also black_box the mutated structs so
-                            // the optimizer cannot prove the entire
-                            // pipeline dead.
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
                         }
-
-                        // D-11 dual-unit throughput print. Criterion's
-                        // built-in output already covers ns-per-element
-                        // via Throughput::Elements; this println adds
-                        // the paper-style ms-per-op alongside.
-                        let elapsed_ns = total.as_nanos() as f64;
-                        let iters_f = iters as f64;
-                        let ms_per_op = elapsed_ns / iters_f / 1_000_000.0;
-                        let ns_per_and = elapsed_ns / (iters_f * (n * m) as f64);
-                        println!(
-                            "[online][p1] {}x{} cf={}: {:.3} ms/op, {:.2} ns/AND",
-                            n, m, chunking_factor, ms_per_op, ns_per_and
-                        );
 
                         total
                     });
@@ -279,16 +331,21 @@ fn bench_online_p1(c: &mut Criterion) {
     group.finish();
 }
 
-/// Phase 10 BENCH-02 / BENCH-04 / BENCH-06 — Protocol 2 online-phase
-/// throughput benchmark. Sync `iter_custom + Instant` mirroring P1.
-/// Each measured iteration runs the full P2 pipeline:
-///   garble_first_half_p2 -> evaluate_first_half_p2
-///   garble_second_half_p2 -> evaluate_second_half_p2
-///   garble_final_p2 -> evaluate_final_p2
-///   assemble_c_gamma_shares_p2 -> online::check_zero (UNDER DELTA_B,
-///   not delta_a — P2's c_gamma assembly verifies under the
-///   evaluator's delta per CONTEXT.md D-09 and src/lib.rs P2 helper).
-/// Reports dual-unit throughput (ms-per-op + ns-per-AND-gate, D-11).
+/// Protocol 2 online-phase throughput benchmark, paper-faithful per
+/// `6_total.tex` Construction `prot:wrk`. Each measured iteration runs:
+///   - garble_first_half_p2 / second_half_p2 / final_p2  (gb compute)
+///   - GC transfer at 100 Mbps  (computed transit time)
+///   - evaluate_first_half_p2 / second_half_p2 / final_p2  (ev compute)
+///   - assemble_c_alpha_beta_shares_p2  (input-wire check, `6_total.tex:207–214`)
+///   - both parties hash via `online::hash_check_zero`, gb sends 16-byte digest,
+///     ev compares  (paper-faithful CheckZero, `6_total.tex:214`)
+///
+/// No masked-value send-back (P2 keeps masked values inside the GC and never
+/// reveals them to gb). GC byte count differs from P1: both halves' chunk_cts
+/// are `(Block, Block)` tuples (wide ciphertexts, `6_total.tex:90`), so
+/// per-cell bytes are computed via `gc_bytes_p2`.
+///
+/// Reports ms-per-op, ns-per-AND, and KB-per-op per (n, m, tile_size).
 fn bench_online_p2(c: &mut Criterion) {
     let mut group = c.benchmark_group("online");
     group.warm_up_time(std::time::Duration::from_secs(3));
@@ -297,11 +354,10 @@ fn bench_online_p2(c: &mut Criterion) {
     for &(n, m) in BENCHMARK_PARAMS {
         group.throughput(Throughput::Elements((n * m) as u64));
 
-        if n * m > 4096 {
-            group.sample_size(10);
-        }
-
         for chunking_factor in 1usize..=8 {
+            // See bench_online_p1 for OnceCell rationale.
+            let gc_cache: OnceCell<usize> = OnceCell::new();
+
             group.bench_with_input(
                 BenchmarkId::new(
                     format!("p2_garble_eval_check_{}x{}", n, m),
@@ -309,20 +365,27 @@ fn bench_online_p2(c: &mut Criterion) {
                 ),
                 &chunking_factor,
                 |b, &chunking_factor| {
+                    let gc_bytes = *gc_cache.get_or_init(|| {
+                        let bytes = gc_bytes_p2(n, m, chunking_factor);
+                        let comm_bytes_per_op = bytes + BLOCK_BYTES;
+                        println!(
+                            "KB,p2,N={},M={},tile={},kb={:.4}",
+                            n, m, chunking_factor,
+                            (comm_bytes_per_op as f64) / 1024.0,
+                        );
+                        bytes
+                    });
+                    let transit_per_iter = Duration::from_nanos(
+                        transit_ns(gc_bytes) + transit_ns(BLOCK_BYTES),
+                    );
+
                     b.iter_custom(|iters| {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
                             let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
 
-                            // l_gamma_pub for the P2 check is the same
-                            // reconstruction shape as P1 (length n*m,
-                            // column-major). For benchmarking we use
-                            // a fixed-zero vector — P2's
-                            // assemble_c_gamma_shares_p2 cost is O(n*m)
-                            // regardless of bit values (no branches on
-                            // l_gamma_pub bits, only XORs). See
-                            // src/lib.rs:assemble_c_gamma_shares_p2.
-                            let l_gamma_pub: Vec<bool> = vec![false; n * m];
+                            let l_alpha_pub: Vec<bool> = vec![false; n];
+                            let l_beta_pub:  Vec<bool> = vec![false; m];
 
                             let start = Instant::now();
 
@@ -330,40 +393,37 @@ fn bench_online_p2(c: &mut Criterion) {
                             evaluator.evaluate_first_half_p2(cl1, ct1);
                             let (cl2, ct2) = generator.garble_second_half_p2();
                             evaluator.evaluate_second_half_p2(cl2, ct2);
-                            let (_d_gb_out, gb_d_ev_out) = generator.garble_final_p2();
-                            let ev_d_ev_out = evaluator.evaluate_final_p2();
+                            let (_d_gb_out, _gb_d_ev_out) = generator.garble_final_p2();
+                            let _ev_d_ev_out = evaluator.evaluate_final_p2();
 
-                            // c_gamma assembly + check_zero under
-                            // delta_b (D-09).
-                            let c_gamma = assemble_c_gamma_shares_p2(
+                            let gb_v_alpha_d_ev: Vec<Block> = generator.alpha_d_ev_shares.clone();
+                            let ev_v_alpha_d_ev: Vec<Block> = evaluator.alpha_d_ev_shares.clone();
+                            let gb_v_beta_d_ev:  Vec<Block> = generator.beta_d_ev_shares.clone();
+                            let ev_v_beta_d_ev:  Vec<Block> = evaluator.beta_d_ev_shares.clone();
+
+                            let c_shares = assemble_c_alpha_beta_shares_p2(
                                 n, m,
-                                &gb_d_ev_out,
-                                &ev_d_ev_out,
-                                &l_gamma_pub,
+                                &gb_v_alpha_d_ev,
+                                &ev_v_alpha_d_ev,
+                                &gb_v_beta_d_ev,
+                                &ev_v_beta_d_ev,
+                                &l_alpha_pub,
+                                &l_beta_pub,
                                 &generator,
                                 &evaluator,
                             );
-                            let check_ok = check_zero(&c_gamma, &evaluator.delta_b);
 
-                            total += start.elapsed();
+                            let h_gb = hash_check_zero(&c_shares);
+                            let h_ev = hash_check_zero(&c_shares);
+                            let check_ok = h_gb == h_ev;
 
-                            // BENCH-01 / D-04.
-                            let _ = black_box(c_gamma);
+                            total += start.elapsed() + transit_per_iter;
+
+                            let _ = black_box(c_shares);
                             let _ = black_box(check_ok);
-                            let _ = black_box(gb_d_ev_out);
-                            let _ = black_box(ev_d_ev_out);
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
                         }
-
-                        let elapsed_ns = total.as_nanos() as f64;
-                        let iters_f = iters as f64;
-                        let ms_per_op = elapsed_ns / iters_f / 1_000_000.0;
-                        let ns_per_and = elapsed_ns / (iters_f * (n * m) as f64);
-                        println!(
-                            "[online][p2] {}x{} cf={}: {:.3} ms/op, {:.2} ns/AND",
-                            n, m, chunking_factor, ms_per_op, ns_per_and
-                        );
 
                         total
                     });
@@ -488,4 +548,8 @@ criterion_group!(
     bench_128x128_runtime_with_networking,
     bench_256x256_runtime_with_networking,
 );
-criterion_main!(preprocessing_benches, online_benches, network_benches);
+// Only the new paper-faithful online group is wired into criterion_main. The
+// `preprocessing_benches` and `network_benches` groups are still defined above
+// so they can be reactivated with a one-line change, but they're skipped under
+// `cargo bench` while the focus is on regenerating the paper's ms+KB figures.
+criterion_main!(online_benches);
