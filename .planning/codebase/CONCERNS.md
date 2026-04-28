@@ -1,242 +1,426 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-04-19
+**Analysis Date:** 2026-04-28
 
 ---
 
-## TODOs / FIXMEs
+## Known Bugs
 
-**Unresolved module refactor:**
-- Issue: `AuthBit` / `AuthBitShare` types are defined inside `auth_tensor_fpre.rs` but are general-purpose authenticated-bit primitives that belong in a shared module.
-- Files: `src/auth_tensor_fpre.rs:1` — `// TODO refactor authbit from fpre to a common module, or redefine with new name.`
-- Impact: `AuthBitShare` and related helpers are imported directly from `fpre`, coupling the Fpre type to consumers that only need the share type. Future protocol variants will either re-duplicate or rely on this incidental location.
-- Fix approach: Move `AuthBit`, `AuthBitShare`, `build_share`, and related `Add` impls out of `auth_tensor_fpre.rs` into `src/sharing.rs` (which already holds `InputSharing`). Update all `use` paths.
+### BUG-01: `IdealPreprocessingBackend` samples fresh bits for D_ev instead of reusing D_gb bits
 
----
+**Status:** Open — documented in `.planning/FIX-ideal-preprocessing-dev-correlation.md`.
 
-## Unsafe Code
+**Symptoms:** The `IdealPreprocessingBackend` path produces D_ev shares that authenticate *different* underlying bits than the D_gb shares for the same wire. This violates the F_cpre spec (`appendix_cpre.tex` line 64), which requires D_ev to re-authenticate the *same* bits as D_gb under Δ_ev.
 
-**Severity: Medium** — The safety invariants are straightforward and currently correct, but they are fragile: any future refactor that changes the repr of `Mac`, `Key`, or `Block` will silently break memory safety.
+**Files:** `src/preprocessing.rs:154-185` (the current `IdealPreprocessingBackend::run` body after the already-landed fix correctly calls `into_gen_eval`). The risk area is the comment block at lines 157-165 — if a future developer re-adds independent RNG loops for alpha/beta/correlated D_ev generation (seeds 43–45), the bug silently returns.
 
-**Pointer-cast slice transmutes in `Mac` and `Key`:**
-- Files: `src/macs.rs:59`, `src/macs.rs:67`, `src/keys.rs:67`, `src/keys.rs:75`, `src/keys.rs:83`
-- Pattern:
-  ```rust
-  // macs.rs:59
-  unsafe { &*(slice as *const [Self] as *const [Block]) }
-  // macs.rs:67 / keys.rs:75 / keys.rs:83
-  unsafe { std::mem::transmute(blocks) }
-  ```
-- Both `Mac(Block)` and `Key(Block)` are `#[repr(transparent)]` newtypes (inferred — there is no explicit `#[repr(transparent)]` attribute on either struct). Without the attribute the layout guarantee is only by convention; if `derive(Debug, Clone, Copy, PartialEq)` is later expanded or a field is added, these transmutes become UB.
-- Fix approach: Add `#[repr(transparent)]` explicitly to `Mac` and `Key`. Consider replacing `transmute` with `bytemuck::cast_vec` / `bytemuck::cast_slice` after implementing `Pod`+`Zeroable` (already done for `Block`).
+**Root cause:** The three `alpha_d_ev_shares`, `beta_d_ev_shares`, and `correlated_d_ev_shares` fields are now derived inside `TensorFpre::into_gen_eval` from the D_gb bits (`src/auth_tensor_fpre.rs:183-229`). The bug was that earlier code seeded separate ChaCha12Rngs (seeds 43, 44, 45) and drew fresh random bits. Gamma stays independently sampled (seed 42), which is correct.
 
-**Raw-pointer slice construction in `Block`:**
-- Files: `src/block.rs:125–127`, `src/block.rs:136–138`
-- Uses `unchecked_mul` (nightly-only intrinsic) and `from_raw_parts`. The SAFETY comments are accurate but `unchecked_mul` requires a nightly feature and will panic in debug if the invariant is ever violated differently.
-- Fix approach: Replace with `slice.len() * Self::LEN` (safe multiplication is fine here — the slice already lives in the address space) and use `bytemuck::cast_slice` or `<[[u8; 16]]>::as_flattened` (stabilised in Rust 1.80).
+**Verification:** `test_ideal_backend_d_ev_shares_bit_correlation` (`src/preprocessing.rs:579`) checks the XOR invariant; `test_uncompressed_backend_d_ev_shares_bit_correlation` (`src/preprocessing.rs:466`) covers the uncompressed path.
 
-**`std::mem::transmute` for `Array<u8, U16>` slices:**
-- Files: `src/block.rs:158`, `src/block.rs:164`
-- `Block` is `#[repr(transparent)]` over `[u8; 16]` and `Array<u8, U16>` is `#[repr(transparent)]` over `[u8; 16]` via hybrid-array, making this sound — but it is not documented and is not verified by the compiler.
-- Fix approach: Use `bytemuck` conversions or add a `// SAFETY:` comment citing the repr guarantees of both types.
+**Fix approach:** Do not add back independent-seed loops for alpha/beta/correlated D_ev. See Option A in `.planning/FIX-ideal-preprocessing-dev-correlation.md`.
 
 ---
 
-## Potential Panics
+### BUG-02: Wire labels still reside in preprocessing structs — incomplete label-removal refactor
 
-**Severity: Low in production, Medium for correctness** — Panics occur only at compile-time-selected constant inputs or in test/bench code, not in the protocol hot-path. However, some cases can be triggered by bad runtime parameters.
+**Status:** Partially fixed; documented in `.planning/LABELS-BUG-CONTEXT.md`.
 
-**`unwrap()` on AES key construction:**
-- Files: `src/aes.rs:16` (static initialiser), `src/aes.rs:149` (`AesEncryptor::new`)
-- Both call `Aes128Enc::new_from_slice(&key).unwrap()`. The key is always exactly 16 bytes, so this cannot fail in practice, but a future key-length change will cause a panic at program startup (static) or silently at runtime.
-- Fix approach: Use `Aes128Enc::new(&key.into())` (infallible `KeyInit` via `From<[u8; 16]>`) as already done in `FixedKeyAes::new` at line 28.
+**Symptoms:** `TensorFpreGen.alpha_labels` / `beta_labels` and `TensorFpreEval.alpha_labels` / `beta_labels` are populated during preprocessing. On the ideal path (`TensorFpre::generate_for_ideal_trusted_dealer`) labels encode the actual input `(x XOR alpha) · delta_a`. On the real path (`run_preprocessing`) they are populated with a fixed dummy input (x=0), which means eval-side labels always correspond to x=0 rather than the real online-phase input. The partial fix removed `eval_alpha_labels`/`eval_beta_labels` from `LeakyTriple` but labels continue to flow into `AuthTensorGen.x_labels` / `y_labels` from preprocessing, breaking the intended input-independence of the triple.
 
-**`assert!` in `para_encrypt` hot path:**
-- Files: `src/aes.rs:194`
-- `assert!(blks.len() >= NM * NK)` fires a panic with no error context in production builds. This is the correct bound check, but the caller has no way to recover.
-- Fix approach: Return a `Result` or use a type-level guarantee (const generics already used for `NK`/`NM`).
+**Files:**
+- `src/auth_tensor_fpre.rs:99-168` — `generate_for_ideal_trusted_dealer` still computes input-dependent labels.
+- `src/preprocessing.rs:249-283` — `run_preprocessing` populates alpha/beta labels post-bucketing using a fixed `rng_labels` (seed 44) with x=0 convention.
+- `src/auth_tensor_gen.rs:92-93` — `x_labels`/`y_labels` are set from `fpre_gen.alpha_labels`/`beta_labels`.
+- `src/auth_tensor_eval.rs` — eval-side labels similarly sourced from preprocessing.
 
-**`assert!` for input size validation:**
-- Files: `src/tensor_pre.rs:52–53`
-- `assert!(x < 1<<self.n)` / `assert!(y < 1<<self.m)` in `SemiHonestTensorPre::gen_inputs` panic with no descriptive message.
-- Fix approach: Use `assert!(x < 1<<self.n, "input x={x} exceeds n-bit width {}", self.n)` or return a `Result`.
-
-**`assert!` in `MatrixViewRef::len` / `MatrixViewMut::len`:**
-- Files: `src/matrix.rs:338`, `src/matrix.rs:415`
-- `assert!(self.view_cols == 1)` — hard panic if a non-column-vector is accidentally passed to a scalar-index operation. `debug_assert!` is used elsewhere for dimension mismatches (lines 190, 197, 224, 249) but these two use regular `assert!`, meaning they fire in release builds.
-- These are consistent and arguably correct, but worth documenting.
-
-**Out-of-bounds index risk in chunked algorithms:**
-- Files: `src/tensor_eval.rs:206`, `src/auth_tensor_eval.rs:210`
-- `chunk_levels[s]` and `chunk_cts[s]` are indexed with `s` derived from `x.rows()` / `chunking_factor`. If the caller passes mismatched `chunk_levels` / `chunk_cts` vectors (different length from what the garbler produced), this panics.
-- There is no length validation before indexing.
-- Fix approach: Add a `debug_assert_eq!(chunk_levels.len(), expected_chunks)` at the top of `eval_chunked_half_outer_product`.
-
-**Exponential allocation in seed tree:**
-- Files: `src/tensor_ops.rs:20`, `src/tensor_eval.rs:70`, `src/auth_tensor_eval.rs:75`
-- `vec![Block::default(); 1 << n]` allocates 2^n blocks. For `n = chunking_factor = 8` this is 256 × 16 = 4 KB — safe. For `chunking_factor > 20` (not currently benchmarked but reachable by API) this overflows or OOMs.
-- Fix approach: Document the practical upper bound on `chunking_factor` or add a check.
+**Correct target:** Labels must be generated by the garbler fresh at garble time, not propagated from Fpre. The ideal `TensorFpre` path may retain labels for testing/reference. The real preprocessing path must not touch labels. See `.planning/LABELS-BUG-CONTEXT.md` §Correct Target Architecture.
 
 ---
 
-## Security Considerations
+### BUG-03: `Key::from_blocks` bypasses LSB-zero invariant via `transmute`
 
-**Severity: High** — This is a cryptographic protocol implementation. The concerns below do not indicate a known break, but they represent deviations from defensive cryptographic engineering practice.
+**Status:** Open — identified in `.planning/REVIEW.md` as CR-02.
 
-**`TensorFpre` is explicitly insecure / ideal:**
-- Files: `src/auth_tensor_fpre.rs:8`
-- The struct comment reads "Insecure ideal Fpre that pre-generates auth bits...". This component simulates the Fpre functionality in the clear (both parties' shares are held in the same process). It is not a real OT-based or MPC-based Fpre.
-- Impact: The entire authenticated garbling protocol is only tested against this ideal-world simulator, not against a real two-party Fpre. The security of the full protocol depends on correctly replacing `TensorFpre` with a real Fpre; that component does not exist in this codebase.
-- Fix approach: Document clearly in README and module docs that `TensorFpre` is a placeholder. Add a real Fpre or link to where one would be plugged in.
+**Symptoms:** `Key::new` enforces `set_lsb(false)`. `Key::from_blocks` in `src/keys.rs:86-90` does a direct `std::mem::transmute` with no LSB clearing. GGM tree output or OT key material with random LSBs will produce structurally invalid keys. On average half the produced keys violate the invariant, causing silent MAC-verification failures.
 
-**MAC constants hardcoded in two places:**
-- Files: `src/lib.rs:29–35`, `src/macs.rs:7–12`
-- `MAC_ZERO` and `MAC_ONE` are defined twice with identical values but independently. A future update to one copy that misses the other will silently produce an inconsistency.
-- Fix approach: Remove the duplicate in `src/lib.rs` and re-export from `src/macs.rs`.
+**Files:** `src/keys.rs:86-90`
 
-**Fixed AES key is an easily-guessable pattern:**
-- Files: `src/aes.rs:10–12`
-- `FIXED_KEY = [69, 42, 69, 42, ...]` ("69 42" repeated). The key is used as a correlation-robust hash (TCCR). The choice of key is publicly known, which is intentional for the construction, but the repeating pattern is aesthetically poor and may invite unnecessary scrutiny. More importantly, it is never checked against the constant from the paper reference.
-- Fix approach: Use a nothing-up-my-sleeve constant (e.g., the first 16 bytes of SHA-256("authenticated-tensor-garbling")) and add a comment linking to the paper section justifying the use of a fixed key.
+**Fix approach:** Either enforce `set_lsb(false)` in the loop inside `from_blocks`, or add a `debug_assert!(blocks.iter().all(|b| b.lsb() == 0))` and document the caller contract. `Mac::from_blocks` in `src/macs.rs:64-68` is a separate transmute but MAC LSB is not invariant-critical.
 
-**`Delta` LSB invariant not enforced at the type level:**
-- Files: `src/delta.rs`
-- `Delta::new` sets LSB=1. However, `Delta::set_lsb(self, false)` exists as a public method and can produce a `Delta` with LSB=0, violating the free-XOR invariant that the entire protocol depends on.
-- Impact: Calling `delta.set_lsb(false)` would silently break authentication without any compile-time or runtime error.
-- Fix approach: Make `set_lsb` private or remove it; expose only `Delta::random` and `Delta::new` as constructors.
+---
 
-**No constant-time operations:**
-- Files: All of `src/` — no `subtle` crate or explicit constant-time comparisons.
-- MAC verification in `src/sharing.rs:47–49` (`AuthBitShare::verify`) uses `assert_eq!` which compares `Mac` values via `PartialEq`, which is not constant-time. This is a concern if the verify path is ever on a side-channel-sensitive code path.
-- The benchmarking and test contexts make this low-priority now, but it is a gap for any production deployment.
-- Fix approach: Use `subtle::ConstantTimeEq` for MAC comparison.
+### BUG-04: `MAC_ZERO` / `MAC_ONE` duplicated with different byte values — silent divergence risk
 
-**ChaCha12 used instead of ChaCha20:**
-- Files: `src/sharing.rs:7`, `src/auth_tensor_fpre.rs:5`
-- `rand_chacha::ChaCha12Rng` uses 12 rounds. ChaCha20 (20 rounds) is the standard recommendation for cryptographic RNG. ChaCha12 provides a lower security margin and is not the default recommendation from the `rand` project for cryptographic use.
-- Fix approach: Replace `ChaCha12Rng` with `ChaCha20Rng` from the same crate.
+**Status:** Open — identified in `.planning/REVIEW.md` as CR-01.
+
+**Symptoms:** `src/macs.rs:7-13` and `src/lib.rs:44-51` each define `MAC_ZERO` and `MAC_ONE`, but the byte literals differ. `macs.rs` encodes `[0u8;16]` / `[255u8;16]` (the trivial all-zeros / all-ones blocks). `lib.rs` encodes specific non-trivial byte arrays. Any code path that uses one copy produces different results from a path that uses the other. Both are `pub(crate)` so external callers are unaffected, but internal cross-module tests can silently use the wrong constant.
+
+**Files:** `src/macs.rs:7-13`, `src/lib.rs:44-51`
+
+**Fix approach:** Remove the `lib.rs` definitions and import from `macs`. Confirm which byte arrays are protocol-correct.
+
+---
+
+### BUG-05: `TensorProductEval` has a dead constructor with diverging initialization
+
+**Status:** Open — identified in `.planning/REVIEW.md` as CR-03.
+
+**Symptoms:** `src/tensor_eval.rs:30-44` defines `TensorProductEval::new` which is never called. `new_from_fpre_eval` at line 45 is the live constructor. The two constructors initialize `first_half_out` / `second_half_out` differently. A future developer who accidentally calls `new()` will get silently broken output.
+
+**Files:** `src/tensor_eval.rs:30-58`
+
+**Fix approach:** Delete `new()`. Rename `new_from_fpre_eval` to `new`.
+
+---
+
+### BUG-06: Tautological CheckZero comparison in online benchmarks — always passes
+
+**Status:** Open — identified during analysis.
+
+**Symptoms:** In `bench_online_p1` and `bench_online_p2`, both `h_gb` and `h_ev` are computed by calling `hash_check_zero(&e_shares)` on the *same* assembled shares slice. `h_gb == h_ev` is therefore always true. The benchmark measures check cost correctly, but the check never fails even on corruption. In a real protocol `h_gb` and `h_ev` would be computed independently by each party on their own half; both should be exercised separately.
+
+**Files:** `benches/benchmarks.rs:342-344` and `benches/benchmarks.rs:446-448`
+
+**Fix approach:** For benchmark accuracy this is acceptable (same performance as real). Mark with a comment that this is a simulation shortcut. For correctness testing, add a separate test that constructs genuinely different shares and verifies `h_gb != h_ev`.
+
+---
+
+## Security Concerns
+
+### SEC-01: Three ideal-stub protocols replace cryptographic security — must not reach production
+
+**Files:**
+- `src/bcot.rs:20` — `IdealBCot` (in-process OT, no network, no cryptographic hiding).
+- `src/feq.rs:8` — `feq::check` (equality check via `assert_eq!`, panics instead of protocol abort).
+- `src/auth_tensor_fpre.rs:1` — entire `TensorFpre` struct is an ideal trusted dealer.
+
+**Risk:** All three stubs assume a trusted in-process context. Substituting them in any networked setting leaks all secret values (keys, MACs, masks) to both parties. There is no feature flag or compilation guard preventing accidental use in a non-research binary.
+
+**Current mitigation:** All three have `TODO: Replace with real protocol` comments. Tests pass only because both parties run in the same process.
+
+**Recommendations:** Gate under `#[cfg(feature = "ideal-functionalities")]` so they cannot link into a non-research build. Use `compile_error!` in the gate so a missing feature flag surfaces at compile time, not runtime.
+
+---
+
+### SEC-02: `AuthBitShare::verify` panics on attacker-supplied input — DoS vector
+
+**Files:** `src/sharing.rs:60-63`
+
+**Risk:** `AuthBitShare::verify` calls `assert_eq!(self.mac, want, "MAC mismatch")`. If the codebase is ever extended to accept network input without first checking a protocol-level signature, an attacker can craft a share with a wrong MAC and cause a process abort rather than a graceful protocol rejection.
+
+**Fix approach:** Replace `assert_eq!` with `if self.mac != want { return Err(...) }` and a `Result`-returning signature. All existing call sites pass valid shares, so the change propagates cleanly.
+
+---
+
+### SEC-03: `feq::check` panics on protocol mismatch — DoS via remote-controlled panic
+
+**Files:** `src/feq.rs:25`
+
+**Risk:** The ideal F_eq check calls `panic!("F_eq abort: ...")` on element mismatch. In the current in-process simulation this is acceptable. If `feq::check` is adapted for real use and receives network-controlled inputs, any mismatch aborts the process rather than triggering a protocol-level abort message.
+
+**Fix approach:** Replace `panic!` with a `Result<(), FeqAbortError>` and propagate upward.
+
+---
+
+### SEC-04: Debug `print!` inside `test_auth_tensor_product` outputs wire values
+
+**Files:** `src/lib.rs:737`
+
+**Risk:** `print!("{} ", expected_val)` fires during `cargo test`, spewing the expected tensor output values to stdout. In a test environment this is merely noise, but it establishes a precedent of debug-printing protocol values. If a similar print were added near actual wire labels or MACs it would leak them to any process capturing stdout.
+
+**Current state:** Only `expected_val` (a public bool) is printed, not labels or MACs. Risk is low today.
+
+**Fix approach:** Remove the `print!` call in `src/lib.rs:737`. Test correctness via `assert_eq!` only.
+
+---
+
+### SEC-05: Hardcoded RNG seeds in `IdealPreprocessingBackend` — deterministic preprocessing
+
+**Files:** `src/preprocessing.rs:168` (seed 42 for gamma), `src/preprocessing.rs:235` (seed 0 for shared bcot), `src/preprocessing.rs:254` (seed 44 for labels), `src/preprocessing.rs:316` (seed 43 for gamma on uncompressed path).
+
+**Risk:** All preprocessing runs with `IdealPreprocessingBackend` produce the same deltas, keys, and masks. Two independent protocol invocations in the same process share preprocessing material — a session-reuse attack would let an adversary correlate secrets across sessions. Benchmarks also benchmark identical data every run, defeating statistical freshness.
+
+**Fix approach:** See `.planning/REVIEW.md` WR-08. Pass seeds from OS entropy (`rand::rng().random::<u64>()`) or accept a seed parameter from callers.
+
+---
+
+### SEC-06: `block.rs` unsafe slice reinterpretations lack explicit alignment or size checks
+
+**Files:** `src/block.rs:125-127`, `src/block.rs:136-138`, `src/block.rs:158`, `src/block.rs:164`
+
+**Risk:** `from_raw_parts` and `transmute` on `Block` slices rely on `repr(transparent)` and `Pod`/`Zeroable` derivations being correct. If the `Block` repr changes (e.g., a padding field is added), all reinterpret casts silently produce garbage. No `size_of` / alignment assertions guard the conversions.
+
+**Fix approach:** Add `const _: () = assert!(std::mem::size_of::<Block>() == 16)` and `const _: () = assert!(std::mem::align_of::<Block>() == 1)` as compile-time guards near the unsafe blocks.
+
+---
+
+## Correctness Concerns
+
+### CORR-01: Input width silently truncated at `usize::BITS` (64) bits
+
+**Files:** `src/auth_tensor_fpre.rs:110`, `src/auth_tensor_fpre.rs:120`, `src/auth_tensor_fpre.rs:140`, `src/auth_tensor_fpre.rs:148`
+
+**Risk:** `checked_shl` returns `None` for `i >= 64`. Bits at position `i >= 64` are silently treated as zero. The comment at line 98-99 documents this truncation, but callers passing `n > 64` will silently garble the protocol without a panic or error. `BENCHMARK_PARAMS` only goes to `(256, 256)`, which uses 256-bit tensors but each *dimension* is at most 256, meaning the alpha/beta bit-packed `usize` can only represent the first 64 bits.
+
+**Fix approach:** Assert `n <= usize::BITS as usize` at the start of `generate_for_ideal_trusted_dealer`, or switch to `Vec<bool>` for the input representation so the interface naturally handles arbitrary width.
+
+---
+
+### CORR-02: `assemble_e_input_wire_shares_p1` uses only the LSB of `combined_e_block` to detect tampering
+
+**Files:** `src/lib.rs:300`, `src/lib.rs:332`
+
+**Risk:** The combined block `gb_e_block ^ ev_e_block` is 128 bits wide. The tamper-detection extracts only `combined_e_block.lsb()` as `e_a_bit`. A tamper that XORs with a block whose LSB is 0 (e.g., a block with all-zero LSB but non-zero other bits) is invisible to this check. The test at `src/lib.rs:1068` demonstrates this works for XOR-with-`delta_a` (LSB=1), but does not test XOR with a block whose LSB is 0.
+
+**Risk level:** Medium. In the paper the check is a full IT-MAC verification; the LSB extraction is a simulation shortcut. In a real protocol the MAC would be computed over the full block, not the LSB.
+
+**Fix approach:** Document that this is a simulation-only check and that a real protocol must use a full 128-bit MAC rather than the single-bit LSB extraction.
+
+---
+
+### CORR-03: `AuthTensorGen::new` / `AuthTensorEval::new` are dead code initializing empty D_ev shares
+
+**Files:** `src/auth_tensor_gen.rs:61-83`, `src/auth_tensor_eval.rs:52-74`
+
+**Risk:** Both dead constructors initialize all `*_d_ev_shares` fields to `Vec::new()`. Any code path that reaches `compute_lambda_gamma` or `assemble_e_input_wire_shares_p1` after constructing via `::new()` will panic on the `assert_eq!(self.gamma_d_ev_shares.len(), ...)` guard. The constructors also draw `delta_a`/`delta_b` from the global OS RNG — different semantics from the deterministic test paths.
+
+**Fix approach:** Remove both `::new()` constructors per `.planning/REVIEW.md` WR-03. Require `new_from_fpre_gen`/`new_from_fpre_eval`.
+
+---
+
+### CORR-04: `TensorFpreGen.gamma_d_ev_shares` / `TensorFpreEval.gamma_d_ev_shares` silently empty from `into_gen_eval`
+
+**Files:** `src/auth_tensor_fpre.rs:192`, `src/auth_tensor_fpre.rs:230`
+
+**Risk:** `TensorFpre::into_gen_eval` returns `gamma_d_ev_shares: vec![]` on both sides. Only `IdealPreprocessingBackend::run` populates this field post-call. Any code path that calls `into_gen_eval` directly (e.g., `bench_online_with_networking_for_size` via `setup_auth_gen`/`setup_auth_eval`) constructs an `AuthTensorGen`/`AuthTensorEval` with empty `gamma_d_ev_shares`. A call to `compute_lambda_gamma` on such an instance panics.
+
+**Files:** `benches/benchmarks.rs:75-87` — `setup_auth_gen` and `setup_auth_eval` call `into_gen_eval` directly, leaving `gamma_d_ev_shares` empty. These helpers are used by the `bench_online_with_networking_for_size` group, which does NOT call `compute_lambda_gamma`, so it does not crash today — but this is a fragile arrangement.
+
+**Fix approach:** Use `Option<Vec<AuthBitShare>>` for `gamma_d_ev_shares` in `TensorFpreGen`/`TensorFpreEval` so accidental access is caught at compile time (see `.planning/REVIEW.md` WR-12), or add a runtime sentinel check in `into_gen_eval` that emits a warning when `gamma_d_ev_shares` is left empty.
+
+---
+
+### CORR-05: `run_preprocessing` panics on `count != 1` — no batch support
+
+**Files:** `src/preprocessing.rs:220-227`
+
+**Risk:** The `assert_eq!(count, 1, ...)` guard prevents batch preprocessing. This is documented, but the `TensorPreprocessing` trait signature accepts any `count`, so callers using the trait interface receive a runtime panic with no static indication. Any future bucketing sweep that needs more than one triple must loop `run()` manually with `count=1`, risking the per-call delta sharing invariant (all calls must share the same `delta_a`/`delta_b`).
+
+**Fix approach:** Change the trait signature to `run(n, m, chunking_factor) -> (TensorFpreGen, TensorFpreEval)` (dropping `count`) or add a `run_batch(count) -> Vec<(...)>` variant.
+
+---
+
+### CORR-06: `Display` for `TypedMatrix` prints columns as rows — transposed output
+
+**Files:** `src/matrix.rs:328-335`
+
+**Risk:** The outer loop iterates `j in 0..self.cols` with an inner `i in 0..self.rows` loop, printing a newline after each column. For a 2×3 matrix this prints 3 lines of 2 elements — the transpose. The `println!("{}", display_str)` debug call in `src/matrix.rs:669` (inside a test) thus prints transposed data. Any future debug session examining matrix contents will see incorrect layout.
+
+**Fix approach:** Swap loop indices: outer `i in 0..self.rows`, inner `j in 0..self.cols`.
 
 ---
 
 ## Performance Concerns
 
-**Cloning entire `BlockMatrix` in return paths:**
-- Files: `src/tensor_gen.rs:162`, `src/tensor_eval.rs:271`
-- `garble_final_outer_product` and `evaluate_final_outer_product` return `self.first_half_out.clone()`. For a 128×128 matrix this is 128×128×16 = 262 KB copied at the end of every benchmark iteration.
-- Fix approach: Return a reference, or restructure so ownership is consumed / the caller extracts the result.
+### PERF-01: Four Vec allocations per benchmark iteration for D_ev share clones
 
-**`eval_cts` return value is discarded:**
-- Files: `src/tensor_eval.rs:207`, `src/auth_tensor_eval.rs:211`
-- `_eval_cts` is assigned but never used. `eval_unary_outer_product` builds and returns a full `Vec<Block>` on every call, performing heap allocations and computing values that are thrown away.
-- Fix approach: Either remove the return value and accumulation logic if it is genuinely unused, or document why it must be computed but not consumed.
+**Files:** `benches/benchmarks.rs:320-323`, `benches/benchmarks.rs:429-432`
 
-**Intermediate `tree` accumulation in seed algorithms:**
-- Files: `src/tensor_ops.rs:14`, `src/tensor_eval.rs:67`, `src/auth_tensor_eval.rs:72`
-- Each level of the GGM tree is pushed onto a `tree: Vec<Block>` (growing exponentially), and only the last `1 << n` elements are used. This doubles the peak memory usage compared to computing only the leaves.
-- For `n = chunking_factor = 8`, peak `tree` size is `(2 + 4 + ... + 256) × 16 bytes = 8 KB` — acceptable now but wasteful.
-- Fix approach: Compute leaves directly without storing intermediate levels, or use a ring-buffer of two levels.
+**Risk:** Each timed benchmark iteration allocates four `Vec<Block>` (`gb_v_alpha_d_ev`, `ev_v_alpha_d_ev`, `gb_v_beta_d_ev`, `ev_v_beta_d_ev`) via `.clone()`. For (256, 256) inputs these are 256+256 = 512 `Block` elements (8 KB total). The allocations occur inside `b.iter_custom(|iters| { ... })`, adding allocator pressure to the timing measurement.
 
-**Repeated allocation of `slice` BlockMatrix inside chunked loop:**
-- Files: `src/tensor_gen.rs:65–67`, `src/tensor_eval.rs:187–190`, `src/auth_tensor_gen.rs:86–89`, `src/auth_tensor_eval.rs:192–195`
-- A new `BlockMatrix::new(slice_size, 1)` is allocated on every chunk iteration inside the hot loop. For large `n` with small `chunking_factor` this creates many short-lived heap allocations.
-- Fix approach: Pre-allocate a scratch `BlockMatrix` outside the loop and reuse it.
-
-**Benchmark code duplication:**
-- Files: `benches/benchmarks.rs` (the file is ~756 lines)
-- Each of the 8 `bench_NxN_runtime_with_networking` functions is a near-identical copy with only `n`, `m` values changed. The repeated setup / communication-size computation blocks are copy-pasted ~8 times per chunking factor.
-- Fix approach: Extract a single parameterised `bench_protocol_with_networking(c, n, m)` function.
+**Fix approach:** Pre-allocate outside the iter loop and reuse buffers, or pass references directly to `assemble_e_input_wire_shares_p1` instead of owned clones (the function accepts `&[Block]`).
 
 ---
 
-## Architectural Concerns
+### PERF-02: GGM tree uses `(0 as u128).to_be_bytes()` zero-tweak instead of `Block::ZERO`
 
-**No real network / two-party split:**
-- Files: All of `src/`
-- The generator (`AuthTensorGen`) and evaluator (`AuthTensorEval`) run in the same process, sharing memory. The "communication" is just passing `Vec` values between function calls. The `SimpleNetworkSimulator` in `benches/network_simulator.rs` only sleeps for a computed duration; it does not actually serialize or transmit data.
-- Impact: Serialization bugs, network protocol bugs, and concurrent-execution issues (e.g., ordering of messages) cannot be caught by this test suite.
-- Fix approach: Use real channels (e.g., `tokio::sync::mpsc` or actual TCP) to separate the two roles, even in tests.
+**Files:** `src/tensor_ops.rs:30-31`, `src/tensor_ops.rs:33-34`, `src/tensor_ops.rs:156`
 
-**`gamma_auth_bit_shares` computed but never consumed in final output:**
-- Files: `src/auth_tensor_gen.rs:188–192`, `src/auth_tensor_eval.rs` (no gamma consumption)
-- In `garble_final`, `_gamma_share` is computed but immediately discarded (prefixed `_`). The evaluator's `evaluate_final` never uses `gamma_auth_bit_shares`. If gamma is required by the protocol, this is a correctness gap; if it is not needed, the ~n×m `AuthBitShare` structures are generated, transmitted in Fpre, and then wasted.
-- Fix approach: Clarify in a comment whether gamma is needed for the MAC-check phase (which is not implemented — see below) or remove it.
+**Risk:** `Block::new((0 as u128).to_be_bytes())` allocates a stack array via `to_be_bytes()` and constructs a Block, whereas `Block::ZERO` is a compile-time constant that is simply `[0u8; 16]`. The compiler likely optimizes this away, but the pattern is confusing and fragile if `to_be_bytes()` behavior changes.
 
-**MAC verification / abort not implemented:**
-- Files: `src/auth_tensor_eval.rs`, `src/auth_tensor_gen.rs`
-- The authenticated garbling protocol requires the evaluator to verify MACs on received values and abort if any check fails. No such verification exists in the current implementation. `AuthBitShare::verify` exists in `src/sharing.rs` but is only called in test code, never in the protocol execution paths.
-- Impact: The "authenticated" in "authenticated tensor garbling" is not enforced at runtime; a malicious garbler could send corrupted ciphertexts undetected.
-- Fix approach: Add MAC verification calls in `evaluate_first_half`, `evaluate_second_half`, and `evaluate_final`, returning `Result` on failure.
-
-**`usize` used as the plaintext type:**
-- Files: `src/tensor_pre.rs`, `src/auth_tensor_fpre.rs`, `src/lib.rs`
-- Input values are `usize`, which is 64 bits on 64-bit platforms. `n` and `m` can exceed 64, in which case bit operations like `(x >> i) & 1` silently drop high bits of the input. Benchmarks use `n = m = 128` and `256`, but tests only use `n = m ≤ 16`.
-- Impact: For `n > 64`, `gen_inputs` will silently treat all high bits as 0.
-- Fix approach: Replace `usize` inputs with `Vec<bool>` or a bignum type, and add an assertion `assert!(n <= usize::BITS as usize)` until then.
-
-**`Debug` / `Display` for `Block` only shows one byte:**
-- Files: `src/block.rs:169–180`
-- Both `Display` and `Debug` print only `self.0[15]` (the last byte). This makes debugging very difficult — distinct blocks that share the last byte are indistinguishable in output. Existing test output (`println!("gen_chunk_levels: {:?}", ...)`) is affected.
-- Fix approach: Print all 16 bytes in hex, or at minimum the first and last.
+**Fix approach:** Replace all `Block::new((0 as u128).to_be_bytes())` with `Block::ZERO` (per `.planning/REVIEW.md` WR-09).
 
 ---
 
-## Missing Error Handling
+### PERF-03: Chunked half-outer-product inner loop duplicated across four files — no parallelism
 
-**All public protocol methods return `()`:**
-- Files: `src/auth_tensor_gen.rs` (`garble_final`, `garble_first_half`, `garble_second_half`), `src/auth_tensor_eval.rs` (`evaluate_first_half`, `evaluate_second_half`, `evaluate_final`)
-- There is no way for callers to detect protocol failures. The `thiserror` crate is declared in `Cargo.toml` but no error types are defined anywhere in `src/`.
-- Fix approach: Define an `Error` enum using `thiserror`, and have garble/evaluate methods return `Result<_, Error>`.
+**Files:** `src/tensor_gen.rs:52-91`, `src/tensor_eval.rs:55-95`, `src/auth_tensor_gen.rs:111-149`, `src/auth_tensor_eval.rs:100-150`
+
+**Risk:** The GGM-tree loop is the hot path for all online-phase benchmarks. It is duplicated verbatim across four files with minor variations. No rayon parallelism is applied — the chunking loop is single-threaded. For large (256, 256) tensors this is a significant throughput bottleneck.
+
+**Fix approach:** Extract a shared skeleton in `tensor_ops.rs` (per `.planning/REVIEW.md` WR-05), then add `rayon::par_iter` over the outer chunk loop. Rayon is not in `Cargo.toml` — add `rayon = "1"`.
 
 ---
 
-## Dependencies at Risk
+### PERF-04: `garble_final_outer_product` / `evaluate_final_outer_product` clone the output matrix
 
-**Pre-release / RC versions pinned:**
-- `aes = "0.9.0-pre.3"` — resolved to `0.9.0-rc.0` in `Cargo.lock`. Pre-release crates are not subject to semver stability guarantees and may have breaking changes before final release.
-- `cipher = "0.5.0-pre.8"` — same concern.
-- Impact: A future `cargo update` may pull in a breaking RC that prevents compilation.
-- Fix approach: Either pin to exact versions (`= "0.9.0-rc.0"`) or wait for stable releases.
+**Files:** `src/tensor_gen.rs:162`, `src/tensor_eval.rs:172`
 
-**`once_cell` superseded by `std`:**
-- `once_cell = "1.21.3"` is used only for `Lazy<FixedKeyAes>` in `src/aes.rs` and `src/auth_tensor_gen.rs` / `src/auth_tensor_eval.rs`.
-- `std::sync::LazyLock` (stable since Rust 1.80) and `std::sync::OnceLock` are direct replacements.
-- Fix approach: Replace `once_cell::sync::Lazy` with `std::sync::LazyLock` and remove the `once_cell` dependency.
+**Risk:** Both functions mutate `self.first_half_out` in-place and return `self.first_half_out.clone()`. The clone copies an n×m `Block` matrix (for 256×256: 65536 × 16 = 1 MB). Since these methods should consume `self`, the clone is unnecessary.
 
-**`criterion` listed in both `[dependencies]` and `[dev-dependencies]`:**
-- Files: `Cargo.toml:29`, `Cargo.toml:35`
-- `criterion = "0.7.0"` appears in `[dependencies]` (compiled into the library) and again in `[dev-dependencies]`. The library should not depend on a benchmarking framework.
-- Fix approach: Remove the `criterion` entry from `[dependencies]`; keep only the `[dev-dependencies]` entry with `async_tokio` feature.
+**Fix approach:** Make both methods take `self` by value and return `self.first_half_out` directly (per `.planning/REVIEW.md` WR-15).
 
-**`tokio` in `[dependencies]` with `features = ["full"]`:**
-- `tokio` with `full` features (including `net`, `fs`, `process`, etc.) is listed as a regular dependency but is only used for the benchmark network simulator. This significantly inflates the dependency tree and compile times for users of the library.
-- Fix approach: Move `tokio` to `[dev-dependencies]` or use `features = ["time", "rt-multi-thread"]` only for what the benchmark needs.
+---
+
+### PERF-05: `BcotOutput::choices` duplicates caller-owned data
+
+**Files:** `src/bcot.rs:40`, `src/bcot.rs:82`, `src/bcot.rs:110`
+
+**Risk:** Both `transfer_a_to_b` and `transfer_b_to_a` do `choices: choices.to_vec()`, copying the caller's slice. The caller already owns the choices vector. For large OT batches (e.g., n=256 bits per leaky triple × `bucket_size_for` triples) this is a wasted allocation.
+
+**Fix approach:** Remove `choices` from `BcotOutput` (per `.planning/REVIEW.md` IN-07). Callers retain their own copy.
+
+---
+
+### PERF-06: Online benchmark setup (`IdealPreprocessingBackend::run`) runs inside the timed hot loop
+
+**Files:** `benches/benchmarks.rs:306` — `setup_auth_pair(n, m, chunking_factor)` is called inside `b.iter_custom(|iters| { for _ in 0..iters { ... } })`.
+
+**Risk:** Preprocessing (bucket generation + bucketing) is included in every benchmark iteration's wall-clock time, masking the true online-phase cost. For (256, 256), preprocessing dominates. Criterion's `iter_batched` API exists precisely to separate setup from measurement.
+
+**Fix approach:** Move `setup_auth_pair` into an `iter_batched` setup closure (matching the pattern used by `bench_online_with_networking_for_size`).
+
+---
+
+## Fragile Areas
+
+### FRAG-01: `bench_online_with_networking` generator/evaluator are uncorrelated — silently wrong output
+
+**Files:** `benches/benchmarks.rs:486-488` (comment), `benches/benchmarks.rs:516-519`
+
+**Risk:** `setup_auth_gen(n, m, cf)` and `setup_auth_eval(n, m, cf)` each call `TensorFpre::new` with seeds 0 and 1 respectively, producing different `delta_a`/`delta_b` in each instance. The evaluator's labels are authenticated under a different delta than the garbler's output. The benchmark comment acknowledges this, but any future developer adding a correctness assertion to the networking benchmark will see spurious failures.
+
+**Fix approach:** Replace with `setup_auth_pair` for correctness, or mark the function clearly as a timing-only benchmark that must never be used for correctness checks.
+
+---
+
+### FRAG-02: Empty `*_d_ev_shares` sentinel in `into_gen_eval` creates class of latent panics
+
+**Files:** `src/auth_tensor_fpre.rs:192`, `src/auth_tensor_fpre.rs:230`
+
+**Risk:** `gamma_d_ev_shares: vec![]` is returned by `into_gen_eval`. Any of the twelve callers of `compute_lambda_gamma` or `assemble_gate_semantics_shares` that inadvertently use a struct built via `into_gen_eval` directly (not via `IdealPreprocessingBackend::run`) will hit a panic on the `assert_eq!(gamma_d_ev_shares.len(), n*m)` guard inside `compute_lambda_gamma`. The assert message is clear, but the failure is runtime-only with no compile-time signal.
+
+**Related:** `TensorFpreGen` and `TensorFpreEval` expose all fields as `pub`, so any code that touches a struct with empty `gamma_d_ev_shares` and iterates over it without going through `compute_lambda_gamma` will silently skip the gamma term entirely.
+
+---
+
+### FRAG-03: Criterion group name collision — both `bench_online_p1` and `bench_online_p2` use `"online"`
+
+**Files:** `benches/benchmarks.rs:258`, `benches/benchmarks.rs:379`
+
+**Risk:** Both functions call `c.benchmark_group("online")`. Criterion merges all results under a single `"online"` group name. P1 and P2 IDs are distinguished only by the `p1_` vs `p2_` prefix inside the `BenchmarkId::new(format!(...))` call, but the top-level group is shared. This causes ID collisions in Criterion's JSON output and confuses comparison plots.
+
+**Fix approach:** Use `"online_p1"` and `"online_p2"` as distinct group names (per `.planning/REVIEW.md` WR-16).
+
+---
+
+### FRAG-04: `build_share` hardcoded to `ChaCha12Rng` — breaks any caller using a different RNG
+
+**Files:** `src/sharing.rs:124`
+
+**Risk:** The signature `pub fn build_share(rng: &mut ChaCha12Rng, ...)` prevents use with `StdRng`, `OsRng`, or test-helper `mock_rng` types. All existing callers happen to use `ChaCha12Rng`, but any extension test that wants to inject a mock RNG for determinism testing cannot call `build_share` without a type cast.
+
+**Fix approach:** `pub fn build_share<R: Rng + CryptoRng>(rng: &mut R, ...)` (per `.planning/REVIEW.md` WR-04).
+
+---
+
+### FRAG-05: `verify_cross_party` duplicated verbatim in two test modules
+
+**Files:** `src/leaky_tensor_pre.rs:339-357`, `src/auth_tensor_pre.rs:324-342`
+
+**Risk:** Identical helper function in two `#[cfg(test)]` modules. Bug fixes in one do not propagate to the other. Post-review comment in `.planning/REVIEW.md` WR-01 notes both are byte-for-byte identical.
+
+**Fix approach:** Move to a shared `#[cfg(test)] pub mod test_utils` in `src/sharing.rs` or a dedicated `src/test_utils.rs`.
+
+---
+
+## Tech Debt
+
+### TD-01: `assemble_gate_semantics_shares` / `assemble_c_alpha_beta_shares_p2` exposed as public crate API
+
+**Files:** `src/lib.rs:89`, `src/lib.rs:386`
+
+**Risk:** Both functions are simulation helpers used only in tests and online benchmarks. They are `pub fn` in the crate root, expanding the external API surface with functions that carry complex, unenforced preconditions (column-major indexing, matching auth bit vectors). A downstream user (e.g., a paper artifact evaluator) could call them with mismatched inputs and get incorrect results with no error.
+
+**Fix approach:** Gate under `#[cfg(any(test, feature = "bench-internals"))]` (per `.planning/REVIEW.md` WR-10).
+
+---
+
+### TD-02: `CSP` and `SSP` constants defined but not wired into GGM tree depth or security checks
+
+**Files:** `src/lib.rs:36-40`
+
+**Risk:** `CSP = 128` and `SSP = 40` are suppressed with `#[allow(dead_code)]`. Neither constant parameterizes the GGM tree depth, the leaky-triple bucket size formula, or the statistical security checks. The bucket-size formula in `src/auth_tensor_pre.rs` uses hardcoded values. If the security parameter changes, the constant and the formula diverge silently.
+
+**Fix approach:** Wire `SSP` into `bucket_size_for` in `src/auth_tensor_pre.rs` and assert `CSP == Block::LEN * 8`.
+
+---
+
+### TD-03: `AuthBitShare` fields fully public with no access invariant
+
+**Files:** `src/sharing.rs:43-50`, `src/auth_tensor_gen.rs` (all `*_auth_bit_shares` fields are `pub`)
+
+**Risk:** External code can mutate `key`, `mac`, or `value` independently, breaking the IT-MAC invariant `mac == key.auth(value, delta)` without detection. Benchmark and test code already reads fields directly rather than through accessors. If the IT-MAC invariant is violated in a simulated attack scenario, `check_zero` will produce a false positive.
+
+**Fix approach:** Make fields `pub(crate)` or private, provide `fn bit(&self) -> bool`, `fn key(&self) -> &Key`, `fn mac(&self) -> &Mac` accessors, and a `fn with_bit(mut self, b: bool, delta: &Delta) -> Self` builder that recomputes the MAC.
+
+---
+
+### TD-04: `AuthTensorGen` / `AuthTensorEval` accumulator fields exposed as `pub`
+
+**Files:** `src/auth_tensor_gen.rs:44-53`, `src/auth_tensor_eval.rs:35-44`
+
+**Risk:** `first_half_out`, `second_half_out`, `first_half_out_ev`, `second_half_out_ev` are all `pub`. These are intermediate computation buffers mid-garble. External access allows callers to inspect or corrupt mid-computation state. The `final_computed: bool` guard only catches calls to `compute_lambda_gamma` out of order — it does not protect the intermediate buffers.
+
+**Fix approach:** Make accumulator fields private. Expose read-only accessors after the relevant garble step is complete (per `.planning/REVIEW.md` WR-11).
+
+---
+
+### TD-05: `TODO refactor authbit from fpre to a common module` in `auth_tensor_fpre.rs`
+
+**Files:** `src/auth_tensor_fpre.rs:1`
+
+**Risk:** `AuthBit`, `AuthBitShare`, `InputSharing`, and `build_share` are defined in `src/sharing.rs` but the module-level comment suggests a refactor is needed. The current split places `AuthBit` (the two-party struct wrapping `gen_share`/`eval_share`) only in the fpre module, while `AuthBitShare` (one party's view) is in `sharing.rs`. This asymmetry requires callers to import from two modules for related types.
 
 ---
 
 ## Test Coverage Gaps
 
-**No tests for `chunking_factor` edge cases:**
-- What is not tested: `chunking_factor = 0` (would cause division-by-zero or infinite loop in `(x.rows() + 0 - 1) / 0`), and `chunking_factor > n` (the last chunk slice-size would be 0, which may produce an empty seed tree).
-- Files: `src/tensor_gen.rs:62`, `src/tensor_eval.rs:185`, `src/auth_tensor_gen.rs:84`, `src/auth_tensor_eval.rs:190`
-- Risk: Caller passes `chunking_factor = 0` at runtime and causes a panic or infinite loop.
-- Priority: Medium
+### TEST-01: No test for `Key::from_blocks` with blocks whose LSB is non-zero
 
-**No tests for `n > 64` inputs:**
-- What is not tested: The documented `usize` truncation concern above is not caught by any test.
-- Files: `src/tensor_pre.rs:52–53`, `src/auth_tensor_fpre.rs:119`
-- Priority: High (correctness gap for large matrices)
+**Files:** `src/keys.rs` (tests at lines 227-266)
 
-**No tests for mismatched garbler/evaluator parameter disagreement:**
-- What is not tested: Calling `evaluate_first_half` with ciphertexts from a generator configured with different `n`, `m`, or `chunking_factor`.
-- Files: `src/tensor_eval.rs`, `src/auth_tensor_eval.rs`
-- Risk: Silently produces wrong output or panics on index.
-- Priority: Medium
-
-**`_eval_cts` return values never verified:**
-- What is not tested: The ciphertexts returned by `eval_unary_outer_product` are discarded. If the eval-side ciphertexts are meant to be used in a subsequent protocol step (e.g., for output reconstruction or consistency check), that step is absent and untested.
-- Files: `src/tensor_eval.rs:207`, `src/auth_tensor_eval.rs:211`
-- Priority: Medium
+**Risk:** CR-02 documents that `from_blocks` bypasses the LSB-zero invariant. The existing test suite exercises `Key::new` (clears LSB), `Key::random` (clears LSB), and `Key::from<Block>` (preserves LSB). No test verifies the actual invariant violation in `from_blocks` or confirms whether callers produce LSB-cleared blocks before calling it.
 
 ---
 
-*Concerns audit: 2026-04-19*
+### TEST-02: No integration test exercising `run_preprocessing` → `garble_final_p2` → `check_zero` with P2 path and `UncompressedPreprocessingBackend`
+
+**Files:** `src/lib.rs:957-965` — `test_auth_tensor_product_full_protocol_2_uncompressed` exists but only exercises `garble_first/second_half_p2` and CheckZero, not a full end-to-end `run_preprocessing` + P2 garble with real (non-ideal) seeds.
+
+---
+
+### TEST-03: No negative test for attacker-corrupted MAC in `assemble_e_input_wire_shares_p1`
+
+**Files:** `src/lib.rs:1025-1121` — the existing negative test (`test_protocol_1_e_input_wire_check_aborts_on_garbler_d_ev_tamper`) only verifies the LSB-detectable tamper (XOR with `delta_a`, LSB=1). Tampering with a block whose LSB is 0 is not tested and will not be caught (see CORR-02).
+
+---
+
+### TEST-04: `batch count > 1` path in `run_preprocessing` and `IdealPreprocessingBackend` is untested
+
+**Files:** `src/preprocessing.rs:220-227`, `src/preprocessing.rs:147-151`
+
+**Risk:** The `assert_eq!(count, 1)` guard ensures no batch path is ever exercised. When a developer removes the assert to implement batch support, there are no existing tests to catch regressions in the combination logic.
+
+---
+
+### TEST-05: `feq::check` has no test for the path where it is called after `evaluate_final_p2` output mismatches
+
+**Files:** `src/feq.rs:39-60`
+
+**Risk:** The only `feq::check` tests operate on hand-constructed matrices. No test exercises the real call site in the online phase where `L_1` comes from garbler output and `L_2` from evaluator output and they should agree. A regression that makes the two diverge would be caught only by a protocol-level test, which does not currently exist.
+
+---
+
+*Concerns audit: 2026-04-28*

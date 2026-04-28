@@ -1,184 +1,179 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-04-19
+**Analysis Date:** 2026-04-28
 
 ## Directory Layout
 
 ```
 authenticated-tensor-garbling/
-├── src/                        # Core library implementation
-│   ├── lib.rs                  # Crate root: module declarations, constants, integration tests
-│   ├── block.rs                # Block (128-bit) primitive type
-│   ├── delta.rs                # Delta (global garbling offset) newtype
-│   ├── keys.rs                 # Key newtype (garbler-held MAC key)
-│   ├── macs.rs                 # Mac newtype (evaluator-held MAC)
-│   ├── sharing.rs              # InputSharing, AuthBitShare, AuthBit structs
-│   ├── matrix.rs               # TypedMatrix<T>, BlockMatrix, KeyMatrix, view types
-│   ├── aes.rs                  # FixedKeyAes (TCCR/CR/CCR hash), AesEncryptor
-│   ├── tensor_pre.rs           # Semi-honest preprocessing: SemiHonestTensorPre, PreGen, PreEval
-│   ├── tensor_gen.rs           # Semi-honest garbler: TensorProductGen
-│   ├── tensor_eval.rs          # Semi-honest evaluator: TensorProductEval
-│   ├── tensor_ops.rs           # Shared garbling primitives (seed tree, outer product)
-│   ├── auth_tensor_fpre.rs     # Authenticated preprocessing (ideal Fpre): TensorFpre, FpreGen, FpreEval
-│   ├── auth_tensor_gen.rs      # Authenticated garbler: AuthTensorGen
-│   └── auth_tensor_eval.rs     # Authenticated evaluator: AuthTensorEval
+├── Cargo.toml              # Crate manifest; [[bench]] harness = false for Criterion
+├── Cargo.lock              # Pinned dependency versions
+├── README.md               # Project overview
+├── src/                    # Library crate root
+│   ├── lib.rs              # Crate entry: pub mod declarations, CSP/SSP constants, root API fns
+│   │
+│   │   ── Primitive / Crypto Layer ──────────────────────────────────────────
+│   ├── block.rs            # Block([u8; 16]) — 128-bit word, XOR arithmetic, sigma
+│   ├── delta.rs            # Delta(Block) — global correlation key with LSB invariant
+│   ├── keys.rs             # Key(Block) — IT-MAC sender key (LSB=0 enforced)
+│   ├── macs.rs             # Mac(Block) — IT-MAC receiver MAC
+│   ├── sharing.rs          # AuthBitShare, AuthBit, InputSharing, build_share
+│   ├── aes.rs              # FixedKeyAes singleton, TCCR/CCR/CR hash constructions
+│   ├── matrix.rs           # TypedMatrix<T>, BlockMatrix, KeyMatrix (column-major)
+│   │
+│   │   ── Tensor Gate Substrate ─────────────────────────────────────────────
+│   ├── tensor_macro.rs     # Construction 1: tensor_garbler / tensor_evaluator (GGM macro)
+│   ├── tensor_ops.rs       # Low-level GGM seed expansion, unary outer-product routines
+│   ├── tensor_pre.rs       # SemiHonestTensorPre — semi-honest (single-delta) preprocessing
+│   ├── tensor_gen.rs       # TensorProductGen — semi-honest online garbler
+│   ├── tensor_eval.rs      # TensorProductEval — semi-honest online evaluator
+│   │
+│   │   ── Preprocessing Layer ──────────────────────────────────────────────
+│   ├── bcot.rs             # IdealBCot — ideal bCOT (in-process); shared delta across triples
+│   ├── feq.rs              # feq::check — ideal F_eq matrix-equality check (abort on mismatch)
+│   ├── auth_tensor_fpre.rs # TensorFpre — ideal F_pre (trusted dealer, insecure)
+│   ├── leaky_tensor_pre.rs # LeakyTensorPre, LeakyTriple — Pi_LeakyTensor (Construction 2)
+│   ├── auth_tensor_pre.rs  # two_to_one_combine, combine_leaky_triples, bucket_size_for
+│   ├── preprocessing.rs    # TensorFpreGen/Eval, TensorPreprocessing trait, both backends
+│   │
+│   │   ── Online Layer ─────────────────────────────────────────────────────
+│   ├── auth_tensor_gen.rs  # AuthTensorGen — maliciously-secure online garbler (P1 + P2)
+│   ├── auth_tensor_eval.rs # AuthTensorEval — maliciously-secure online evaluator (P1 + P2)
+│   └── online.rs           # check_zero, hash_check_zero — CheckZero primitives
+│
 ├── benches/
-│   ├── benchmarks.rs           # Criterion benchmark suite (Cargo [[bench]] entry point)
-│   └── network_simulator.rs    # Tokio-based synthetic network delay helper
-├── references/                 # Academic papers and reference implementation (not compiled)
-│   ├── Authenticated_Garbling_with_Tensor_Gates-7.pdf
-│   ├── 2022-798.pdf
-│   ├── appendix_krrw_pre.tex
-│   └── mpz-dev/                # Reference library (separate Cargo workspace, not a dependency)
-├── Cargo.toml                  # Package manifest and dependencies
-├── Cargo.lock                  # Locked dependency versions
-├── README.md                   # Usage and project overview
-├── communication.csv           # Benchmark output data (communication costs)
-├── walltime.csv                # Benchmark output data (wall-clock times)
-└── .vscode/                    # Editor configuration (launch.json, settings.json)
-```
-
-## Module Hierarchy
-
-`src/lib.rs` declares all modules as `pub mod`:
-
-```
-lib
-├── block          (Block, BlockSerialize)
-├── delta          (Delta)
-├── keys           (Key)
-├── macs           (Mac)
-├── sharing        (InputSharing, AuthBitShare, AuthBit, build_share)
-├── matrix         (TypedMatrix<T>, BlockMatrix, KeyMatrix, MatrixViewRef, MatrixViewMut)
-├── aes            (FixedKeyAes, FIXED_KEY_AES, AesEncryptor)
-├── tensor_pre     (SemiHonestTensorPre, SemiHonestTensorPreGen, SemiHonestTensorPreEval)
-├── tensor_gen     (TensorProductGen)
-├── tensor_eval    (TensorProductEval)
-├── tensor_ops     (gen_populate_seeds_mem_optimized, gen_unary_outer_product)
-├── auth_tensor_fpre  (TensorFpre, TensorFpreGen, TensorFpreEval)
-├── auth_tensor_gen   (AuthTensorGen)
-└── auth_tensor_eval  (AuthTensorEval)
-```
-
-**Dependency relationships between modules (inner → outer):**
-
-```
-block ← delta ← keys ← sharing
-block             ← macs ← sharing
-block ← matrix
-block ← aes
-block, delta, sharing ← tensor_pre
-block, delta, matrix, aes, tensor_pre, tensor_ops ← tensor_gen
-block, matrix, aes, tensor_pre ← tensor_eval
-block, delta, matrix, aes ← tensor_ops
-block, delta, sharing ← auth_tensor_fpre
-block, delta, sharing, auth_tensor_fpre, matrix, aes, tensor_ops ← auth_tensor_gen
-block, delta, sharing, auth_tensor_fpre, matrix, aes ← auth_tensor_eval
+│   ├── benchmarks.rs       # Criterion bench entry; online/preprocessing groups; network model
+│   └── network_simulator.rs # SimpleNetworkSimulator — 100 Mbps async transit simulation
+│
+├── tools/
+│   ├── parse_results.py    # Bench log + Criterion JSON → results.csv + paper PDF figures
+│   ├── comparison_table.py # Generates paper comparison table
+│   └── aes_microbench.rs   # Standalone AES microbenchmark (not a Criterion bench)
+│
+├── examples/               # (empty or exploratory; not part of the primary protocol)
+├── references/             # Paper TeX sources (CCS2026 draft)
+├── figures/                # Generated PDF figures from parse_results.py
+├── .planning/              # GSD planning artefacts (roadmap, phase plans, codebase maps)
+└── target/                 # Cargo build output (not committed)
 ```
 
 ## Directory Purposes
 
-**`src/` — Core library (compiled as a Rust library crate):**
-- No `main.rs`; the crate is a pure library.
-- All modules are `pub`; there is no internal/private module split.
-- `tensor_ops.rs` is the only module shared between the semi-honest and authenticated garbler paths.
+**`src/`:**
+- Purpose: Entire library crate. No `main.rs` — this is a `lib` crate consumed by benches.
+- Key files: `lib.rs` (crate root), `preprocessing.rs` (backend trait), `auth_tensor_gen.rs` / `auth_tensor_eval.rs` (online phase).
 
-**`benches/` — Benchmark harness:**
-- `benchmarks.rs` is the Criterion entry point (`[[bench]] name = "benchmarks"` in `Cargo.toml`).
-- `network_simulator.rs` is included as a submodule of `benchmarks.rs` via `mod network_simulator;`, not as a separate Cargo module.
-- Uses `tokio` for async network simulation; the benchmark group `bench_full_protocol_garbling` sweeps matrix sizes from 4×4 to 128×128.
+**`benches/`:**
+- Purpose: Criterion benchmark harnesses. `benchmarks.rs` is the only Criterion entry point (declared in `Cargo.toml` as `[[bench]] name = "benchmarks" harness = false`).
+- Run with: `cargo bench --bench benchmarks`
 
-**`references/` — Research material (not compiled, not a Cargo workspace member):**
-- Contains the paper being implemented and a reference Rust library (`mpz-dev`).
-- `mpz-dev/` has its own `Cargo.toml` and workspace but is not referenced by this project's `Cargo.toml`.
+**`tools/`:**
+- Purpose: Post-processing scripts and a standalone AES microbench. Not part of the Cargo build graph.
+- `parse_results.py` requires Python 3 + matplotlib.
+
+**`references/`:**
+- Purpose: Paper TeX source files referenced from doc-comments (`5_online.tex`, `6_total.tex`, `appendix_krrw_pre.tex`, `appendix_experiments.tex`). Line numbers in code comments refer to these files.
+
+**`.planning/`:**
+- Purpose: GSD phase plans, roadmaps, and codebase maps (ARCHITECTURE.md, STRUCTURE.md, etc.). Not compiled.
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/lib.rs`: crate root; module declarations, global constants (`CSP`, `SSP`, `MAC_ZERO`, `MAC_ONE`), integration tests
-- `benches/benchmarks.rs`: `criterion_main!` benchmark entry point
+- `src/lib.rs`: Crate root; `pub mod` declarations, `CSP`/`SSP` constants, `assemble_*` API functions.
+- `benches/benchmarks.rs`: Criterion `criterion_main!` entry; all benchmark groups.
 
-**Cryptographic Primitives:**
-- `src/block.rs`: `Block` — 128-bit array with XOR, AND, sigma, LSB manipulation
-- `src/aes.rs`: `FixedKeyAes` with `tccr`, `cr`, `ccr` hash functions; global `FIXED_KEY_AES` singleton via `once_cell`
-- `src/delta.rs`: `Delta` — garbling offset, always has LSB = 1
+**Core Protocol:**
+- `src/preprocessing.rs`: `TensorPreprocessing` trait, `IdealPreprocessingBackend`, `UncompressedPreprocessingBackend`, `run_preprocessing`.
+- `src/auth_tensor_gen.rs`: `AuthTensorGen` — online garbler, all garble methods.
+- `src/auth_tensor_eval.rs`: `AuthTensorEval` — online evaluator, all evaluate methods.
+- `src/online.rs`: `check_zero`, `hash_check_zero`.
 
-**Authentication Layer:**
-- `src/keys.rs`: `Key` — garbler-side MAC key; `Key::auth(bit, delta)` derives the corresponding `Mac`
-- `src/macs.rs`: `Mac` — evaluator-side MAC; public constants `MAC_ZERO`, `MAC_ONE`
-- `src/sharing.rs`: `AuthBitShare`, `AuthBit`, `build_share`; defines the cross-authenticated sharing structure
+**Preprocessing Internals:**
+- `src/auth_tensor_fpre.rs`: `TensorFpre` ideal trusted dealer; `into_gen_eval()` that derives D_ev block shares.
+- `src/leaky_tensor_pre.rs`: `LeakyTensorPre::generate()` — Pi_LeakyTensor; `LeakyTriple` output struct.
+- `src/auth_tensor_pre.rs`: `two_to_one_combine`, `combine_leaky_triples`, `bucket_size_for`.
 
-**Matrix / Wire Label Storage:**
-- `src/matrix.rs`: `TypedMatrix<T>`, type aliases `BlockMatrix` / `KeyMatrix`; view types `MatrixViewRef`, `MatrixViewMut`
+**Primitives:**
+- `src/block.rs`: `Block` — everything builds on this.
+- `src/sharing.rs`: `AuthBitShare`, `AuthBit`, `build_share`.
+- `src/aes.rs`: `FIXED_KEY_AES` global singleton; `tccr`/`ccr`/`cr` hash functions.
 
-**Protocol — Semi-Honest:**
-- `src/tensor_pre.rs`: Preprocessing — samples Delta, generates label sharings, splits into Gen/Eval halves
-- `src/tensor_gen.rs`: `TensorProductGen` — garbles first half, second half, final combination
-- `src/tensor_eval.rs`: `TensorProductEval` — evaluates all three rounds; contains duplicated `eval_populate_seeds_mem_optimized`
-- `src/tensor_ops.rs`: Shared primitives — `gen_populate_seeds_mem_optimized`, `gen_unary_outer_product`
-
-**Protocol — Authenticated:**
-- `src/auth_tensor_fpre.rs`: Ideal Fpre — generates `AuthBit`s for alpha/beta/correlated/gamma; splits into FpreGen/FpreEval
-- `src/auth_tensor_gen.rs`: `AuthTensorGen` — authenticated garbling of first/second/final half
-- `src/auth_tensor_eval.rs`: `AuthTensorEval` — authenticated evaluation; also contains duplicated `eval_populate_seeds_mem_optimized`
+**Testing:**
+- `src/lib.rs` `#[cfg(test)] mod tests`: Integration-level tests for Protocol 1 and 2 honest-run and tamper scenarios.
+- `src/preprocessing.rs` `#[cfg(test)] mod tests`: Backend trait dispatch and D_ev invariant tests.
+- `src/online.rs` `#[cfg(test)] mod tests`: `check_zero` unit tests.
+- `src/sharing.rs`, `src/block.rs`, `src/auth_tensor_fpre.rs`, `src/auth_tensor_pre.rs`, `src/leaky_tensor_pre.rs`: Each has its own `#[cfg(test)]` block.
+- No `tests/` integration test directory exists; all tests are inline.
 
 ## Naming Conventions
 
 **Files:**
-- Primitive/utility modules: `<noun>.rs` (e.g., `block.rs`, `delta.rs`, `matrix.rs`)
-- Protocol roles follow the pattern `<protocol_variant>_<role>.rs`:
-  - `tensor_gen.rs`, `tensor_eval.rs` — semi-honest Gen/Eval
-  - `auth_tensor_gen.rs`, `auth_tensor_eval.rs` — authenticated Gen/Eval
-  - `tensor_pre.rs`, `auth_tensor_fpre.rs` — preprocessing
-- Shared operations: `tensor_ops.rs`
+- `snake_case` throughout: `auth_tensor_gen.rs`, `leaky_tensor_pre.rs`, `tensor_ops.rs`.
+- Naming pattern reflects protocol role: `auth_tensor_*` = maliciously-secure online; `tensor_*` = semi-honest or substrate; `leaky_tensor_*` = Construction 2 leaky preprocessing.
 
-**Structs:**
-- Protocol state: `TensorProductGen`, `TensorProductEval`, `AuthTensorGen`, `AuthTensorEval`
-- Preprocessing: `SemiHonestTensorPre`, `SemiHonestTensorPreGen`, `SemiHonestTensorPreEval`
-- Authenticated preprocessing: `TensorFpre`, `TensorFpreGen`, `TensorFpreEval`
-- Primitive newtypes: `Block`, `Delta`, `Key`, `Mac`
-- Sharing types: `InputSharing`, `AuthBitShare`, `AuthBit`
-- Matrix types: `TypedMatrix<T>`, `BlockMatrix` (alias), `KeyMatrix` (alias)
+**Types / Structs:**
+- `PascalCase`: `AuthTensorGen`, `TensorFpreGen`, `LeakyTriple`, `BlockMatrix`, `AuthBitShare`.
+- Suffixes: `Gen` = garbler (P1) side; `Eval` = evaluator (P2) side; `Pre` = preprocessing; `Fpre` = ideal F_pre functionality.
 
 **Functions:**
-- `snake_case` throughout.
-- Garbler methods: `garble_*` (e.g., `garble_first_half`, `garble_final`).
-- Evaluator methods: `evaluate_*` (e.g., `evaluate_first_half`, `evaluate_final`).
-- Input preparation: `get_first_inputs`, `get_second_inputs`.
-- Preprocessing split: `into_gen_eval()` on all `*Pre` / `*Fpre` structs.
+- `snake_case`: `garble_first_half`, `evaluate_final_p2`, `check_zero`, `bucket_size_for`.
+- Protocol variant suffix `_p2` marks wide-ciphertext (Protocol 2) variants: `garble_first_half_p2`, `garble_final_p2`, `evaluate_final_p2`.
+
+**Constants:**
+- `SCREAMING_SNAKE_CASE`: `CSP`, `SSP`, `MAC_ZERO`, `MAC_ONE`, `FIXED_KEY_AES`, `FIXED_KEY`, `BENCHMARK_PARAMS`, `NETWORK_BANDWIDTH_BPS`.
+
+**Fields:**
+- `snake_case` with semantic prefix: `alpha_auth_bit_shares`, `beta_d_ev_shares`, `correlated_d_ev_shares`, `gamma_d_ev_shares`.
+- D_ev field naming: `*_d_ev_shares` for Block-valued D_ev label pairs (n, m, n*m); `gamma_d_ev_shares` for `Vec<AuthBitShare>` (the only D_ev field with IT-MAC structure).
+
+**Index conventions:**
+- All n*m vectors: column-major `index = j * n + i` (j = column/beta index, i = row/alpha index).
+- Tree endianness: index 0 = LSB, index n-1 = MSB; GGM tree starts from MSB (`x[n-1]`).
 
 ## Where to Add New Code
 
-**New cryptographic hash / PRF:**
-- Add to `src/aes.rs` as a method on `FixedKeyAes`.
+**New preprocessing backend (e.g., compressed preprocessing):**
+- Implement `TensorPreprocessing` trait defined in `src/preprocessing.rs:97`.
+- Add a new zero-field unit struct in `src/preprocessing.rs`.
+- Must populate all fields of `TensorFpreGen` / `TensorFpreEval` including all four `*_d_ev_shares` pairs.
+- Tests: add `test_trait_dispatch_*` and D_ev invariant tests in `src/preprocessing.rs` `#[cfg(test)]`.
 
-**New wire label type (not `Block` or `Key`):**
-- Implement `MatrixElement` (sealed trait in `src/matrix.rs`) for the new type and add to `matrix.rs`.
+**New online-phase garble/evaluate method:**
+- Add `pub fn garble_*(...)` to `src/auth_tensor_gen.rs` and `pub fn evaluate_*(...)` to `src/auth_tensor_eval.rs`.
+- If the method is a new protocol variant (e.g., Protocol 3), suffix methods with `_p3`.
+- Integration test: add a `run_full_protocol_*` body + `#[test]` functions in `src/lib.rs` `#[cfg(test)]`.
 
-**New protocol variant (e.g., a different security model):**
-- Follow the naming pattern `<variant>_fpre.rs`, `<variant>_gen.rs`, `<variant>_eval.rs`.
-- Declare all three as `pub mod` in `src/lib.rs`.
-- Reuse `tensor_ops.rs` for the seed-tree and outer-product primitives.
+**New online primitive (e.g., `open`):**
+- Add to `src/online.rs` following the existing `check_zero` / `hash_check_zero` pattern.
+- Unit tests in the same file's `#[cfg(test)] mod tests` block.
 
-**New sharing / authentication primitive:**
-- Add to `src/sharing.rs`.
+**New crypto primitive (helper over Block/Delta/Key):**
+- Add to the appropriate primitive file (`src/block.rs`, `src/keys.rs`, `src/aes.rs`) or create a new `src/<name>.rs` and add `pub mod <name>;` to `src/lib.rs`.
 
-**New benchmark:**
-- Add a new benchmark function to `benches/benchmarks.rs` and register it in the `criterion_group!` macro at the bottom of that file.
+**New benchmark group:**
+- Add a `fn bench_*(c: &mut Criterion)` function in `benches/benchmarks.rs` and include it in the `criterion_group!` / `criterion_main!` macro at the bottom.
+- Follow the `setup_correlated_pair(n, m)` helper pattern for constructing test state.
+
+**New paper-figure metric:**
+- Emit a `KB,...` or similar tagged line from `benches/benchmarks.rs`, then update `tools/parse_results.py` to parse and plot it.
 
 ## Special Directories
 
-**`references/`:**
-- Purpose: academic papers (PDF, LaTeX) and a reference Rust codebase.
-- Generated: No
-- Committed: Yes (tracked in git)
-- Not compiled: `references/mpz-dev/` is a completely separate Cargo workspace not referenced by this project.
+**`target/`:**
+- Purpose: Cargo build output (compiled libs, bench binaries, criterion JSON).
+- Generated: Yes. Committed: No.
 
-**`.vscode/`:**
-- Purpose: VSCode launch and settings configuration.
-- Generated: No (manually maintained)
-- Committed: Yes
+**`.planning/`:**
+- Purpose: GSD planning documents, phase plans, codebase maps.
+- Generated: By GSD agents. Committed: Yes (in repo).
+
+**`references/`:**
+- Purpose: Paper TeX sources. Committed: Yes. Referenced in doc-comments by filename and line number.
+
+**`figures/`:**
+- Purpose: PDF figures generated by `tools/parse_results.py`. Committed: Conditionally (not auto-generated by Cargo).
 
 ---
 
-*Structure analysis: 2026-04-19*
+*Structure analysis: 2026-04-28*
