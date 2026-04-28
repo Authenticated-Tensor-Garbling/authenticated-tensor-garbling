@@ -228,6 +228,8 @@ pub fn combine_leaky_triples(
     // Package the combined LeakyTriple into the preprocessing output structs.
     // Input wire labels (alpha_labels / beta_labels) removed in Phase 1.2(c) —
     // they are now generated at garble time by AuthTensorGen::prepare_input_labels.
+    // _eval / _gen Block stubs and gamma_* stubs are populated by
+    // run_preprocessing post-bucketing via derive_sharing_blocks (local-only).
     (
         TensorFpreGen {
             n,
@@ -235,12 +237,17 @@ pub fn combine_leaky_triples(
             chunking_factor,
             delta_a,
             alpha_auth_bit_shares: acc.gen_x_shares,
+            alpha_eval: vec![],
+            alpha_gen: vec![],
             beta_auth_bit_shares: acc.gen_y_shares,
+            beta_eval: vec![],
+            beta_gen: vec![],
             correlated_auth_bit_shares: acc.gen_z_shares,
-            alpha_eval: vec![],      // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            beta_eval: vec![],       // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            correlated_eval: vec![], // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            gamma_eval: vec![],      // RENAMED Phase 9 D-05; uncompressed path is stub
+            correlated_eval: vec![],
+            correlated_gen: vec![],
+            gamma_auth_bit_shares: vec![],
+            gamma_eval: vec![],
+            gamma_gen: vec![],
         },
         TensorFpreEval {
             n,
@@ -248,12 +255,17 @@ pub fn combine_leaky_triples(
             chunking_factor,
             delta_b,
             alpha_auth_bit_shares: acc.eval_x_shares,
+            alpha_eval: vec![],
+            alpha_gen: vec![],
             beta_auth_bit_shares: acc.eval_y_shares,
+            beta_eval: vec![],
+            beta_gen: vec![],
             correlated_auth_bit_shares: acc.eval_z_shares,
-            alpha_eval: vec![],      // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            beta_eval: vec![],       // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            correlated_eval: vec![], // stub: uncompressed path does not generate D_ev shares (Phase 9 stub)
-            gamma_eval: vec![],      // RENAMED Phase 9 D-05; uncompressed path is stub
+            correlated_eval: vec![],
+            correlated_gen: vec![],
+            gamma_auth_bit_shares: vec![],
+            gamma_eval: vec![],
+            gamma_gen: vec![],
         },
     )
 }

@@ -90,11 +90,11 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
 /// benches.
 ///
 /// Unlike `setup_auth_gen` / `setup_auth_eval` — which each spin up an independent
-/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_eval` empty per
+/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_auth_bit_shares` empty per
 /// `src/auth_tensor_fpre.rs:180-183, 194-197`) — this helper invokes the ideal
 /// trusted-dealer backend `IdealPreprocessingBackend::run`, which populates the
 /// four D_ev field pairs (`alpha_eval` length n, `beta_eval` length m,
-/// `correlated_eval` length n*m, `gamma_eval` length n*m) on BOTH
+/// `correlated_eval` length n*m, `gamma_auth_bit_shares` length n*m) on BOTH
 /// the generator and the evaluator with matching IT-MAC shares.
 ///
 /// Required for any online benchmark that calls `assemble_e_input_wire_shares_p1`
