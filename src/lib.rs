@@ -31,10 +31,13 @@ use crate::auth_tensor_eval::AuthTensorEval;
 use crate::sharing::AuthBitShare;
 use crate::keys::Key;
 
-#[allow(dead_code)]
-const CSP: usize = 128;
-#[allow(dead_code)]
-const SSP: usize = 40;
+/// κ — computational security parameter (in bits). Determines `Block` width
+/// and all κ-bit cipher / hash output widths.
+pub const CSP: usize = 128;
+/// ρ — statistical security parameter (in bits). Bench accounting reads this
+/// via `RHO_BYTES = (SSP + 7) / 8` so reported communication and the network
+/// simulator's transit time track the paper's κ + ρ leaf-ciphertext width.
+pub const SSP: usize = 40;
 
 /// Gate-semantics sanity check — verifies that an honestly garbled tensor gate
 /// produces `v_γ = v_α · v_β` at every output position.

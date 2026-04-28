@@ -22,6 +22,11 @@ family, different saturation. The protocol legend is emitted only on the
 64×64 wallclock panel (LEGEND_CELL); the other panels rely on the same
 left=darker=P2, right=lighter=P1 convention.
 
+Note: an earlier revision plotted a separate red "Standard" (CWYY dual-exec)
+reference bar at x=0; that bar has been removed and the red color is now
+applied directly to the tile=1 pair, which is the equivalent half-gates
+baseline configuration of our protocol.
+
 Usage:
     python3 tools/parse_results.py                               # auto-detect latest bench-*.log
     python3 tools/parse_results.py --log bench-20260426-1901.log
@@ -43,7 +48,12 @@ from pathlib import Path
 from typing import Optional
 
 KB_LINE = re.compile(
-    r"^KB,p(?P<proto>[12]),N=(?P<n>\d+),M=(?P<m>\d+),tile=(?P<tile>\d+),kb=(?P<kb>[\d.]+)\s*$"
+    # `kappa=…,rho=…` are optional so old logs (pre-parameterization) still parse.
+    # New benches always emit them — see `gc_bytes_p2` / KB log lines in
+    # `benches/benchmarks.rs`. When absent we leave the columns blank.
+    r"^KB,p(?P<proto>[12]),N=(?P<n>\d+),M=(?P<m>\d+),tile=(?P<tile>\d+)"
+    r"(?:,kappa=(?P<kappa>\d+),rho=(?P<rho>\d+))?"
+    r",kb=(?P<kb>[\d.]+)\s*$"
 )
 
 CRITERION_PATH = re.compile(
@@ -52,11 +62,11 @@ CRITERION_PATH = re.compile(
 
 PAPER_SIZES_DEFAULT = [64, 128, 256]
 TILES = list(range(1, 9))
-BASELINE_TILE = 1
 OPTIMAL_TILE = 6
-COLOR_BASELINE = "#d62728"  # paper's "red"
-COLOR_OPTIMAL = "#1f77b4"   # paper's "blue"
-COLOR_DEFAULT = "#bdbdbd"   # gray
+BASELINE_TILE = 1
+COLOR_BASELINE = "#d62728"  # paper's "red" — tile=1 (half-gates baseline configuration)
+COLOR_OPTIMAL = "#1f77b4"   # paper's "blue" — tile=6
+COLOR_DEFAULT = "#bdbdbd"   # gray — every other tile
 LIGHTEN_FRAC = 0.55         # P1 = blend toward white by this fraction
 
 
@@ -69,17 +79,30 @@ def lighten(hex_color: str, frac: float = LIGHTEN_FRAC) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def parse_kb(log_path: Path) -> dict[tuple[int, int, int, int], float]:
-    """Return {(proto, n, m, tile): kb}. Re-runs in the same log overwrite."""
-    out: dict[tuple[int, int, int, int], float] = {}
+def parse_kb(
+    log_path: Path,
+) -> tuple[
+    dict[tuple[int, int, int, int], float],
+    dict[tuple[int, int, int, int], tuple[Optional[int], Optional[int]]],
+]:
+    """Return ({(proto, n, m, tile): kb}, {(proto, n, m, tile): (kappa, rho)}).
+
+    Re-runs in the same log overwrite. `(kappa, rho)` is `(None, None)` for
+    pre-parameterization logs that don't carry those fields.
+    """
+    kb_out: dict[tuple[int, int, int, int], float] = {}
+    params_out: dict[tuple[int, int, int, int], tuple[Optional[int], Optional[int]]] = {}
     with open(log_path) as f:
         for line in f:
             m = KB_LINE.match(line.strip())
             if not m:
                 continue
             key = (int(m["proto"]), int(m["n"]), int(m["m"]), int(m["tile"]))
-            out[key] = float(m["kb"])
-    return out
+            kb_out[key] = float(m["kb"])
+            kappa = int(m["kappa"]) if m["kappa"] is not None else None
+            rho   = int(m["rho"])   if m["rho"]   is not None else None
+            params_out[key] = (kappa, rho)
+    return kb_out, params_out
 
 
 def parse_ms(criterion_root: Path) -> dict[tuple[int, int, int, int], tuple[float, float, float]]:
@@ -102,24 +125,36 @@ def parse_ms(criterion_root: Path) -> dict[tuple[int, int, int, int], tuple[floa
     return out
 
 
-def write_csv(out_dir: Path, ms_data, kb_data) -> None:
+def write_csv(out_dir: Path, ms_data, kb_data, params_data) -> None:
     keys = sorted(set(ms_data.keys()) | set(kb_data.keys()))
     path = out_dir / "results.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["protocol", "N", "M", "tile", "ms_mean", "ms_ci_low", "ms_ci_high", "kb"])
+        w.writerow([
+            "protocol", "N", "M", "tile",
+            "ms_mean", "ms_ci_low", "ms_ci_high", "kb",
+            "kappa", "rho",
+        ])
         for k in keys:
             mean, low, high = ms_data.get(k, (None, None, None))
             kb = kb_data.get(k)
-            w.writerow([f"p{k[0]}", k[1], k[2], k[3], mean, low, high, kb])
+            kappa, rho = params_data.get(k, (None, None))
+            w.writerow([
+                f"p{k[0]}", k[1], k[2], k[3],
+                mean, low, high, kb,
+                kappa, rho,
+            ])
     print(f"  wrote {path} ({len(keys)} rows)")
 
 
 def bar_color(tile: int) -> str:
-    if tile == BASELINE_TILE:
-        return COLOR_BASELINE
+    """Color for an our-protocol tile bar. tile=1 is the half-gates
+    baseline configuration (red); tile=6 is the optimum (blue); every
+    other tile is gray."""
     if tile == OPTIMAL_TILE:
         return COLOR_OPTIMAL
+    if tile == BASELINE_TILE:
+        return COLOR_BASELINE
     return COLOR_DEFAULT
 
 
@@ -134,12 +169,14 @@ def plot_grouped_bar(
     ylabel: str,
     show_legend: bool = False,
 ) -> None:
-    """Grouped bar chart: P2 on the left of each tile pair, P1 on the right.
+    """Grouped bar chart with one (P2 left, P1 right) pair per tile.
 
-    Bars share the tile-coloring convention (tile 1 red, tile 6 blue, else gray).
-    P2 uses the full tile color; P1 uses a lightened version of the same color
-    (blended toward white by ``LIGHTEN_FRAC``) so the protocol pair stays in
-    the same hue family while remaining instantly distinguishable.
+    P2 uses the tile-color; P1 uses a lightened version (blended toward
+    white by ``LIGHTEN_FRAC``) so the protocol pair stays in the same hue
+    family while remaining distinguishable.
+
+    Tile coloring: tile=1 = red (half-gates baseline configuration);
+    tile=6 = blue (optimum); every other tile = gray.
     """
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
@@ -174,9 +211,8 @@ def plot_grouped_bar(
     ax.spines["right"].set_visible(False)
 
     if show_legend:
-        # Use the gray tile color at full vs lightened for the swatches —
-        # the dark/light split parallels what the reader sees on every bar
-        # pair regardless of tile color.
+        # Gray tile color at full vs lightened communicates the P2/P1 split
+        # that holds across every tile pair regardless of color.
         legend_handles = [
             Patch(facecolor=COLOR_DEFAULT, edgecolor="black", label="P2 (left)"),
             Patch(facecolor=lighten(COLOR_DEFAULT), edgecolor="black", label="P1 (right)"),
@@ -253,15 +289,20 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
 
     print(f"reading KB lines from {log_path}")
-    kb_data = parse_kb(log_path)
+    kb_data, params_data = parse_kb(log_path)
     print(f"reading Criterion ms estimates under {args.criterion_root}")
     ms_data = parse_ms(args.criterion_root)
 
     n_kb, n_ms = len(kb_data), len(ms_data)
     n_joined = len(set(kb_data) & set(ms_data))
     print(f"  KB cells: {n_kb}   ms cells: {n_ms}   joined: {n_joined}")
+    distinct_params = sorted({
+        p for p in params_data.values() if p != (None, None)
+    })
+    if distinct_params:
+        print(f"  (κ, ρ) seen: {distinct_params}")
 
-    write_csv(args.out, ms_data, kb_data)
+    write_csv(args.out, ms_data, kb_data, params_data)
 
     if args.no_plots:
         return 0

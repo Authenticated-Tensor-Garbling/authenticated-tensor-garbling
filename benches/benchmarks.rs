@@ -17,6 +17,7 @@ use authenticated_tensor_garbling::{
     preprocessing::run_preprocessing,
     assemble_e_input_wire_shares_p1,
     assemble_c_alpha_beta_shares_p2,
+    CSP, SSP,
 };
 use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
 
@@ -25,7 +26,15 @@ use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, Te
 // computing `bytes * 8 / NETWORK_BANDWIDTH_BPS` ns per round and adding it
 // onto the measured compute time — no tokio, no scheduler jitter.
 const NETWORK_BANDWIDTH_BPS: u64 = 100_000_000;
-const BLOCK_BYTES: usize = size_of::<Block>();
+// Byte widths derived from κ (CSP) and ρ (SSP). KAPPA_BYTES is the on-wire
+// width for κ-bit objects (GGM-tree ciphertexts, P1 narrow ciphertexts, the
+// CheckZero digest, and the κ-half of P2 wide ciphertexts); RHO_BYTES is the
+// width for the ρ-half of P2 wide leaf ciphertexts (`6_total.tex:90`,
+// Construction 4). When ρ later changes in the actual computation, bumping
+// `SSP` in `src/lib.rs` is the single source-of-truth knob — bench accounting
+// and the network-simulator transit time track automatically.
+const KAPPA_BYTES: usize = (CSP + 7) / 8;
+const RHO_BYTES:   usize = (SSP + 7) / 8;
 
 #[inline]
 fn transit_ns(bytes: usize) -> u64 {
@@ -44,14 +53,14 @@ static RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
 // Benchmark parameters — (n, m) pairs matching the paper's sweep
 // (appendix_experiments.tex, §Methodology).
 const BENCHMARK_PARAMS: &[(usize, usize)] = &[
-    (4, 4),
-    (8, 8),
-    (16, 16),
-    (24, 24),
-    (32, 32),
-    (48, 48),
+    // (4, 4),
+    // (8, 8),
+    // (16, 16),
+    // (24, 24),
+    // (32, 32),
+    // (48, 48),
     (64, 64),
-    (96, 96),
+    // (96, 96),
     (128, 128),
     (256, 256),
 ];
@@ -106,33 +115,49 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 }
 
 /// Total GC byte count for Protocol 1 garble output at `(n, m, chunking_factor)`.
-/// Sum is `chunk_levels.len() * 2 * BLOCK_BYTES + chunk_cts.len() * BLOCK_BYTES`
+/// Sum is `chunk_levels.len() * 2 * KAPPA_BYTES + chunk_cts.len() * KAPPA_BYTES`
 /// per chunk over both halves, matching `bench_online_with_networking_for_size:413–417`.
 /// Output count is determined by `(n, m, chunking_factor)` alone, so this is
 /// called once per cell outside the timed iter loop.
+///
+/// All P1 ciphertexts are κ-wide (no ρ widening); the protocol is unauthenticated.
 fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
     let (first_levels, first_cts) = generator.garble_first_half();
     let (second_levels, second_cts) = generator.garble_second_half();
-    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
-    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * BLOCK_BYTES).sum();
-    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
-    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * BLOCK_BYTES).sum();
+    // GGM-tree internal-node ciphertexts: 2 × κ bits per row.
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    // P1 narrow leaf ciphertext: κ bits per row.
+    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * KAPPA_BYTES).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
 }
 
 /// Total GC byte count for Protocol 2 garble output. P2's `chunk_cts` is a
-/// `Vec<Vec<(Block, Block)>>` (wide ciphertexts per `6_total.tex:90`, the
-/// κ + ρ extension), so cts are multiplied by 2 — diverges from `gc_bytes_p1`
-/// where `chunk_cts: Vec<Vec<Block>>` (single blocks).
+/// `Vec<Vec<(Block, Block)>>` (wide leaf ciphertexts per `6_total.tex:90`, the
+/// κ + ρ extension): the .0 component carries the κ-bit Δ_gb-label material,
+/// .1 carries the ρ-bit Δ_ev-MAC material. GGM-tree level ciphertexts stay
+/// κ-wide.
+///
+/// Per-row width on the wire:
+///   * `levels`: 2 × KAPPA_BYTES (left + right child of GGM-tree internal node).
+///   * `cts`:    KAPPA_BYTES + RHO_BYTES (κ-half + ρ-half of wide leaf cipher).
+///
+/// In-memory the ρ-half is still a full `Block` (the cryptographic computation
+/// is unchanged). This function reports only the on-wire byte count, which is
+/// what the network simulator sleeps on and what the paper's communication
+/// formulas refer to.
 fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
     let (first_levels, first_cts) = generator.garble_first_half_p2();
     let (second_levels, second_cts) = generator.garble_second_half_p2();
-    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
-    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
-    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
-    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * 2 * BLOCK_BYTES).sum();
+    // GGM-tree internal-node ciphertexts stay κ-wide (`6_total.tex:90`).
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    // Wide leaf ciphertexts: κ + ρ bits per row (`6_total.tex:90`, Construction 4).
+    let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
     levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
 }
 
@@ -256,19 +281,23 @@ fn bench_online_p1(c: &mut Criterion) {
                         // P1 send-back of masked values ev → gb
                         // (`5_online.tex:228`): (n + m) bits, ceil-div to bytes.
                         let sendback_bytes = (n + m + 7) / 8;
-                        let comm_bytes_per_op = bytes + sendback_bytes + BLOCK_BYTES;
+                        // CheckZero digest (`5_online.tex:226–247`) is κ bits.
+                        let comm_bytes_per_op = bytes + sendback_bytes + KAPPA_BYTES;
                         // One KB line per cell — emitted lazily so we never
-                        // print for filtered-out cells.
+                        // print for filtered-out cells. `kappa`/`rho` embedded
+                        // so figures self-label which parameter set generated
+                        // them; P1 has no ρ component but the field is kept
+                        // for parser-uniformity with the P2 line.
                         println!(
-                            "KB,p1,N={},M={},tile={},kb={:.4}",
-                            n, m, chunking_factor,
+                            "KB,p1,N={},M={},tile={},kappa={},rho={},kb={:.4}",
+                            n, m, chunking_factor, CSP, SSP,
                             (comm_bytes_per_op as f64) / 1024.0,
                         );
                         bytes
                     });
                     let sendback_bytes = (n + m + 7) / 8;
                     let transit_per_iter = Duration::from_nanos(
-                        transit_ns(gc_bytes) + transit_ns(sendback_bytes) + transit_ns(BLOCK_BYTES),
+                        transit_ns(gc_bytes) + transit_ns(sendback_bytes) + transit_ns(KAPPA_BYTES),
                     );
 
                     b.iter_custom(|iters| {
@@ -367,16 +396,17 @@ fn bench_online_p2(c: &mut Criterion) {
                 |b, &chunking_factor| {
                     let gc_bytes = *gc_cache.get_or_init(|| {
                         let bytes = gc_bytes_p2(n, m, chunking_factor);
-                        let comm_bytes_per_op = bytes + BLOCK_BYTES;
+                        // CheckZero digest (`6_total.tex:214`) is κ bits.
+                        let comm_bytes_per_op = bytes + KAPPA_BYTES;
                         println!(
-                            "KB,p2,N={},M={},tile={},kb={:.4}",
-                            n, m, chunking_factor,
+                            "KB,p2,N={},M={},tile={},kappa={},rho={},kb={:.4}",
+                            n, m, chunking_factor, CSP, SSP,
                             (comm_bytes_per_op as f64) / 1024.0,
                         );
                         bytes
                     });
                     let transit_per_iter = Duration::from_nanos(
-                        transit_ns(gc_bytes) + transit_ns(BLOCK_BYTES),
+                        transit_ns(gc_bytes) + transit_ns(KAPPA_BYTES),
                     );
 
                     b.iter_custom(|iters| {
