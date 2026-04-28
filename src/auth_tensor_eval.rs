@@ -4,6 +4,7 @@ use crate::aes::FIXED_KEY_AES;
 use crate::preprocessing::TensorFpreEval;
 use crate::matrix::MatrixViewRef;
 use crate::tensor_ops::eval_unary_outer_product_wide;
+use crate::auth_tensor_gen::InputLabelsForEval;
 
 pub struct AuthTensorEval {
     cipher: &'static FixedKeyAes,
@@ -31,6 +32,35 @@ pub struct AuthTensorEval {
     /// Evaluator's D_ev-authenticated shares of `l_gamma`; length n*m, column-major.
     /// (Phase 9 D-05.)
     pub gamma_d_ev_shares: Vec<AuthBitShare>,
+
+    /// Eval's half of (sharing of x under δ_a). Length n. Populated by
+    /// `install_input_labels` (BUG-02 / Phase 1.2). Auth-bit-style: this
+    /// is the `key` half handed off by gen; gen retains the `mac` half
+    /// in `AuthTensorGen.x_gen`. Pair encodes `x_i · δ_a`.
+    pub x_gen: Vec<Block>,
+    /// Eval's half of (sharing of y under δ_a). Length m.
+    pub y_gen: Vec<Block>,
+    /// Eval's half of (sharing of x XOR α under δ_a) — the input wire
+    /// label, eval side. Length n. Populated by `install_input_labels`.
+    /// Equals `x_gen[i] XOR mac_e_α` where `mac_e_α` is eval's
+    /// α-share `mac` from `alpha_auth_bit_shares`. Pair with gen's
+    /// `masked_x_gen` encodes `(x XOR α) · δ_a`. Used as the GGM-tree
+    /// seed input by `evaluate_first_half` once callers migrate
+    /// (Phase 1.2(b)).
+    pub masked_x_gen: Vec<Block>,
+    /// Eval's half of (sharing of y XOR β under δ_a). Length m.
+    pub masked_y_gen: Vec<Block>,
+    /// Cleartext masked bits d_x[i] = x_i XOR α_i. Length n. Populated
+    /// by `install_input_labels` from the gen handoff. Used as choice
+    /// bits for first-half GGM-tree traversal in
+    /// `eval_chunked_half_outer_product`, replacing the prior
+    /// LSB-of-wire-label readout (which is no longer correct under
+    /// auth-bit-style input encoding — eval's wire-label LSB is now
+    /// `b_i`, not `d_i`).
+    pub masked_x_bits: Vec<bool>,
+    /// Cleartext masked bits d_y[j] = y_j XOR β_j. Length m. Used for
+    /// second-half GGM-tree traversal.
+    pub masked_y_bits: Vec<bool>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -65,6 +95,12 @@ impl AuthTensorEval {
             beta_d_ev_shares: Vec::new(),
             correlated_d_ev_shares: Vec::new(),
             gamma_d_ev_shares: Vec::new(),
+            x_gen: Vec::new(),
+            y_gen: Vec::new(),
+            masked_x_gen: Vec::new(),
+            masked_y_gen: Vec::new(),
+            masked_x_bits: Vec::new(),
+            masked_y_bits: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
             first_half_out_ev: BlockMatrix::new(n, m),
@@ -89,12 +125,86 @@ impl AuthTensorEval {
             beta_d_ev_shares: fpre_eval.beta_d_ev_shares,
             correlated_d_ev_shares: fpre_eval.correlated_d_ev_shares,
             gamma_d_ev_shares: fpre_eval.gamma_d_ev_shares,
+            x_gen: Vec::new(),
+            y_gen: Vec::new(),
+            masked_x_gen: Vec::new(),
+            masked_y_gen: Vec::new(),
+            masked_x_bits: Vec::new(),
+            masked_y_bits: Vec::new(),
             first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
             first_half_out_ev: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
             second_half_out_ev: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
             final_computed: false,
         }
+    }
+
+    /// Install eval-side input wire labels handed off by the garbler's
+    /// `AuthTensorGen::prepare_input_labels`.
+    ///
+    /// Per `.planning/LABELS-BUG-CONTEXT.md` "Correct Target Architecture"
+    /// (BUG-02), input wire labels arrive at the evaluator from the
+    /// garbler's online-phase message, not via preprocessing. In this
+    /// in-process simulation the "transmission" is the
+    /// `InputLabelsForEval` return value passed directly here.
+    ///
+    /// Side effects on `self`:
+    /// - `self.x_gen`, `self.y_gen` populated (lengths n, m). These are
+    ///   the eval halves of the input-share IT-MAC pairs (`key` halves).
+    /// - `self.masked_x_gen` populated, length n. Eval's wire-label half
+    ///   under δ_a; equals `x_input_eval_keys[i] XOR mac_e_α`.
+    /// - `self.masked_y_gen` populated, length m.
+    /// - `self.masked_x_bits` populated, length n. Cleartext masked bits
+    ///   used as GGM-tree choice bits in `evaluate_first_half`.
+    /// - `self.masked_y_bits` populated, length m.
+    ///
+    /// MUST be called before `evaluate_first_half` /
+    /// `evaluate_second_half` once callers migrate to this API
+    /// (Phase 1.2(b)).
+    ///
+    /// # Panics
+    /// Panics if any of the handed-off vector lengths does not match
+    /// `self.n` / `self.m`, or if `self.alpha_auth_bit_shares` /
+    /// `self.beta_auth_bit_shares` are not yet populated.
+    pub fn install_input_labels(&mut self, labels: InputLabelsForEval) {
+        assert_eq!(labels.x_input_eval_keys.len(), self.n,
+            "x_input_eval_keys.len() ({}) must equal self.n ({})",
+            labels.x_input_eval_keys.len(), self.n);
+        assert_eq!(labels.y_input_eval_keys.len(), self.m,
+            "y_input_eval_keys.len() ({}) must equal self.m ({})",
+            labels.y_input_eval_keys.len(), self.m);
+        assert_eq!(labels.masked_x_bits.len(), self.n);
+        assert_eq!(labels.masked_y_bits.len(), self.m);
+        assert_eq!(self.alpha_auth_bit_shares.len(), self.n,
+            "alpha_auth_bit_shares must be populated before install_input_labels; \
+             len={} expected={}",
+            self.alpha_auth_bit_shares.len(), self.n);
+        assert_eq!(self.beta_auth_bit_shares.len(), self.m,
+            "beta_auth_bit_shares must be populated before install_input_labels; \
+             len={} expected={}",
+            self.beta_auth_bit_shares.len(), self.m);
+
+        // Eval's α-share half under δ_a is `mac_e_α` (auth-bit `mac`
+        // held by eval); pair with gen's `key_g_α XOR a · δ_a` encodes
+        // `α · δ_a`. Wire-label eval half is therefore the IT-MAC sum:
+        // `input_eval_key XOR mac_e_α`.
+        self.masked_x_gen = (0..self.n)
+            .map(|i| {
+                let mac_e_alpha = *self.alpha_auth_bit_shares[i].mac.as_block();
+                labels.x_input_eval_keys[i] ^ mac_e_alpha
+            })
+            .collect();
+        self.masked_y_gen = (0..self.m)
+            .map(|j| {
+                let mac_e_beta = *self.beta_auth_bit_shares[j].mac.as_block();
+                labels.y_input_eval_keys[j] ^ mac_e_beta
+            })
+            .collect();
+
+        self.x_gen = labels.x_input_eval_keys;
+        self.y_gen = labels.y_input_eval_keys;
+        self.masked_x_bits = labels.masked_x_bits;
+        self.masked_y_bits = labels.masked_y_bits;
     }
 
     fn eval_chunked_half_outer_product(
