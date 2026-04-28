@@ -23,8 +23,11 @@ impl TensorFpre {
     pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize) -> Self {
         let mut rng = ChaCha12Rng::seed_from_u64(seed);
 
+        // δ_a has LSB=1 (gen's pointer-bit convention); δ_b has LSB=0
+        // so that lsb(δ_a XOR δ_b) = 1 (paper §F invariant; required for
+        // bit recovery from Block-form _eval/_gen sharings via LSB).
         let delta_a = Delta::random(&mut rng);
-        let delta_b = Delta::random(&mut rng);
+        let delta_b = Delta::random_b(&mut rng);
 
         Self {
             rng,
