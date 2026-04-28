@@ -13,6 +13,7 @@ use authenticated_tensor_garbling::{
     auth_tensor_fpre::TensorFpre,
     auth_tensor_gen::AuthTensorGen,
     block::Block,
+    input_encoding::encode_inputs,
     online::hash_check_zero,
     preprocessing::run_preprocessing,
     assemble_e_input_wire_shares_p1,
@@ -122,7 +123,8 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 ///
 /// All P1 ciphertexts are κ-wide (no ρ widening); the protocol is unauthenticated.
 fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
-    let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+    encode_inputs(&mut generator, &mut evaluator, X_INPUT, Y_INPUT, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half();
     let (second_levels, second_cts) = generator.garble_second_half();
     // GGM-tree internal-node ciphertexts: 2 × κ bits per row.
@@ -149,7 +151,8 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// what the network simulator sleeps on and what the paper's communication
 /// formulas refer to.
 fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
-    let (mut generator, _evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+    encode_inputs(&mut generator, &mut evaluator, X_INPUT, Y_INPUT, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half_p2();
     let (second_levels, second_cts) = generator.garble_second_half_p2();
     // GGM-tree internal-node ciphertexts stay κ-wide (`6_total.tex:90`).
@@ -304,6 +307,11 @@ fn bench_online_p1(c: &mut Criterion) {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
                             let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+                            // Input encoding (preprocessing → input encoding → garbling).
+                            // Done outside the timed region to preserve prior bench
+                            // semantics (online compute = garble + evaluate + CheckZero).
+                            // Use input=(0, 0) per run_full_protocol_1's convention.
+                            encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
 
                             let l_alpha_pub: Vec<bool> = vec![false; n];
                             let l_beta_pub:  Vec<bool> = vec![false; m];
@@ -419,6 +427,8 @@ fn bench_online_p2(c: &mut Criterion) {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
                             let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+                            // Input encoding (see P1 bench above for rationale).
+                            encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
 
                             let l_alpha_pub: Vec<bool> = vec![false; n];
                             let l_beta_pub:  Vec<bool> = vec![false; m];
@@ -502,7 +512,16 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
         //
         // Pre-compute garble output byte count outside the timed loop for
         // accurate network-cost accounting (matches existing per-size approach).
+        // Byte-counting setup (outside timed loop). Use a correlated pair just
+        // for getting valid post-encode_inputs state — only the gen-side garble
+        // outputs are read. Bench timing path below remains uncorrelated.
         let mut generator = setup_auth_gen(n, m, chunking_factor);
+        let mut throwaway_eval = setup_auth_eval(n, m, chunking_factor);
+        // Independent fpre instances → encode_inputs populates each side's
+        // masked_*_gen / y_gen from its OWN _eval/_gen (no cross-correlation
+        // dependency in the function); the resulting state is enough to
+        // run garble_first_half / second_half / final without panicking.
+        encode_inputs(&mut generator, &mut throwaway_eval, 0, 0, &mut rand::rng());
         let (first_levels, first_cts) = generator.garble_first_half();
         let (second_levels, second_cts) = generator.garble_second_half();
         generator.garble_final();
@@ -525,9 +544,13 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
                 b.to_async(&*RT).iter_batched(
                     || {
                         // Uncorrelated setup: timing-only benchmark, not a correctness check.
+                        // encode_inputs runs in setup (not timed) per the P1/P2 bench convention.
+                        let mut generator = setup_auth_gen(n, m, chunking_factor);
+                        let mut evaluator = setup_auth_eval(n, m, chunking_factor);
+                        encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
                         (
-                            setup_auth_gen(n, m, chunking_factor),
-                            setup_auth_eval(n, m, chunking_factor),
+                            generator,
+                            evaluator,
                             SimpleNetworkSimulator::new(100.0, 0),
                         )
                     },
