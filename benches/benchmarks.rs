@@ -334,19 +334,25 @@ fn bench_online_p1(c: &mut Criterion) {
                                 &evaluator,
                             );
 
-                            // Both parties compute H({V_w}) locally, gb sends
-                            // its 16-byte digest, ev compares. In simulation
-                            // both calls operate on the same assembled shares
-                            // (gb's view ⊕ ev's view), giving the right per-
-                            // party hashing cost shape.
+                            // SIMULATION SHORTCUT: in a real protocol gb hashes
+                            // its share-view and ev hashes its own; here both
+                            // calls hash the same assembled shares (gb's view
+                            // ⊕ ev's view). The comparison is therefore
+                            // tautological — `_h_simulated_match` is always
+                            // true. We keep two hash calls so the timing
+                            // captures both parties' per-call CheckZero cost,
+                            // which is the only thing this bench measures.
+                            // Correctness of the check (that mismatched shares
+                            // produce mismatched digests) is exercised by
+                            // src/online.rs unit tests, not here.
                             let h_gb = hash_check_zero(&e_shares);
                             let h_ev = hash_check_zero(&e_shares);
-                            let check_ok = h_gb == h_ev;
+                            let _h_simulated_match = h_gb == h_ev;
 
                             total += start.elapsed() + transit_per_iter;
 
                             let _ = black_box(e_shares);
-                            let _ = black_box(check_ok);
+                            let _ = black_box(_h_simulated_match);
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
                         }
@@ -443,14 +449,20 @@ fn bench_online_p2(c: &mut Criterion) {
                                 &evaluator,
                             );
 
+                            // SIMULATION SHORTCUT: see bench_online_p1 for
+                            // rationale — both calls hash the same assembled
+                            // c-shares, the comparison is tautological, two
+                            // calls are kept to capture both parties' hashing
+                            // cost. Correctness of the digest-mismatch path
+                            // belongs in unit tests, not this timing bench.
                             let h_gb = hash_check_zero(&c_shares);
                             let h_ev = hash_check_zero(&c_shares);
-                            let check_ok = h_gb == h_ev;
+                            let _h_simulated_match = h_gb == h_ev;
 
                             total += start.elapsed() + transit_per_iter;
 
                             let _ = black_box(c_shares);
-                            let _ = black_box(check_ok);
+                            let _ = black_box(_h_simulated_match);
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
                         }
