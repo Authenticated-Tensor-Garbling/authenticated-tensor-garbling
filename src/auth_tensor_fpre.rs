@@ -1,5 +1,5 @@
 // TODO refactor authbit from fpre to a common module, or redefine with new name.
-use crate::{block::Block, delta::Delta, sharing::{AuthBit, build_share, AuthBitShare, InputSharing}};
+use crate::{delta::Delta, sharing::{AuthBit, build_share, AuthBitShare}};
 use crate::preprocessing::{TensorFpreGen, TensorFpreEval};
 
 use rand::{Rng, SeedableRng};
@@ -13,8 +13,6 @@ pub struct TensorFpre {
     chunking_factor: usize,
     delta_a: Delta,
     delta_b: Delta,
-    x_labels: Vec<InputSharing>,
-    y_labels: Vec<InputSharing>,
     alpha_auth_bits: Vec<AuthBit>,
     beta_auth_bits: Vec<AuthBit>,
     correlated_auth_bits: Vec<AuthBit>,
@@ -35,8 +33,6 @@ impl TensorFpre {
             chunking_factor,
             delta_a,
             delta_b,
-            x_labels: Vec::with_capacity(n),
-            y_labels: Vec::with_capacity(m),
             alpha_auth_bits:        Vec::with_capacity(n),
             beta_auth_bits:         Vec::with_capacity(m),
             correlated_auth_bits:   Vec::with_capacity(n * m),
@@ -54,8 +50,6 @@ impl TensorFpre {
             chunking_factor,
             delta_a,
             delta_b,
-            x_labels: Vec::with_capacity(n),
-            y_labels: Vec::with_capacity(m),
             alpha_auth_bits: Vec::with_capacity(n),
             beta_auth_bits: Vec::with_capacity(m),
             correlated_auth_bits: Vec::with_capacity(n * m),
@@ -85,75 +79,25 @@ impl TensorFpre {
         }
     }
 
-    /// Generates all authenticated bits and input sharings for the ideal trusted dealer.
+    /// Generates all authenticated permutation bits for the ideal trusted dealer.
     /// This is NOT the real preprocessing protocol — it is the ideal functionality
     /// (trusted dealer) that the online phase consumes directly in tests and benchmarks.
     ///
-    /// `x` and `y` are the parties' input bit-vectors packed into a `usize`. Bit-position
-    /// `i` of `x` is `(x >> i) & 1`. For `i >= usize::BITS` the corresponding bit is
-    /// treated as zero — `x` simply cannot represent more than `usize::BITS` bits. All
-    /// shift sites use `checked_shl` to make this truncation explicit and well-defined
-    /// for any `n, m`. Callers needing inputs wider than 64 bits would need a different
-    /// representation; the benchmark and test paths use `x = y = 0` (`IdealPreprocessingBackend.run`,
-    /// `src/preprocessing.rs:155`), so the truncation is moot in practice.
-    pub fn generate_for_ideal_trusted_dealer(&mut self, x: usize, y: usize) -> (usize, usize) {
-        let mut alpha: usize = 0;
-        for i in 0..self.n {
-            // generate the auth bit
+    /// Produces alpha (length n), beta (length m), and correlated alpha·beta
+    /// (length n·m, column-major) auth bits. Input wire labels and masked-input
+    /// values are NOT generated here — those belong to the input-encoding phase
+    /// that sits between preprocessing and garbling.
+    pub fn generate_ideal(&mut self) {
+        for _ in 0..self.n {
             let alpha_bit = self.rng.random_bool(0.5);
             let alpha_auth_bit = self.gen_auth_bit(alpha_bit);
             self.alpha_auth_bits.push(alpha_auth_bit);
-
-            // accumulate alpha bits in little-endian order. checked_shl returns
-            // None for i >= usize::BITS — bits beyond position 63 don't fit in
-            // the returned usize, so they are silently dropped.
-            alpha |= (alpha_bit as usize).checked_shl(i as u32).unwrap_or(0);
-
-
-            // generate the label sharing of x ^ alpha. Bit i of x is
-            // (x >> i) & 1; for i >= usize::BITS this is definitionally 0
-            // since x : usize.
-            let mut gen_label = Block::random(&mut self.rng);
-            gen_label.set_lsb(false);
-
-            let eval_label: Block;
-            let x_bit = 1usize.checked_shl(i as u32).map_or(false, |s| (s & x) != 0);
-            let bit = x_bit ^ alpha_bit;
-            if bit {
-                eval_label = gen_label ^ self.delta_a.as_block();
-            } else {
-                eval_label = gen_label.clone();
-            }
-
-            self.x_labels.push(InputSharing { gen_share: gen_label, eval_share: eval_label });
-
         }
 
-        let mut beta: usize = 0;
-        for j in 0..self.m {
-            // generate the auth bit
+        for _ in 0..self.m {
             let beta_bit = self.rng.random_bool(0.5);
             let beta_auth_bit = self.gen_auth_bit(beta_bit);
             self.beta_auth_bits.push(beta_auth_bit);
-
-            // accumulate beta bits in little-endian order (see alpha note above).
-            beta |= (beta_bit as usize).checked_shl(j as u32).unwrap_or(0);
-
-            // generate the label sharing of y ^ beta
-            let mut gen_label = Block::random(&mut self.rng);
-            gen_label.set_lsb(false);
-
-            let eval_label: Block;
-
-            let y_bit = 1usize.checked_shl(j as u32).map_or(false, |s| (s & y) != 0);
-            let bit = y_bit ^ beta_bit;
-            if bit {
-                eval_label = gen_label ^ self.delta_a.as_block();
-            } else {
-                eval_label = gen_label.clone();
-            }
-
-            self.y_labels.push(InputSharing { gen_share: gen_label, eval_share: eval_label });
         }
 
         // column-major indexing
@@ -165,7 +109,6 @@ impl TensorFpre {
                 self.correlated_auth_bits.push(alpha_beta);
             }
         }
-        (alpha, beta)
     }
 
     pub fn into_gen_eval(self) -> (TensorFpreGen, TensorFpreEval) {
@@ -227,30 +170,6 @@ impl TensorFpre {
         })
     }
 
-    /// Gets the clear values of the input and output vectors and the auth bits.
-    /// x_label holds x^alpha
-    /// y_label holds y^beta
-    /// alpha_auth_bits holds alpha
-    /// beta_auth_bits holds beta
-    /// Returns (x^alpha, y^beta, alpha, beta)
-    pub fn get_clear_values(&self) -> (usize, usize, usize, usize) {
-
-        let mut x: usize = 0;
-        let mut y: usize = 0;
-
-        let mut alpha: usize = 0;
-        let mut beta: usize = 0;
-        for i in 0..self.n {
-            x |= (self.x_labels[i].shares_differ() as usize) << i;
-            alpha |= (self.alpha_auth_bits[i].full_bit() as usize) << i;
-        }
-        for j in 0..self.m {
-            y |= (self.y_labels[j].shares_differ() as usize) << j;
-            beta |= (self.beta_auth_bits[j].full_bit() as usize) << j;
-        }
-
-        (x^alpha, y^beta, alpha, beta)
-    }
 }
 
 #[cfg(test)]
@@ -263,7 +182,7 @@ mod tests {
         let m = 4;
 
         let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_for_ideal_trusted_dealer(0b101, 0b110);
+        fpre.generate_ideal();
 
         // confirm dimensions
         assert_eq!(fpre.alpha_auth_bits.len(), n);
@@ -295,48 +214,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_tensor_fpre_input_sharings() {
-        let n = 3;
-        let m = 4;
-
-        let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_for_ideal_trusted_dealer(0b101, 0b110);
-
-        assert_eq!(fpre.x_labels.len(), n);
-        assert_eq!(fpre.y_labels.len(), m);
-
-        for (i, label_sharing) in fpre.x_labels.iter().enumerate() {
-            let alpha = &fpre.alpha_auth_bits[i].full_bit();
-
-            let bit = ((1<<i & 0b101) != 0) ^ alpha;
-            if bit {
-                assert_eq!(label_sharing.eval_share, label_sharing.gen_share ^ fpre.delta_a.as_block());
-            } else {
-                assert_eq!(label_sharing.eval_share, label_sharing.gen_share);
-            }
-        }
-
-        for (i, label_sharing) in fpre.y_labels.iter().enumerate() {
-            let beta = &fpre.beta_auth_bits[i].full_bit();
-            let bit = ((1<<i & 0b110) != 0) ^ beta;
-            if bit {
-                assert_eq!(label_sharing.eval_share, label_sharing.gen_share ^ fpre.delta_a.as_block());
-            } else {
-                assert_eq!(label_sharing.eval_share, label_sharing.gen_share);
-            }
-        }
-
-        let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
-
-        assert_eq!(fpre_gen.alpha_auth_bit_shares.len(), n);
-        assert_eq!(fpre_gen.beta_auth_bit_shares.len(), m);
-
-        assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
-
-        assert_eq!(fpre_eval.alpha_auth_bit_shares.len(), n);
-        assert_eq!(fpre_eval.beta_auth_bit_shares.len(), m);
-
-        assert_eq!(fpre_eval.correlated_auth_bit_shares.len(), n * m);
-    }
 }

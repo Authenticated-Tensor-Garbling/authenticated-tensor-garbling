@@ -750,7 +750,7 @@ mod tests {
         let m = 3;
 
         let mut fpre = TensorFpre::new(0, n, m, 6);
-        fpre.generate_for_ideal_trusted_dealer(0b1101, 0b110);
+        fpre.generate_ideal();
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 

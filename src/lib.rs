@@ -625,17 +625,7 @@ mod tests {
         let input_y = 0b110;
 
         let mut fpre = TensorFpre::new_with_delta(54, n, m, 8, delta_a, delta_b);
-        fpre.generate_for_ideal_trusted_dealer(input_x, input_y);
-
-        let (clear_x, clear_y, alpha, beta) = fpre.get_clear_values();
-        let masked_x = clear_x ^ alpha;
-        let masked_y = clear_y ^ beta;
-
-        let n_bitmask = (1<<n)-1;
-        let m_bitmask = (1<<m)-1;
-
-        assert_eq!(input_x & n_bitmask, clear_x);
-        assert_eq!(input_y & m_bitmask, clear_y);
+        fpre.generate_ideal();
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 

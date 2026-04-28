@@ -141,7 +141,7 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         let _ = count;
 
         let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
-        fpre.generate_for_ideal_trusted_dealer(0, 0);
+        fpre.generate_ideal();
 
         // CRITICAL ORDERING: into_gen_eval(self) consumes fpre by value.
         // All gen_auth_bit() calls must happen BEFORE into_gen_eval() is called.

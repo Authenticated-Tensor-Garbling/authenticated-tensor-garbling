@@ -74,14 +74,14 @@ const Y_INPUT: usize = 0b110;
 
 fn setup_auth_gen(n: usize, m: usize, chunking_factor: usize) -> AuthTensorGen {
     let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
-    fpre.generate_for_ideal_trusted_dealer(X_INPUT, Y_INPUT);
+    fpre.generate_ideal();
     let (fpre_gen, _) = fpre.into_gen_eval();
     AuthTensorGen::new_from_fpre_gen(fpre_gen)
 }
 
 fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval {
     let mut fpre = TensorFpre::new(1, n, m, chunking_factor);
-    fpre.generate_for_ideal_trusted_dealer(X_INPUT, Y_INPUT);
+    fpre.generate_ideal();
     let (_, fpre_eval) = fpre.into_gen_eval();
     AuthTensorEval::new_from_fpre_eval(fpre_eval)
 }
