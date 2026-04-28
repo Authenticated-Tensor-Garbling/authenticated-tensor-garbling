@@ -21,12 +21,6 @@ pub struct TensorFpreGen {
     pub chunking_factor: usize,
     /// Garbler's (Party A) global correlation key. `as_block().lsb() == 1` invariant.
     pub delta_a: Delta,
-    /// Garbler's share of each x-input wire label; length n. Together with the
-    /// evaluator's matching `alpha_labels`, reveals `x XOR alpha` via `shares_differ`.
-    pub alpha_labels: Vec<Block>,
-    /// Garbler's share of each y-input wire label; length m. Reveals `y XOR beta`
-    /// when XORed against the evaluator's matching eval_share.
-    pub beta_labels: Vec<Block>,
     /// Garbler's `AuthBitShare` for each alpha_i (i in 0..n). MAC committed under delta_b.
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     /// Garbler's `AuthBitShare` for each beta_j (j in 0..m). MAC committed under delta_b.
@@ -61,11 +55,6 @@ pub struct TensorFpreEval {
     /// Evaluator's (Party B) global correlation key. `as_block().lsb() == 0` invariant
     /// (required so that `lsb(delta_a XOR delta_b) == 1` per Pi_LeakyTensor §F).
     pub delta_b: Delta,
-    /// Evaluator's share of each x-input wire label; length n. Combines with the
-    /// garbler's `alpha_labels` to reveal `x XOR alpha` via `shares_differ`.
-    pub alpha_labels: Vec<Block>,
-    /// Evaluator's share of each y-input wire label; length m. Symmetric to alpha_labels.
-    pub beta_labels: Vec<Block>,
     /// Evaluator's `AuthBitShare` for each alpha_i. MAC committed under delta_a.
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     /// Evaluator's `AuthBitShare` for each beta_j. MAC committed under delta_a.
@@ -245,41 +234,13 @@ pub fn run_preprocessing(
     let (mut gen_out, mut eval_out) =
         combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 42);
 
-    // Post-bucketing input-label population. Mirrors the input=0 convention
-    // used by `TensorFpre::generate_for_ideal_trusted_dealer` (auth_tensor_fpre.rs:114-126):
-    // each label encodes `(x ^ alpha) · delta_a` under delta_a, and with x=0
-    // the encoded bit equals the alpha (resp. beta) auth-bit value.
-    // Preprocessing is input-independent per paper Construction 2, so any
-    // honest x (here x=0) is a valid choice for the preprocessing-side labels.
-    let mut rng_labels = ChaCha12Rng::seed_from_u64(44);
-    let delta_a_block = *gen_out.delta_a.as_block();
-    let mut gen_alpha_labels = Vec::with_capacity(n);
-    let mut eval_alpha_labels = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut g = Block::random(&mut rng_labels);
-        g.set_lsb(false);
-        let alpha_bit = gen_out.alpha_auth_bit_shares[i].bit()
-                      ^ eval_out.alpha_auth_bit_shares[i].bit();
-        let e = if alpha_bit { g ^ delta_a_block } else { g };
-        gen_alpha_labels.push(g);
-        eval_alpha_labels.push(e);
-    }
-    gen_out.alpha_labels = gen_alpha_labels;
-    eval_out.alpha_labels = eval_alpha_labels;
-
-    let mut gen_beta_labels = Vec::with_capacity(m);
-    let mut eval_beta_labels = Vec::with_capacity(m);
-    for j in 0..m {
-        let mut g = Block::random(&mut rng_labels);
-        g.set_lsb(false);
-        let beta_bit = gen_out.beta_auth_bit_shares[j].bit()
-                     ^ eval_out.beta_auth_bit_shares[j].bit();
-        let e = if beta_bit { g ^ delta_a_block } else { g };
-        gen_beta_labels.push(g);
-        eval_beta_labels.push(e);
-    }
-    gen_out.beta_labels = gen_beta_labels;
-    eval_out.beta_labels = eval_beta_labels;
+    // BUG-02 / Phase 1.2(c): the post-bucketing input-label populator was
+    // removed here. Input wire labels are no longer a preprocessing artifact —
+    // they are generated at garble time by AuthTensorGen::prepare_input_labels.
+    // The previous block faked labels using x = y = 0 with the input-dependent
+    // formula `(x XOR alpha) · delta_a`, which encoded the mask itself rather
+    // than any real input — a "works because both sides use the same dummy
+    // convention" hack flagged by LABELS-BUG-CONTEXT.md.
 
     // Post-bucketing D_ev population. Mirrors the formulas in
     // `TensorFpre::into_gen_eval` (auth_tensor_fpre.rs:180-226). Inputs (the

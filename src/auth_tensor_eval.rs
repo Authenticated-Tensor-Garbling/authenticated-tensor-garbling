@@ -15,9 +15,6 @@ pub struct AuthTensorEval {
 
     pub delta_b: Delta,
 
-    pub x_labels: Vec<Block>,
-    pub y_labels: Vec<Block>,
-
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
@@ -86,8 +83,6 @@ impl AuthTensorEval {
             n,
             m,
             delta_b: Delta::random(&mut rand::rng()),
-            x_labels: Vec::new(),
-            y_labels: Vec::new(),
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
@@ -116,8 +111,6 @@ impl AuthTensorEval {
             n: fpre_eval.n,
             m: fpre_eval.m,
             delta_b: fpre_eval.delta_b,
-            x_labels: fpre_eval.alpha_labels,
-            y_labels: fpre_eval.beta_labels,
             alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,

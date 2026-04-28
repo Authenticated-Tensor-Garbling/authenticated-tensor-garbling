@@ -64,9 +64,6 @@ pub struct AuthTensorGen {
 
     pub delta_a: Delta,
 
-    pub x_labels: Vec<Block>,
-    pub y_labels: Vec<Block>,
-
     pub alpha_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_auth_bit_shares: Vec<AuthBitShare>,
@@ -121,8 +118,6 @@ impl AuthTensorGen {
             m,
             chunking_factor,
             delta_a: Delta::random(&mut rand::rng()),
-            x_labels: Vec::new(),
-            y_labels: Vec::new(),
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
@@ -149,8 +144,6 @@ impl AuthTensorGen {
             m: fpre_gen.m,
             chunking_factor: fpre_gen.chunking_factor,
             delta_a: fpre_gen.delta_a,
-            x_labels: fpre_gen.alpha_labels,
-            y_labels: fpre_gen.beta_labels,
             alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
@@ -760,9 +753,6 @@ mod tests {
         fpre.generate_for_ideal_trusted_dealer(0b1101, 0b110);
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
-
-        assert_eq!(fpre_gen.alpha_labels.len(), n);
-        assert_eq!(fpre_gen.beta_labels.len(), m);
 
         assert_eq!(fpre_gen.alpha_auth_bit_shares.len(), n);
         assert_eq!(fpre_gen.beta_auth_bit_shares.len(), m);

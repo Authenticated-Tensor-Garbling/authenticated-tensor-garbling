@@ -642,18 +642,6 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // check that gb and ev have correct masks (preprocessing-populated
-        // x_labels still encodes masked_x because the ideal trusted dealer
-        // path retains input-dependent label generation in
-        // generate_for_ideal_trusted_dealer; this assertion goes away in
-        // Phase 1.2(c) when x_labels itself is dropped).
-        assert!(
-            verify_vector_sharing(masked_x, &gb.x_labels, &ev.x_labels, &delta_a, n)
-        );
-        assert!(
-            verify_vector_sharing(masked_y, &gb.y_labels, &ev.y_labels, &delta_a, m)
-        );
-
         // Phase 1.2 / BUG-02: install garble-time input labels via the new
         // auth-bit-style API. After this call, gb.masked_x_gen / ev.masked_x_gen
         // and the cleartext masked-bit vectors (ev.masked_x_bits) are populated;

@@ -175,8 +175,6 @@ impl TensorFpre {
             m: self.m,
             chunking_factor: self.chunking_factor,
             delta_a: self.delta_a,
-            alpha_labels: self.x_labels.iter().map(|share| share.gen_share).collect(),
-            beta_labels: self.y_labels.iter().map(|share| share.gen_share).collect(),
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.gen_share).collect(),
@@ -195,8 +193,6 @@ impl TensorFpre {
             m: self.m,
             chunking_factor: self.chunking_factor,
             delta_b: self.delta_b,
-            alpha_labels: self.x_labels.iter().map(|share| share.eval_share).collect(),
-            beta_labels: self.y_labels.iter().map(|share| share.eval_share).collect(),
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
@@ -333,17 +329,10 @@ mod tests {
 
         let (fpre_gen, fpre_eval) = fpre.into_gen_eval();
 
-        assert_eq!(fpre_gen.alpha_labels.len(), n);
-        assert_eq!(fpre_gen.beta_labels.len(), m);
-
         assert_eq!(fpre_gen.alpha_auth_bit_shares.len(), n);
         assert_eq!(fpre_gen.beta_auth_bit_shares.len(), m);
 
         assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
-
-
-        assert_eq!(fpre_eval.alpha_labels.len(), n);
-        assert_eq!(fpre_eval.beta_labels.len(), m);
 
         assert_eq!(fpre_eval.alpha_auth_bit_shares.len(), n);
         assert_eq!(fpre_eval.beta_auth_bit_shares.len(), m);

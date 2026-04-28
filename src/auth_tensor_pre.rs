@@ -226,15 +226,14 @@ pub fn combine_leaky_triples(
     assert_eq!(acc.m, m, "combine_leaky_triples: m parameter disagrees with triple.m");
 
     // Package the combined LeakyTriple into the preprocessing output structs.
-    // Labels stubbed to Vec::new() per Phase 4 D-07.
+    // Input wire labels (alpha_labels / beta_labels) removed in Phase 1.2(c) —
+    // they are now generated at garble time by AuthTensorGen::prepare_input_labels.
     (
         TensorFpreGen {
             n,
             m,
             chunking_factor,
             delta_a,
-            alpha_labels: Vec::new(),
-            beta_labels: Vec::new(),
             alpha_auth_bit_shares: acc.gen_x_shares,
             beta_auth_bit_shares: acc.gen_y_shares,
             correlated_auth_bit_shares: acc.gen_z_shares,
@@ -248,8 +247,6 @@ pub fn combine_leaky_triples(
             m,
             chunking_factor,
             delta_b,
-            alpha_labels: Vec::new(),
-            beta_labels: Vec::new(),
             alpha_auth_bit_shares: acc.eval_x_shares,
             beta_auth_bit_shares: acc.eval_y_shares,
             correlated_auth_bit_shares: acc.eval_z_shares,
