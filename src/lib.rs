@@ -604,6 +604,7 @@ mod tests {
     use crate::auth_tensor_fpre::TensorFpre;
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
+    use crate::input_encoding::encode_inputs;
     use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing, UncompressedPreprocessingBackend};
     use crate::online::check_zero;
     use crate::sharing::AuthBitShare;
@@ -633,16 +634,22 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // Phase 1.2 / BUG-02: install garble-time input labels via the new
-        // auth-bit-style API. After this call, gb.masked_x_gen / ev.masked_x_gen
-        // and the cleartext masked-bit vectors (ev.masked_x_bits) are populated;
-        // get_first_inputs / evaluate_first_half / etc. read from them instead
-        // of the preprocessing-faked x_labels.
-        let labels = gb.prepare_input_labels(
-            &mut rng, input_x, input_y,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        // Phase 1.2 / BUG-02: input encoding phase. Populates gb/ev x_gen/y_gen,
+        // masked_x_gen/masked_y_gen, and cleartext masked-bit vectors
+        // (gar.masked_*_bits = 0-vec; ev.masked_*_bits = d-vector) per the
+        // GGM-tree convention. get_first_inputs / evaluate_first_half / etc.
+        // read from these instead of the preprocessing-faked x_labels.
+        encode_inputs(&mut gb, &mut ev, input_x, input_y, &mut rng);
+
+        // Reconstruct cleartext bitfields from input-encoding output state.
+        // `ev.masked_x_bits` is the cleartext d_x vector (gen-side is 0-vec).
+        // masked_x := x ⊕ α  ⇒  α = x ⊕ masked_x. Same for β/y.
+        let masked_x: usize = ev.masked_x_bits.iter().enumerate()
+            .map(|(i, &b)| (b as usize) << i).sum();
+        let masked_y: usize = ev.masked_y_bits.iter().enumerate()
+            .map(|(j, &b)| (b as usize) << j).sum();
+        let alpha = input_x ^ masked_x;
+        let beta = input_y ^ masked_y;
 
         //check the inputs to the first half outer product: masked_x (x) beta
         let (gen_x, gen_y) = gb.get_first_inputs();
