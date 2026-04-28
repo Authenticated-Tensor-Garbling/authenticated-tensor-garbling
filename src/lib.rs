@@ -29,8 +29,48 @@ pub mod online;
 use crate::block::Block;
 use crate::auth_tensor_gen::AuthTensorGen;
 use crate::auth_tensor_eval::AuthTensorEval;
+use crate::delta::Delta;
 use crate::sharing::AuthBitShare;
 use crate::keys::Key;
+
+/// Recover gen-side IT-MAC key block under δ_a + combined two-party bit, for
+/// an authenticated bit X (alpha[i], beta[j], correlated[idx], or gamma[idx]),
+/// from its Block-form components. Inverse of `derive_sharing_blocks`.
+///
+/// Equivalent to `(gb.X_auth_bit_shares[idx].key.as_block(),
+/// gb.X.value ^ ev.X.value)` but reads only the new `_eval` / `_gen` Block
+/// fields. See `src/preprocessing.rs::derive_sharing_blocks` for the lowering
+/// direction; this helper is its inverse over both parties' state.
+///
+/// Output `key_block` has LSB = 0 (Key invariant: LSB(gen_g)=gb.bit by
+/// construction, XORing bit·δ_a with LSB(δ_a)=1 cancels it back to 0).
+#[inline]
+fn gen_key_and_combined_bit(
+    eval_g: Block, gen_g: Block,
+    eval_e: Block, gen_e: Block,
+    delta_a: &Delta,
+) -> (Block, bool) {
+    let gb_bit = (eval_g ^ gen_g).lsb();
+    let ev_bit = (eval_e ^ gen_e).lsb();
+    let key_block = if gb_bit { gen_g ^ *delta_a.as_block() } else { gen_g };
+    (key_block, gb_bit ^ ev_bit)
+}
+
+/// Recover eval-side IT-MAC key block under δ_b for an authenticated bit X
+/// from its Block-form components. Equivalent to
+/// `ev.X_auth_bit_shares[idx].key.as_block()`. Symmetric to
+/// `gen_key_and_combined_bit` but uses ev's local bit and δ_b.
+///
+/// Output `key_block` has LSB = 0 (LSB(ev.X_eval) = 0 since LSB(δ_b)=0; XOR
+/// with ev_bit·δ_b preserves that).
+#[inline]
+fn ev_key_block_under_delta_b(
+    eval_e: Block, gen_e: Block,
+    delta_b: &Delta,
+) -> Block {
+    let ev_bit = (eval_e ^ gen_e).lsb();
+    if ev_bit { eval_e ^ *delta_b.as_block() } else { eval_e }
+}
 
 /// κ — computational security parameter (in bits). Determines `Block` width
 /// and all κ-bit cipher / hash output widths.
@@ -88,50 +128,78 @@ pub fn assemble_gate_semantics_shares(
     assert_eq!(l_alpha_pub.len(), n);
     assert_eq!(l_beta_pub.len(),  m);
     assert_eq!(l_gamma_pub.len(), n * m);
-    assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
-    assert_eq!(gb.beta_auth_bit_shares.len(),        m);
-    assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
-    assert_eq!(gb.gamma_auth_bit_shares.len(),           n * m);
-    assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
-    assert_eq!(ev.beta_auth_bit_shares.len(),        m);
-    assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
-    assert_eq!(ev.gamma_auth_bit_shares.len(),           n * m);
+    assert_eq!(gb.alpha_eval.len(),      n);
+    assert_eq!(gb.alpha_gen.len(),       n);
+    assert_eq!(gb.beta_eval.len(),       m);
+    assert_eq!(gb.beta_gen.len(),        m);
+    assert_eq!(gb.correlated_eval.len(), n * m);
+    assert_eq!(gb.correlated_gen.len(),  n * m);
+    assert_eq!(gb.gamma_eval.len(),      n * m);
+    assert_eq!(gb.gamma_gen.len(),       n * m);
+    assert_eq!(ev.alpha_eval.len(),      n);
+    assert_eq!(ev.alpha_gen.len(),       n);
+    assert_eq!(ev.beta_eval.len(),       m);
+    assert_eq!(ev.beta_gen.len(),        m);
+    assert_eq!(ev.correlated_eval.len(), n * m);
+    assert_eq!(ev.correlated_gen.len(),  n * m);
+    assert_eq!(ev.gamma_eval.len(),      n * m);
+    assert_eq!(ev.gamma_gen.len(),       n * m);
 
     let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
     for j in 0..m {
         for i in 0..n {
             let idx = j * n + i;
 
-            // Accumulate the combined key (XOR of gen-side B-keys) and the
-            // full reconstructed c_gamma bit (XOR of both parties' values).
-            // The gen-side keys are the D_ev-structure keys (B's keys, Kb_i)
-            // that authenticate the eval's share values under delta_a.
-            let mut combined_key = Key::from(Block::ZERO);
+            // Accumulate the combined key block (XOR of gen-side IT-MAC keys
+            // under δ_a) and the full reconstructed c_gamma bit (XOR of both
+            // parties' values). Each per-term `gen_key_and_combined_bit` call
+            // recovers (gb.X_auth_bit_shares[idx].key.as_block(),
+            // gb.X.value ^ ev.X.value) directly from the new Block-form
+            // components — no `*_auth_bit_shares` reads.
+            let mut combined_key_block = Block::ZERO;
             let mut c_gamma_bit = false;
 
             // Term: L_alpha[i] · l_beta[j]   (include iff L_alpha[i] is true)
             if l_alpha_pub[i] {
-                combined_key = combined_key + gb.beta_auth_bit_shares[j].key;
-                c_gamma_bit ^= gb.beta_auth_bit_shares[j].value
-                             ^ ev.beta_auth_bit_shares[j].value;
+                let (k, b) = gen_key_and_combined_bit(
+                    gb.beta_eval[j], gb.beta_gen[j],
+                    ev.beta_eval[j], ev.beta_gen[j],
+                    &gb.delta_a,
+                );
+                combined_key_block ^= k;
+                c_gamma_bit ^= b;
             }
 
             // Term: L_beta[j] · l_alpha[i]   (include iff L_beta[j] is true)
             if l_beta_pub[j] {
-                combined_key = combined_key + gb.alpha_auth_bit_shares[i].key;
-                c_gamma_bit ^= gb.alpha_auth_bit_shares[i].value
-                             ^ ev.alpha_auth_bit_shares[i].value;
+                let (k, b) = gen_key_and_combined_bit(
+                    gb.alpha_eval[i], gb.alpha_gen[i],
+                    ev.alpha_eval[i], ev.alpha_gen[i],
+                    &gb.delta_a,
+                );
+                combined_key_block ^= k;
+                c_gamma_bit ^= b;
             }
 
             // Term: l_gamma*[(i,j)] = l_alpha[i] · l_beta[j]   (always)
-            combined_key = combined_key + gb.correlated_auth_bit_shares[idx].key;
-            c_gamma_bit ^= gb.correlated_auth_bit_shares[idx].value
-                         ^ ev.correlated_auth_bit_shares[idx].value;
+            let (k, b) = gen_key_and_combined_bit(
+                gb.correlated_eval[idx], gb.correlated_gen[idx],
+                ev.correlated_eval[idx], ev.correlated_gen[idx],
+                &gb.delta_a,
+            );
+            combined_key_block ^= k;
+            c_gamma_bit ^= b;
 
             // Term: l_gamma[(i,j)]   (always)
-            combined_key = combined_key + gb.gamma_auth_bit_shares[idx].key;
-            c_gamma_bit ^= gb.gamma_auth_bit_shares[idx].value
-                         ^ ev.gamma_auth_bit_shares[idx].value;
+            let (k, b) = gen_key_and_combined_bit(
+                gb.gamma_eval[idx], gb.gamma_gen[idx],
+                ev.gamma_eval[idx], ev.gamma_gen[idx],
+                &gb.delta_a,
+            );
+            combined_key_block ^= k;
+            c_gamma_bit ^= b;
+
+            let combined_key = Key::from(combined_key_block);
 
             // Fold the PUBLIC-bit value contribution.
             // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
@@ -253,14 +321,14 @@ pub fn assemble_e_input_wire_shares_p1(
     assert_eq!(ev_v_beta_eval.len(),  m);
     assert_eq!(l_alpha_pub.len(), n);
     assert_eq!(l_beta_pub.len(),  m);
-    assert_eq!(gb.alpha_auth_bit_shares.len(), n);
-    assert_eq!(gb.beta_auth_bit_shares.len(),  m);
     assert_eq!(gb.alpha_eval.len(), n);
+    assert_eq!(gb.alpha_gen.len(),  n);
     assert_eq!(gb.beta_eval.len(),  m);
-    assert_eq!(ev.alpha_auth_bit_shares.len(), n);
-    assert_eq!(ev.beta_auth_bit_shares.len(),  m);
+    assert_eq!(gb.beta_gen.len(),   m);
     assert_eq!(ev.alpha_eval.len(), n);
+    assert_eq!(ev.alpha_gen.len(),  n);
     assert_eq!(ev.beta_eval.len(),  m);
+    assert_eq!(ev.beta_gen.len(),   m);
 
     let mut out: Vec<AuthBitShare> = Vec::with_capacity(n + m);
 
@@ -289,10 +357,12 @@ pub fn assemble_e_input_wire_shares_p1(
         // (e.g., XOR delta_a with LSB=1) — sufficient for the negative test.
         let e_a_bit = combined_e_block.lsb();
 
-        // Combined key under delta_b: eval-side key of alpha_auth_bit_shares.
-        // ev.alpha_auth_bit_shares[i].key authenticates gb.value under delta_b
-        // per gen_auth_bit symmetry (auth_tensor_fpre.rs:66-86).
-        let combined_key = ev.alpha_auth_bit_shares[i].key;
+        // Combined key under delta_b: eval-side key block of the α-share,
+        // recovered from Block-form components (equivalent to
+        // ev.alpha_auth_bit_shares[i].key.as_block(), but reads only _eval/_gen).
+        let combined_key = Key::from(
+            ev_key_block_under_delta_b(ev.alpha_eval[i], ev.alpha_gen[i], &ev.delta_b)
+        );
 
         // Recompute MAC freshly under delta_b. Per check_zero doc
         // (online.rs:30-36): never naive-XOR cross-party MACs.
@@ -320,7 +390,9 @@ pub fn assemble_e_input_wire_shares_p1(
         let combined_e_block = gb_e_block ^ ev_e_block;
 
         let e_b_bit = combined_e_block.lsb();
-        let combined_key = ev.beta_auth_bit_shares[j].key;
+        let combined_key = Key::from(
+            ev_key_block_under_delta_b(ev.beta_eval[j], ev.beta_gen[j], &ev.delta_b)
+        );
         let combined_mac = combined_key.auth(e_b_bit, &ev.delta_b);
 
         out.push(AuthBitShare {
