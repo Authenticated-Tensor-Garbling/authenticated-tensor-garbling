@@ -90,16 +90,16 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
 /// benches.
 ///
 /// Unlike `setup_auth_gen` / `setup_auth_eval` — which each spin up an independent
-/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_d_ev_shares` empty per
+/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_eval` empty per
 /// `src/auth_tensor_fpre.rs:180-183, 194-197`) — this helper invokes the ideal
 /// trusted-dealer backend `IdealPreprocessingBackend::run`, which populates the
-/// four D_ev field pairs (`alpha_d_ev_shares` length n, `beta_d_ev_shares` length m,
-/// `correlated_d_ev_shares` length n*m, `gamma_d_ev_shares` length n*m) on BOTH
+/// four D_ev field pairs (`alpha_eval` length n, `beta_eval` length m,
+/// `correlated_eval` length n*m, `gamma_eval` length n*m) on BOTH
 /// the generator and the evaluator with matching IT-MAC shares.
 ///
 /// Required for any online benchmark that calls `assemble_e_input_wire_shares_p1`
 /// (paper-faithful P1) or `assemble_c_alpha_beta_shares_p2` (paper-faithful P2).
-/// Both helpers assert the `*_d_ev_shares` lengths (n and m) and the
+/// Both helpers assert the `*_eval_shares` lengths (n and m) and the
 /// `*_auth_bit_shares` lengths. Without a correlated pair, those asserts
 /// panic on the first iteration.
 ///
@@ -317,17 +317,17 @@ fn bench_online_p1(c: &mut Criterion) {
                             generator.garble_final();
                             evaluator.evaluate_final();
 
-                            let gb_v_alpha_d_ev: Vec<Block> = generator.alpha_d_ev_shares.clone();
-                            let ev_v_alpha_d_ev: Vec<Block> = evaluator.alpha_d_ev_shares.clone();
-                            let gb_v_beta_d_ev:  Vec<Block> = generator.beta_d_ev_shares.clone();
-                            let ev_v_beta_d_ev:  Vec<Block> = evaluator.beta_d_ev_shares.clone();
+                            let gb_v_alpha_eval: Vec<Block> = generator.alpha_eval.clone();
+                            let ev_v_alpha_eval: Vec<Block> = evaluator.alpha_eval.clone();
+                            let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
+                            let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
 
                             let e_shares = assemble_e_input_wire_shares_p1(
                                 n, m,
-                                &gb_v_alpha_d_ev,
-                                &ev_v_alpha_d_ev,
-                                &gb_v_beta_d_ev,
-                                &ev_v_beta_d_ev,
+                                &gb_v_alpha_eval,
+                                &ev_v_alpha_eval,
+                                &gb_v_beta_eval,
+                                &ev_v_beta_eval,
                                 &l_alpha_pub,
                                 &l_beta_pub,
                                 &generator,
@@ -432,17 +432,17 @@ fn bench_online_p2(c: &mut Criterion) {
                             let (_d_gb_out, _gb_d_ev_out) = generator.garble_final_p2();
                             let _ev_d_ev_out = evaluator.evaluate_final_p2();
 
-                            let gb_v_alpha_d_ev: Vec<Block> = generator.alpha_d_ev_shares.clone();
-                            let ev_v_alpha_d_ev: Vec<Block> = evaluator.alpha_d_ev_shares.clone();
-                            let gb_v_beta_d_ev:  Vec<Block> = generator.beta_d_ev_shares.clone();
-                            let ev_v_beta_d_ev:  Vec<Block> = evaluator.beta_d_ev_shares.clone();
+                            let gb_v_alpha_eval: Vec<Block> = generator.alpha_eval.clone();
+                            let ev_v_alpha_eval: Vec<Block> = evaluator.alpha_eval.clone();
+                            let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
+                            let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
 
                             let c_shares = assemble_c_alpha_beta_shares_p2(
                                 n, m,
-                                &gb_v_alpha_d_ev,
-                                &ev_v_alpha_d_ev,
-                                &gb_v_beta_d_ev,
-                                &ev_v_beta_d_ev,
+                                &gb_v_alpha_eval,
+                                &ev_v_alpha_eval,
+                                &gb_v_beta_eval,
+                                &ev_v_beta_eval,
                                 &l_alpha_pub,
                                 &l_beta_pub,
                                 &generator,

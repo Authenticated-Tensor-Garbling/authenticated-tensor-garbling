@@ -90,11 +90,11 @@ pub fn assemble_gate_semantics_shares(
     assert_eq!(gb.alpha_auth_bit_shares.len(),       n);
     assert_eq!(gb.beta_auth_bit_shares.len(),        m);
     assert_eq!(gb.correlated_auth_bit_shares.len(),  n * m);
-    assert_eq!(gb.gamma_d_ev_shares.len(),           n * m);
+    assert_eq!(gb.gamma_eval.len(),           n * m);
     assert_eq!(ev.alpha_auth_bit_shares.len(),       n);
     assert_eq!(ev.beta_auth_bit_shares.len(),        m);
     assert_eq!(ev.correlated_auth_bit_shares.len(),  n * m);
-    assert_eq!(ev.gamma_d_ev_shares.len(),           n * m);
+    assert_eq!(ev.gamma_eval.len(),           n * m);
 
     let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
     for j in 0..m {
@@ -128,9 +128,9 @@ pub fn assemble_gate_semantics_shares(
                          ^ ev.correlated_auth_bit_shares[idx].value;
 
             // Term: l_gamma[(i,j)]   (always)
-            combined_key = combined_key + gb.gamma_d_ev_shares[idx].key;
-            c_gamma_bit ^= gb.gamma_d_ev_shares[idx].value
-                         ^ ev.gamma_d_ev_shares[idx].value;
+            combined_key = combined_key + gb.gamma_eval[idx].key;
+            c_gamma_bit ^= gb.gamma_eval[idx].value
+                         ^ ev.gamma_eval[idx].value;
 
             // Fold the PUBLIC-bit value contribution.
             // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
@@ -185,7 +185,7 @@ pub fn assemble_gate_semantics_shares(
 /// # Differences from `assemble_gate_semantics_shares`
 /// - **Wire**: input wires `a, b`, not output wire `c`. Length `n + m`, not
 ///   `n * m`.
-/// - **Formula**: 3 terms (paper line 242–243), no `correlated_d_ev_shares`
+/// - **Formula**: 3 terms (paper line 242–243), no `correlated_eval`
 ///   (no tensor-product term).
 /// - **Delta**: this helper verifies under `delta_b` (D_ev), the paper-
 ///   faithful direction for catching a malicious garbler.
@@ -213,19 +213,19 @@ pub fn assemble_gate_semantics_shares(
 /// To make the simulation sensitive to a malicious garbler that lies about its
 /// `[v_a D_ev]^gb` (NOT just its preprocessing), this helper accepts `[v_a
 /// D_ev]^gb` as an explicit parameter rather than aliasing it to
-/// `gb.alpha_d_ev_shares[i]`. Honest callers pass `gb.alpha_d_ev_shares.clone()`;
+/// `gb.alpha_eval[i]`. Honest callers pass `gb.alpha_eval.clone()`;
 /// negative tests can pass tampered Blocks.
 ///
 /// # Inputs
 /// - `n`, `m`: input vector lengths.
-/// - `gb_v_alpha_d_ev`: `[v_a D_ev]^gb` for each i (length n). Honest input
-///   encoding sets this equal to `gb.alpha_d_ev_shares`.
-/// - `ev_v_alpha_d_ev`: `[v_a D_ev]^ev` for each i (length n). Honest input
-///   encoding sets this equal to `ev.alpha_d_ev_shares[i] ^ (L_a · delta_b)`.
-/// - `gb_v_beta_d_ev`, `ev_v_beta_d_ev`: same for the β input vector (length m).
+/// - `gb_v_alpha_eval`: `[v_a D_ev]^gb` for each i (length n). Honest input
+///   encoding sets this equal to `gb.alpha_eval`.
+/// - `ev_v_alpha_eval`: `[v_a D_ev]^ev` for each i (length n). Honest input
+///   encoding sets this equal to `ev.alpha_eval[i] ^ (L_a · delta_b)`.
+/// - `gb_v_beta_eval`, `ev_v_beta_eval`: same for the β input vector (length m).
 /// - `l_alpha_pub`, `l_beta_pub`: announced masked input values
 ///   `vec a XOR vec l_a` and `vec b XOR vec l_b`.
-/// - `gb`, `ev`: party preprocessing/state for `_d_ev_shares` and
+/// - `gb`, `ev`: party preprocessing/state for `_eval_shares` and
 ///   `_auth_bit_shares` reads.
 ///
 /// # Returns
@@ -237,29 +237,29 @@ pub fn assemble_gate_semantics_shares(
 pub fn assemble_e_input_wire_shares_p1(
     n: usize,
     m: usize,
-    gb_v_alpha_d_ev: &[Block],
-    ev_v_alpha_d_ev: &[Block],
-    gb_v_beta_d_ev: &[Block],
-    ev_v_beta_d_ev: &[Block],
+    gb_v_alpha_eval: &[Block],
+    ev_v_alpha_eval: &[Block],
+    gb_v_beta_eval: &[Block],
+    ev_v_beta_eval: &[Block],
     l_alpha_pub: &[bool],
     l_beta_pub: &[bool],
     gb: &AuthTensorGen,
     ev: &AuthTensorEval,
 ) -> Vec<AuthBitShare> {
-    assert_eq!(gb_v_alpha_d_ev.len(), n);
-    assert_eq!(ev_v_alpha_d_ev.len(), n);
-    assert_eq!(gb_v_beta_d_ev.len(),  m);
-    assert_eq!(ev_v_beta_d_ev.len(),  m);
+    assert_eq!(gb_v_alpha_eval.len(), n);
+    assert_eq!(ev_v_alpha_eval.len(), n);
+    assert_eq!(gb_v_beta_eval.len(),  m);
+    assert_eq!(ev_v_beta_eval.len(),  m);
     assert_eq!(l_alpha_pub.len(), n);
     assert_eq!(l_beta_pub.len(),  m);
     assert_eq!(gb.alpha_auth_bit_shares.len(), n);
     assert_eq!(gb.beta_auth_bit_shares.len(),  m);
-    assert_eq!(gb.alpha_d_ev_shares.len(), n);
-    assert_eq!(gb.beta_d_ev_shares.len(),  m);
+    assert_eq!(gb.alpha_eval.len(), n);
+    assert_eq!(gb.beta_eval.len(),  m);
     assert_eq!(ev.alpha_auth_bit_shares.len(), n);
     assert_eq!(ev.beta_auth_bit_shares.len(),  m);
-    assert_eq!(ev.alpha_d_ev_shares.len(), n);
-    assert_eq!(ev.beta_d_ev_shares.len(),  m);
+    assert_eq!(ev.alpha_eval.len(), n);
+    assert_eq!(ev.beta_eval.len(),  m);
 
     let mut out: Vec<AuthBitShare> = Vec::with_capacity(n + m);
 
@@ -275,15 +275,15 @@ pub fn assemble_e_input_wire_shares_p1(
         // Each party's half-share of [e_a D_ev] per paper line 242:
         //   gb's half = [v_a D_ev]^gb XOR [l_a D_ev]^gb
         //   ev's half = [v_a D_ev]^ev XOR [l_a D_ev]^ev XOR L_a · D_ev
-        let gb_e_block = gb_v_alpha_d_ev[i] ^ gb.alpha_d_ev_shares[i];
-        let ev_e_block = ev_v_alpha_d_ev[i]
-                         ^ ev.alpha_d_ev_shares[i]
+        let gb_e_block = gb_v_alpha_eval[i] ^ gb.alpha_eval[i];
+        let ev_e_block = ev_v_alpha_eval[i]
+                         ^ ev.alpha_eval[i]
                          ^ l_a_correction;
         let combined_e_block = gb_e_block ^ ev_e_block;
 
         // For honest parties combined_e_block is the zero block. For a
-        // malicious garbler whose `gb_v_alpha_d_ev[i]` deviates from
-        // `gb.alpha_d_ev_shares[i]`, the combined block is non-zero. The
+        // malicious garbler whose `gb_v_alpha_eval[i]` deviates from
+        // `gb.alpha_eval[i]`, the combined block is non-zero. The
         // .lsb() reading captures tampers whose XOR delta has bit 0 set
         // (e.g., XOR delta_a with LSB=1) — sufficient for the negative test.
         let e_a_bit = combined_e_block.lsb();
@@ -312,9 +312,9 @@ pub fn assemble_e_input_wire_shares_p1(
             Block::default()
         };
 
-        let gb_e_block = gb_v_beta_d_ev[j] ^ gb.beta_d_ev_shares[j];
-        let ev_e_block = ev_v_beta_d_ev[j]
-                         ^ ev.beta_d_ev_shares[j]
+        let gb_e_block = gb_v_beta_eval[j] ^ gb.beta_eval[j];
+        let ev_e_block = ev_v_beta_eval[j]
+                         ^ ev.beta_eval[j]
                          ^ l_b_correction;
         let combined_e_block = gb_e_block ^ ev_e_block;
 
@@ -359,14 +359,14 @@ pub fn assemble_e_input_wire_shares_p1(
 ///
 /// # Inputs (mirror P1)
 /// - `n`, `m`: input vector lengths.
-/// - `gb_v_alpha_d_ev` / `ev_v_alpha_d_ev`: `[v_α D_ev]` shares (length n).
-///   Honest input encoding sets these consistent with `alpha_d_ev_shares` on
-///   each party (gb's equals its `alpha_d_ev_shares`; ev's equals its share
+/// - `gb_v_alpha_eval` / `ev_v_alpha_eval`: `[v_α D_ev]` shares (length n).
+///   Honest input encoding sets these consistent with `alpha_eval` on
+///   each party (gb's equals its `alpha_eval`; ev's equals its share
 ///   XOR'd with `L_α · delta_b`).
-/// - `gb_v_beta_d_ev` / `ev_v_beta_d_ev`: same for β (length m).
+/// - `gb_v_beta_eval` / `ev_v_beta_eval`: same for β (length m).
 /// - `l_alpha_pub` / `l_beta_pub`: announced masked-input bits `L_α = v_α ⊕ l_α`
 ///   and `L_β = v_β ⊕ l_β`.
-/// - `gb`, `ev`: party state for `_d_ev_shares` and `_auth_bit_shares` reads.
+/// - `gb`, `ev`: party state for `_eval_shares` and `_auth_bit_shares` reads.
 ///
 /// # Returns
 /// `Vec<AuthBitShare>` of length `n + m`, layout
@@ -375,10 +375,10 @@ pub fn assemble_e_input_wire_shares_p1(
 pub fn assemble_c_alpha_beta_shares_p2(
     n: usize,
     m: usize,
-    gb_v_alpha_d_ev: &[Block],
-    ev_v_alpha_d_ev: &[Block],
-    gb_v_beta_d_ev: &[Block],
-    ev_v_beta_d_ev: &[Block],
+    gb_v_alpha_eval: &[Block],
+    ev_v_alpha_eval: &[Block],
+    gb_v_beta_eval: &[Block],
+    ev_v_beta_eval: &[Block],
     l_alpha_pub: &[bool],
     l_beta_pub: &[bool],
     gb: &AuthTensorGen,
@@ -386,10 +386,10 @@ pub fn assemble_c_alpha_beta_shares_p2(
 ) -> Vec<AuthBitShare> {
     assemble_e_input_wire_shares_p1(
         n, m,
-        gb_v_alpha_d_ev,
-        ev_v_alpha_d_ev,
-        gb_v_beta_d_ev,
-        ev_v_beta_d_ev,
+        gb_v_alpha_eval,
+        ev_v_alpha_eval,
+        gb_v_beta_eval,
+        ev_v_beta_eval,
         l_alpha_pub,
         l_beta_pub,
         gb,
@@ -732,7 +732,7 @@ mod tests {
     /// Body of the paper-faithful Protocol 1 honest-run test, parameterized by
     /// preprocessing backend. Both `IdealPreprocessingBackend` and
     /// `UncompressedPreprocessingBackend` must satisfy the same CheckZero
-    /// invariant — preprocessing must populate all four `*_d_ev_shares` fields
+    /// invariant — preprocessing must populate all four `*_eval_shares` fields
     /// with shares that XOR to `bit · delta_b`.
     ///
     /// Per `references/Authenticated_Garbling_with_Tensor_Gates/CCS2026/5_online.tex`
@@ -782,29 +782,29 @@ mod tests {
         // Honest input-encoding (paper line 214):
         //   gb sets [v_a D_ev]^gb := [l_a D_ev]^gb
         //   ev sets [v_a D_ev]^ev := [l_a D_ev]^ev XOR L_a · D_ev
-        let gb_v_alpha_d_ev: Vec<Block> = gb.alpha_d_ev_shares.clone();
-        let ev_v_alpha_d_ev: Vec<Block> = (0..n)
+        let gb_v_alpha_eval: Vec<Block> = gb.alpha_eval.clone();
+        let ev_v_alpha_eval: Vec<Block> = (0..n)
             .map(|i| if l_alpha_pub[i] {
-                ev.alpha_d_ev_shares[i] ^ *ev.delta_b.as_block()
+                ev.alpha_eval[i] ^ *ev.delta_b.as_block()
             } else {
-                ev.alpha_d_ev_shares[i]
+                ev.alpha_eval[i]
             })
             .collect();
-        let gb_v_beta_d_ev: Vec<Block> = gb.beta_d_ev_shares.clone();
-        let ev_v_beta_d_ev: Vec<Block> = (0..m)
+        let gb_v_beta_eval: Vec<Block> = gb.beta_eval.clone();
+        let ev_v_beta_eval: Vec<Block> = (0..m)
             .map(|j| if l_beta_pub[j] {
-                ev.beta_d_ev_shares[j] ^ *ev.delta_b.as_block()
+                ev.beta_eval[j] ^ *ev.delta_b.as_block()
             } else {
-                ev.beta_d_ev_shares[j]
+                ev.beta_eval[j]
             })
             .collect();
 
         let e_shares = assemble_e_input_wire_shares_p1(
             n, m,
-            &gb_v_alpha_d_ev,
-            &ev_v_alpha_d_ev,
-            &gb_v_beta_d_ev,
-            &ev_v_beta_d_ev,
+            &gb_v_alpha_eval,
+            &ev_v_alpha_eval,
+            &gb_v_beta_eval,
+            &ev_v_beta_eval,
             &l_alpha_pub,
             &l_beta_pub,
             &gb,
@@ -915,29 +915,29 @@ mod tests {
         // Honest input encoding (6_total.tex:191–198):
         //   gb sets [v D_ev]^gb := [l D_ev]^gb
         //   ev sets [v D_ev]^ev := [l D_ev]^ev XOR L · D_ev
-        let gb_v_alpha_d_ev: Vec<Block> = gb.alpha_d_ev_shares.clone();
-        let ev_v_alpha_d_ev: Vec<Block> = (0..n)
+        let gb_v_alpha_eval: Vec<Block> = gb.alpha_eval.clone();
+        let ev_v_alpha_eval: Vec<Block> = (0..n)
             .map(|i| if l_alpha_pub[i] {
-                ev.alpha_d_ev_shares[i] ^ *ev.delta_b.as_block()
+                ev.alpha_eval[i] ^ *ev.delta_b.as_block()
             } else {
-                ev.alpha_d_ev_shares[i]
+                ev.alpha_eval[i]
             })
             .collect();
-        let gb_v_beta_d_ev: Vec<Block> = gb.beta_d_ev_shares.clone();
-        let ev_v_beta_d_ev: Vec<Block> = (0..m)
+        let gb_v_beta_eval: Vec<Block> = gb.beta_eval.clone();
+        let ev_v_beta_eval: Vec<Block> = (0..m)
             .map(|j| if l_beta_pub[j] {
-                ev.beta_d_ev_shares[j] ^ *ev.delta_b.as_block()
+                ev.beta_eval[j] ^ *ev.delta_b.as_block()
             } else {
-                ev.beta_d_ev_shares[j]
+                ev.beta_eval[j]
             })
             .collect();
 
         let c_shares_p2 = assemble_c_alpha_beta_shares_p2(
             n, m,
-            &gb_v_alpha_d_ev,
-            &ev_v_alpha_d_ev,
-            &gb_v_beta_d_ev,
-            &ev_v_beta_d_ev,
+            &gb_v_alpha_eval,
+            &ev_v_alpha_eval,
+            &gb_v_beta_eval,
+            &ev_v_beta_eval,
             &l_alpha_pub,
             &l_beta_pub,
             &gb,
@@ -1033,7 +1033,7 @@ mod tests {
     fn test_protocol_1_e_input_wire_check_aborts_on_garbler_d_ev_tamper() {
         // Paper-faithful P1 CheckZero must abort when the garbler lies about its
         // [v_a D_ev]^gb during input encoding (5_online.tex line 214). We model this
-        // by passing a tampered `gb_v_alpha_d_ev[0]` to the helper.
+        // by passing a tampered `gb_v_alpha_eval[0]` to the helper.
         //
         // The XOR is `gb.delta_a.as_block()`, whose LSB is 1 — so the tamper leaks
         // into `combined_e_block.lsb()` and breaks the e_a_bit = 0 invariant,
@@ -1074,36 +1074,36 @@ mod tests {
             .collect();
 
         // Honest [v_a D_ev]^gb / [v_b D_ev]^gb starting points.
-        let mut gb_v_alpha_d_ev: Vec<Block> = gb.alpha_d_ev_shares.clone();
-        let gb_v_beta_d_ev: Vec<Block> = gb.beta_d_ev_shares.clone();
+        let mut gb_v_alpha_eval: Vec<Block> = gb.alpha_eval.clone();
+        let gb_v_beta_eval: Vec<Block> = gb.beta_eval.clone();
 
         // TAMPER: corrupt gb's [v_a D_ev]^gb at i=0 by XORing in delta_a (LSB=1).
         // This simulates a malicious garbler whose announced share deviates from
         // what input encoding requires.
-        gb_v_alpha_d_ev[0] ^= *gb.delta_a.as_block();
+        gb_v_alpha_eval[0] ^= *gb.delta_a.as_block();
 
         // ev's [v D_ev]^ev shares per honest input encoding.
-        let ev_v_alpha_d_ev: Vec<Block> = (0..n)
+        let ev_v_alpha_eval: Vec<Block> = (0..n)
             .map(|i| if l_alpha_pub[i] {
-                ev.alpha_d_ev_shares[i] ^ *ev.delta_b.as_block()
+                ev.alpha_eval[i] ^ *ev.delta_b.as_block()
             } else {
-                ev.alpha_d_ev_shares[i]
+                ev.alpha_eval[i]
             })
             .collect();
-        let ev_v_beta_d_ev: Vec<Block> = (0..m)
+        let ev_v_beta_eval: Vec<Block> = (0..m)
             .map(|j| if l_beta_pub[j] {
-                ev.beta_d_ev_shares[j] ^ *ev.delta_b.as_block()
+                ev.beta_eval[j] ^ *ev.delta_b.as_block()
             } else {
-                ev.beta_d_ev_shares[j]
+                ev.beta_eval[j]
             })
             .collect();
 
         let e_shares_tampered = assemble_e_input_wire_shares_p1(
             n, m,
-            &gb_v_alpha_d_ev,
-            &ev_v_alpha_d_ev,
-            &gb_v_beta_d_ev,
-            &ev_v_beta_d_ev,
+            &gb_v_alpha_eval,
+            &ev_v_alpha_eval,
+            &gb_v_beta_eval,
+            &ev_v_beta_eval,
             &l_alpha_pub,
             &l_beta_pub,
             &gb,
@@ -1113,11 +1113,11 @@ mod tests {
         // Paper-faithful CheckZero MUST abort for the tampered run.
         assert!(
             !check_zero(&e_shares_tampered, &ev.delta_b),
-            "tampered gb_v_alpha_d_ev must cause paper-faithful CheckZero to abort"
+            "tampered gb_v_alpha_eval must cause paper-faithful CheckZero to abort"
         );
 
         // Cross-check: the OLD gate-semantics check is insensitive to this tamper
-        // because it doesn't read `*_d_ev_shares` blocks at all.
+        // because it doesn't read `*_eval_shares` blocks at all.
         let lambda_gb = gb.compute_lambda_gamma();
         let l_gamma_combined = ev.compute_lambda_gamma(&lambda_gb);
         let gate_sem_shares = assemble_gate_semantics_shares(
@@ -1131,7 +1131,7 @@ mod tests {
         assert!(
             check_zero(&gate_sem_shares, &gb.delta_a),
             "gate-semantics check should still pass for a D_ev-block tamper \
-             (it doesn't read d_ev_shares, so the tamper is invisible to it)"
+             (it doesn't read eval_shares, so the tamper is invisible to it)"
         );
     }
 

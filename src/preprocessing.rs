@@ -32,17 +32,17 @@ pub struct TensorFpreGen {
     /// Each entry is `gen_share.mac` of the corresponding D_gb auth bit, i.e. `K_a ⊕ a·D_ev`.
     /// XORing with the evaluator's matching entry gives `l_alpha_i · D_ev`.
     /// Derived inside `TensorFpre::into_gen_eval`; left empty by `UncompressedPreprocessingBackend`.
-    pub alpha_d_ev_shares: Vec<Block>,
+    pub alpha_eval: Vec<Block>,
     /// Garbler's precomputed D_ev label for each `l_beta` bit; length m.
-    /// Same derivation as `alpha_d_ev_shares` but for beta.
-    pub beta_d_ev_shares: Vec<Block>,
+    /// Same derivation as `alpha_eval` but for beta.
+    pub beta_eval: Vec<Block>,
     /// Garbler's precomputed D_ev label for each `l_gamma*` correlated bit; length n*m,
-    /// column-major index `j*n + i`. Same derivation as `alpha_d_ev_shares`.
-    pub correlated_d_ev_shares: Vec<Block>,
+    /// column-major index `j*n + i`. Same derivation as `alpha_eval`.
+    pub correlated_eval: Vec<Block>,
     /// Garbler's `AuthBitShare` for each gate-output mask `l_gamma`; length n*m, column-major.
     /// MAC committed under delta_b. (Phase 9 D-05.)
-    /// Distinct from `correlated_d_ev_shares` (which encodes l_gamma* = l_alpha · l_beta).
-    pub gamma_d_ev_shares: Vec<AuthBitShare>,
+    /// Distinct from `correlated_eval` (which encodes l_gamma* = l_alpha · l_beta).
+    pub gamma_eval: Vec<AuthBitShare>,
 }
 
 pub struct TensorFpreEval {
@@ -66,15 +66,15 @@ pub struct TensorFpreEval {
     /// Each entry is `eval_share.key ⊕ eval_share.value·D_ev` of the corresponding D_gb auth bit,
     /// i.e. `K_a ⊕ b·D_ev`. XORing with the garbler's matching entry gives `l_alpha_i · D_ev`.
     /// Derived inside `TensorFpre::into_gen_eval`; left empty by `UncompressedPreprocessingBackend`.
-    pub alpha_d_ev_shares: Vec<Block>,
+    pub alpha_eval: Vec<Block>,
     /// Evaluator's precomputed D_ev label for each `l_beta` bit; length m.
-    pub beta_d_ev_shares: Vec<Block>,
+    pub beta_eval: Vec<Block>,
     /// Evaluator's precomputed D_ev label for each `l_gamma*` correlated bit; length n*m,
     /// column-major index `j*n + i`.
-    pub correlated_d_ev_shares: Vec<Block>,
+    pub correlated_eval: Vec<Block>,
     /// Evaluator's `AuthBitShare` for each `l_gamma` mask; length n*m, column-major.
     /// MAC committed under delta_a. (Phase 9 D-05.)
-    pub gamma_d_ev_shares: Vec<AuthBitShare>,
+    pub gamma_eval: Vec<AuthBitShare>,
 }
 
 /// Common interface for all preprocessing backends.
@@ -118,7 +118,7 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
 /// Fixed seed 0 used internally — matches the `IdealBCot::new(0, 1)` precedent (see
 /// src/bcot.rs). For tests and benchmarks only. See CONTEXT.md D-03, D-07, D-08.
 ///
-/// `gamma_d_ev_shares` is populated with `n*m` independent random IT-MAC authenticated
+/// `gamma_eval` is populated with `n*m` independent random IT-MAC authenticated
 /// bits for l_gamma (the gate output mask). `gen_auth_bit()` calls MUST precede
 /// `into_gen_eval()` because `into_gen_eval(self)` consumes `fpre` by value.
 /// See RESEARCH.md Pitfall 2 and Pattern 3.
@@ -148,7 +148,7 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         //
         // Phase 9 D-06: generate all four D_ev field pairs using fpre.gen_auth_bit().
         // Use distinct ChaCha12Rng seeds (42, 43, 44, 45) so the four fields are
-        // independently random — same pattern as the existing gamma_d_ev_shares
+        // independently random — same pattern as the existing gamma_eval
         // generation (seed 42).
         // alpha/beta/correlated D_ev labels are derived from the D_gb auth bits inside
         // into_gen_eval() — no gen_auth_bit calls needed here.
@@ -168,8 +168,8 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
 
         // Distribute gen_share / eval_share for gamma only.
         // alpha/beta/correlated D_ev labels were populated by into_gen_eval().
-        gen_out.gamma_d_ev_shares  = gamma_d_ev_bits.iter().map(|b| b.gen_share).collect();
-        eval_out.gamma_d_ev_shares = gamma_d_ev_bits.iter().map(|b| b.eval_share).collect();
+        gen_out.gamma_eval  = gamma_d_ev_bits.iter().map(|b| b.gen_share).collect();
+        eval_out.gamma_eval = gamma_d_ev_bits.iter().map(|b| b.eval_share).collect();
 
         (gen_out, eval_out)
     }
@@ -252,24 +252,24 @@ pub fn run_preprocessing(
         &eval_out.alpha_auth_bit_shares,
         &delta_b,
     );
-    gen_out.alpha_d_ev_shares = g;
-    eval_out.alpha_d_ev_shares = e;
+    gen_out.alpha_eval = g;
+    eval_out.alpha_eval = e;
 
     let (g, e) = derive_d_ev_blocks(
         &gen_out.beta_auth_bit_shares,
         &eval_out.beta_auth_bit_shares,
         &delta_b,
     );
-    gen_out.beta_d_ev_shares = g;
-    eval_out.beta_d_ev_shares = e;
+    gen_out.beta_eval = g;
+    eval_out.beta_eval = e;
 
     let (g, e) = derive_d_ev_blocks(
         &gen_out.correlated_auth_bit_shares,
         &eval_out.correlated_auth_bit_shares,
         &delta_b,
     );
-    gen_out.correlated_d_ev_shares = g;
-    eval_out.correlated_d_ev_shares = e;
+    gen_out.correlated_eval = g;
+    eval_out.correlated_eval = e;
 
     // Gamma: fresh n*m IT-MAC AuthBit pairs sampled from a dedicated ChaCha12Rng.
     // Mirrors `TensorFpre::gen_auth_bit` (auth_tensor_fpre.rs:66-86) inline; using
@@ -294,8 +294,8 @@ pub fn run_preprocessing(
             value: b,
         });
     }
-    gen_out.gamma_d_ev_shares = gen_gamma;
-    eval_out.gamma_d_ev_shares = eval_gamma;
+    gen_out.gamma_eval = gen_gamma;
+    eval_out.gamma_eval = eval_gamma;
 
     (gen_out, eval_out)
 }
@@ -399,32 +399,32 @@ mod tests {
     #[test]
     fn test_uncompressed_backend_gamma_field_is_populated() {
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
-        assert_eq!(gen_out.gamma_d_ev_shares.len(), 4 * 4,
-            "gen.gamma_d_ev_shares must have length n*m=16");
-        assert_eq!(eval_out.gamma_d_ev_shares.len(), 4 * 4,
-            "eval.gamma_d_ev_shares must have length n*m=16");
+        assert_eq!(gen_out.gamma_eval.len(), 4 * 4,
+            "gen.gamma_eval must have length n*m=16");
+        assert_eq!(eval_out.gamma_eval.len(), 4 * 4,
+            "eval.gamma_eval must have length n*m=16");
     }
 
     // Uncompressed backend: alpha/beta/correlated D_ev shares have correct lengths.
     #[test]
-    fn test_uncompressed_backend_d_ev_shares_lengths() {
+    fn test_uncompressed_backend_eval_shares_lengths() {
         let n = 4;
         let m = 3;
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
-        assert_eq!(gen_out.alpha_d_ev_shares.len(),       n);
-        assert_eq!(eval_out.alpha_d_ev_shares.len(),      n);
-        assert_eq!(gen_out.beta_d_ev_shares.len(),        m);
-        assert_eq!(eval_out.beta_d_ev_shares.len(),       m);
-        assert_eq!(gen_out.correlated_d_ev_shares.len(),  n * m);
-        assert_eq!(eval_out.correlated_d_ev_shares.len(), n * m);
+        assert_eq!(gen_out.alpha_eval.len(),       n);
+        assert_eq!(eval_out.alpha_eval.len(),      n);
+        assert_eq!(gen_out.beta_eval.len(),        m);
+        assert_eq!(eval_out.beta_eval.len(),       m);
+        assert_eq!(gen_out.correlated_eval.len(),  n * m);
+        assert_eq!(eval_out.correlated_eval.len(), n * m);
     }
 
     // Uncompressed backend: alpha/beta/correlated D_ev label pairs XOR to
     // `bit · delta_b`, where bit is the underlying auth bit's full value.
-    // Mirrors `test_ideal_backend_d_ev_shares_bit_correlation` for the
+    // Mirrors `test_ideal_backend_eval_shares_bit_correlation` for the
     // uncompressed path.
     #[test]
-    fn test_uncompressed_backend_d_ev_shares_bit_correlation() {
+    fn test_uncompressed_backend_eval_shares_bit_correlation() {
         let n = 4;
         let m = 3;
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
@@ -434,36 +434,36 @@ mod tests {
             let bit = gen_out.alpha_auth_bit_shares[k].bit()
                     ^ eval_out.alpha_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.alpha_d_ev_shares[k] ^ eval_out.alpha_d_ev_shares[k], expected,
+            assert_eq!(gen_out.alpha_eval[k] ^ eval_out.alpha_eval[k], expected,
                 "alpha D_ev XOR mismatch at {k}");
         }
         for k in 0..m {
             let bit = gen_out.beta_auth_bit_shares[k].bit()
                     ^ eval_out.beta_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.beta_d_ev_shares[k] ^ eval_out.beta_d_ev_shares[k], expected,
+            assert_eq!(gen_out.beta_eval[k] ^ eval_out.beta_eval[k], expected,
                 "beta D_ev XOR mismatch at {k}");
         }
         for k in 0..(n * m) {
             let bit = gen_out.correlated_auth_bit_shares[k].bit()
                     ^ eval_out.correlated_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.correlated_d_ev_shares[k] ^ eval_out.correlated_d_ev_shares[k], expected,
+            assert_eq!(gen_out.correlated_eval[k] ^ eval_out.correlated_eval[k], expected,
                 "correlated D_ev XOR mismatch at {k}");
         }
     }
 
     // Uncompressed backend: every gamma share satisfies the IT-MAC invariant
-    // under both deltas. Mirrors `test_ideal_backend_gamma_d_ev_shares_mac_invariant`.
+    // under both deltas. Mirrors `test_ideal_backend_gamma_eval_mac_invariant`.
     #[test]
-    fn test_uncompressed_backend_gamma_d_ev_shares_mac_invariant() {
+    fn test_uncompressed_backend_gamma_eval_mac_invariant() {
         let n = 4;
         let m = 3;
         let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
         for k in 0..(n * m) {
             verify_cross_party(
-                &gen_out.gamma_d_ev_shares[k],
-                &eval_out.gamma_d_ev_shares[k],
+                &gen_out.gamma_eval[k],
+                &eval_out.gamma_eval[k],
                 &gen_out.delta_a,
                 &eval_out.delta_b,
             );
@@ -486,26 +486,26 @@ mod tests {
         assert_eq!(eval_out.correlated_auth_bit_shares.len(), 16);
     }
 
-    // PRE-04: gamma_d_ev_shares length is n*m on both sides
+    // PRE-04: gamma_eval length is n*m on both sides
     #[test]
-    fn test_ideal_backend_gamma_d_ev_shares_length() {
+    fn test_ideal_backend_gamma_eval_length() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
-        assert_eq!(gen_out.gamma_d_ev_shares.len(),  4 * 4,
-            "gen.gamma_d_ev_shares must have n*m=16 entries");
-        assert_eq!(eval_out.gamma_d_ev_shares.len(), 4 * 4,
-            "eval.gamma_d_ev_shares must have n*m=16 entries");
+        assert_eq!(gen_out.gamma_eval.len(),  4 * 4,
+            "gen.gamma_eval must have n*m=16 entries");
+        assert_eq!(eval_out.gamma_eval.len(), 4 * 4,
+            "eval.gamma_eval must have n*m=16 entries");
     }
 
     // PRE-04 + D-09: IT-MAC invariant (mac = key XOR bit * delta) holds for all gamma shares.
     // WARNING: Do NOT call share.verify(delta) directly — it panics on correctly-formed
     // cross-party shares. Always use verify_cross_party (see RESEARCH.md Pitfall 3).
     #[test]
-    fn test_ideal_backend_gamma_d_ev_shares_mac_invariant() {
+    fn test_ideal_backend_gamma_eval_mac_invariant() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
         for k in 0..(4 * 4) {
             verify_cross_party(
-                &gen_out.gamma_d_ev_shares[k],
-                &eval_out.gamma_d_ev_shares[k],
+                &gen_out.gamma_eval[k],
+                &eval_out.gamma_eval[k],
                 &gen_out.delta_a,
                 &eval_out.delta_b,
             );
@@ -516,28 +516,28 @@ mod tests {
     // P2-01 (Phase 9 D-04, D-06): All three new D_ev field pairs are populated
     // and have correct lengths n, m, n*m respectively.
     #[test]
-    fn test_ideal_backend_d_ev_shares_lengths() {
+    fn test_ideal_backend_eval_shares_lengths() {
         let n = 4;
         let m = 4;
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
-        assert_eq!(gen_out.alpha_d_ev_shares.len(),        n,
-            "gen.alpha_d_ev_shares must have length n");
-        assert_eq!(eval_out.alpha_d_ev_shares.len(),       n,
-            "eval.alpha_d_ev_shares must have length n");
-        assert_eq!(gen_out.beta_d_ev_shares.len(),         m,
-            "gen.beta_d_ev_shares must have length m");
-        assert_eq!(eval_out.beta_d_ev_shares.len(),        m,
-            "eval.beta_d_ev_shares must have length m");
-        assert_eq!(gen_out.correlated_d_ev_shares.len(),   n * m,
-            "gen.correlated_d_ev_shares must have length n*m");
-        assert_eq!(eval_out.correlated_d_ev_shares.len(),  n * m,
-            "eval.correlated_d_ev_shares must have length n*m");
+        assert_eq!(gen_out.alpha_eval.len(),        n,
+            "gen.alpha_eval must have length n");
+        assert_eq!(eval_out.alpha_eval.len(),       n,
+            "eval.alpha_eval must have length n");
+        assert_eq!(gen_out.beta_eval.len(),         m,
+            "gen.beta_eval must have length m");
+        assert_eq!(eval_out.beta_eval.len(),        m,
+            "eval.beta_eval must have length m");
+        assert_eq!(gen_out.correlated_eval.len(),   n * m,
+            "gen.correlated_eval must have length n*m");
+        assert_eq!(eval_out.correlated_eval.len(),  n * m,
+            "eval.correlated_eval must have length n*m");
     }
 
     // P2-01: D_ev label pairs XOR to `bit * delta_b` — the core correctness invariant.
     // gen_label XOR eval_label == lambda_i * D_ev for each alpha/beta/correlated bit.
     #[test]
-    fn test_ideal_backend_d_ev_shares_bit_correlation() {
+    fn test_ideal_backend_eval_shares_bit_correlation() {
         use crate::block::Block;
         let n = 4;
         let m = 4;
@@ -547,24 +547,24 @@ mod tests {
         for k in 0..n {
             let bit = gen_out.alpha_auth_bit_shares[k].bit() ^ eval_out.alpha_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.alpha_d_ev_shares[k] ^ eval_out.alpha_d_ev_shares[k], expected,
+            assert_eq!(gen_out.alpha_eval[k] ^ eval_out.alpha_eval[k], expected,
                 "alpha D_ev XOR mismatch at {k}");
         }
         for k in 0..m {
             let bit = gen_out.beta_auth_bit_shares[k].bit() ^ eval_out.beta_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.beta_d_ev_shares[k] ^ eval_out.beta_d_ev_shares[k], expected,
+            assert_eq!(gen_out.beta_eval[k] ^ eval_out.beta_eval[k], expected,
                 "beta D_ev XOR mismatch at {k}");
         }
         for k in 0..(n * m) {
             let bit = gen_out.correlated_auth_bit_shares[k].bit() ^ eval_out.correlated_auth_bit_shares[k].bit();
             let expected = if bit { *delta_b.as_block() } else { Block::ZERO };
-            assert_eq!(gen_out.correlated_d_ev_shares[k] ^ eval_out.correlated_d_ev_shares[k], expected,
+            assert_eq!(gen_out.correlated_eval[k] ^ eval_out.correlated_eval[k], expected,
                 "correlated D_ev XOR mismatch at {k}");
         }
     }
 
-    // PRE-04 + D-05: gamma_d_ev_shares (l_gamma) is a different random sample
+    // PRE-04 + D-05: gamma_eval (l_gamma) is a different random sample
     // from correlated_auth_bit_shares (l_gamma*). Basic distinctness: not all-zero bits.
     #[test]
     fn test_ideal_backend_gamma_distinct_from_correlated() {
@@ -572,7 +572,7 @@ mod tests {
         // gamma bits: gen and eval shares XOR to the actual l_gamma bit (gen.value XOR eval.value)
         // correlated bits: same XOR gives l_gamma* bit
         // They are independent random samples; expect at least one to differ from false.
-        let any_gamma_set = gen_out.gamma_d_ev_shares.iter()
+        let any_gamma_set = gen_out.gamma_eval.iter()
             .any(|s| s.value);
         let any_correlated_set = gen_out.correlated_auth_bit_shares.iter()
             .any(|s| s.value);
@@ -583,7 +583,7 @@ mod tests {
         let _ = any_correlated_set;
         // Verify that gamma and correlated shares are not byte-for-byte identical
         // (independent random samples from different RNG seeds must differ).
-        let gamma_bits: Vec<bool> = gen_out.gamma_d_ev_shares.iter()
+        let gamma_bits: Vec<bool> = gen_out.gamma_eval.iter()
             .map(|s| s.value)
             .collect();
         let correlated_bits: Vec<bool> = gen_out.correlated_auth_bit_shares.iter()

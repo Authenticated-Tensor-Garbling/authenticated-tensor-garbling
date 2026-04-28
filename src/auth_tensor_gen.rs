@@ -70,13 +70,13 @@ pub struct AuthTensorGen {
 
     /// Precomputed D_ev labels for `l_alpha`; length n. Each entry = `gen_share.mac` of
     /// the D_gb auth bit (`K_a ⊕ a·D_ev`). Phase 9 P2-01.
-    pub alpha_d_ev_shares: Vec<Block>,
+    pub alpha_eval: Vec<Block>,
     /// Precomputed D_ev labels for `l_beta`; length m. Phase 9 P2-01.
-    pub beta_d_ev_shares: Vec<Block>,
+    pub beta_eval: Vec<Block>,
     /// Precomputed D_ev labels for `l_gamma*`; length n*m, column-major. Phase 9 P2-01.
-    pub correlated_d_ev_shares: Vec<Block>,
+    pub correlated_eval: Vec<Block>,
     /// D_ev-authenticated shares of `l_gamma`; length n*m, column-major. (Phase 9 D-05.)
-    pub gamma_d_ev_shares: Vec<AuthBitShare>,
+    pub gamma_eval: Vec<AuthBitShare>,
 
     /// Gen's half of (sharing of x under δ_a). Length n. Populated by
     /// `prepare_input_labels` (BUG-02 / Phase 1.2). Auth-bit-style:
@@ -121,10 +121,10 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: Vec::new(),
             beta_auth_bit_shares: Vec::new(),
             correlated_auth_bit_shares: Vec::new(),
-            alpha_d_ev_shares: Vec::new(),
-            beta_d_ev_shares: Vec::new(),
-            correlated_d_ev_shares: Vec::new(),
-            gamma_d_ev_shares: Vec::new(),
+            alpha_eval: Vec::new(),
+            beta_eval: Vec::new(),
+            correlated_eval: Vec::new(),
+            gamma_eval: Vec::new(),
             x_gen: Vec::new(),
             y_gen: Vec::new(),
             masked_x_gen: Vec::new(),
@@ -147,10 +147,10 @@ impl AuthTensorGen {
             alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
-            alpha_d_ev_shares: fpre_gen.alpha_d_ev_shares,
-            beta_d_ev_shares: fpre_gen.beta_d_ev_shares,
-            correlated_d_ev_shares: fpre_gen.correlated_d_ev_shares,
-            gamma_d_ev_shares: fpre_gen.gamma_d_ev_shares,
+            alpha_eval: fpre_gen.alpha_eval,
+            beta_eval: fpre_gen.beta_eval,
+            correlated_eval: fpre_gen.correlated_eval,
+            gamma_eval: fpre_gen.gamma_eval,
             x_gen: Vec::new(),
             y_gen: Vec::new(),
             masked_x_gen: Vec::new(),
@@ -549,7 +549,7 @@ impl AuthTensorGen {
     ///
     /// The garbler does NOT hold `delta_b`. Per the IT-MAC layout in
     /// `auth_tensor_fpre.rs::gen_auth_bit` (lines 66-86), the garbler's
-    /// `beta_d_ev_shares[i].mac` is built as `a_share.mac = key_a.auth(a, delta_b)
+    /// `beta_eval[i].mac` is built as `a_share.mac = key_a.auth(a, delta_b)
     /// = key_a XOR a*delta_b`, where `key_a` is held by the evaluator. Emitting
     /// `mac.as_block()` directly is the correct public-bit encoding under
     /// `delta_b` for the garbler's contribution — no XOR needed. The eval side
@@ -557,7 +557,7 @@ impl AuthTensorGen {
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
-            y_ev[i] = self.beta_d_ev_shares[i];
+            y_ev[i] = self.beta_eval[i];
         }
         y_ev
     }
@@ -565,7 +565,7 @@ impl AuthTensorGen {
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y_ev[i] = self.alpha_d_ev_shares[i];
+            y_ev[i] = self.alpha_eval[i];
         }
         y_ev
     }
@@ -616,7 +616,7 @@ impl AuthTensorGen {
     /// time.
     ///
     /// D_ev encoding rule (garbler side): the garbler does NOT hold `delta_b`,
-    /// so its public-bit encoding of `correlated_d_ev_shares[idx]` is simply
+    /// so its public-bit encoding of `correlated_eval[idx]` is simply
     /// `mac.as_block()` — no `delta_b` XOR. See
     /// `get_first_inputs_p2_y_d_ev` doc for derivation.
     pub fn garble_final_p2(&mut self) -> (Vec<Block>, Vec<Block>) {
@@ -639,14 +639,14 @@ impl AuthTensorGen {
             }
         }
 
-        // D_ev path: mirror of D_gb but using `correlated_d_ev_shares`. The
+        // D_ev path: mirror of D_gb but using `correlated_eval`. The
         // garbler emits `mac.as_block()` directly (no `delta_b` XOR — gb does
         // not hold `delta_b`). The eval-side mirror in `evaluate_final_p2`
         // applies its own `delta_b` to the eval-side `key` view to reconstruct
         // the IT-MAC pair under `delta_b`.
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share_ev = self.correlated_d_ev_shares[j * self.n + i];
+                let correlated_share_ev = self.correlated_eval[j * self.n + i];
                 self.first_half_out_ev[(i, j)] ^=
                     self.second_half_out_ev[(j, i)] ^
                     correlated_share_ev;
@@ -675,18 +675,18 @@ impl AuthTensorGen {
     ///
     /// Per CONTEXT.md D-04 (paper 5_online.tex line 132):
     ///   `[L_gamma]^gb[j*n+i] = first_half_out[(i,j)].lsb()
-    ///                          XOR gamma_d_ev_shares[j*n+i].bit()`
+    ///                          XOR gamma_eval[j*n+i].bit()`
     ///
     /// Output is column-major: `vec[j * self.n + i]` corresponds to gate output (i, j).
     ///
     /// Note on D_gb vs D_ev: the paper writes `extbit([l_gamma D_gb])` but the Phase 7
-    /// `gamma_d_ev_shares` field stores D_ev-authenticated shares. This is correct:
+    /// `gamma_eval` field stores D_ev-authenticated shares. This is correct:
     /// `AuthBitShare::bit()` returns `self.value`, which is the per-party local share
     /// of the bit — independent of which delta authenticated the share. See
     /// 08-RESEARCH.md Pitfall 1 for the full justification.
     ///
     /// # Panics
-    /// Panics if `gamma_d_ev_shares.len() != self.n * self.m`. The
+    /// Panics if `gamma_eval.len() != self.n * self.m`. The
     /// `UncompressedPreprocessingBackend` deliberately leaves this vec empty
     /// (Phase 7 stub); use `IdealPreprocessingBackend` for any caller invoking
     /// `compute_lambda_gamma`.
@@ -697,9 +697,9 @@ impl AuthTensorGen {
              first_half_out is not yet the combined v_gamma encoding"
         );
         assert_eq!(
-            self.gamma_d_ev_shares.len(),
+            self.gamma_eval.len(),
             self.n * self.m,
-            "compute_lambda_gamma requires gamma_d_ev_shares.len() == n*m; \
+            "compute_lambda_gamma requires gamma_eval.len() == n*m; \
              UncompressedPreprocessingBackend leaves this vec empty — \
              use IdealPreprocessingBackend"
         );
@@ -708,7 +708,7 @@ impl AuthTensorGen {
         for j in 0..self.m {
             for i in 0..self.n {
                 let v_extbit  = self.first_half_out[(i, j)].lsb();
-                let lg_extbit = self.gamma_d_ev_shares[j * self.n + i].bit();
+                let lg_extbit = self.gamma_eval[j * self.n + i].bit();
                 out.push(v_extbit ^ lg_extbit);
             }
         }
@@ -782,8 +782,8 @@ mod tests {
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        assert_eq!(gar.gamma_d_ev_shares.len(), n * m,
-            "gamma_d_ev_shares must be length n*m after new_from_fpre_gen");
+        assert_eq!(gar.gamma_eval.len(), n * m,
+            "gamma_eval must be length n*m after new_from_fpre_gen");
 
         install_test_input_labels(&mut gar, &mut ev, 0, 0);
 
@@ -816,7 +816,7 @@ mod tests {
         let j = 1;
         let idx = j * n + i; // == 6
         let expected = gar.first_half_out[(i, j)].lsb()
-                     ^ gar.gamma_d_ev_shares[idx].bit();
+                     ^ gar.gamma_eval[idx].bit();
         assert_eq!(lambda[idx], expected,
             "lambda[j*n+i] at (i=2, j=1) does not match D-04 formula");
     }
@@ -838,7 +838,7 @@ mod tests {
             for i in 0..n {
                 let idx = j * n + i;
                 let expected = gar.first_half_out[(i, j)].lsb()
-                             ^ gar.gamma_d_ev_shares[idx].bit();
+                             ^ gar.gamma_eval[idx].bit();
                 assert_eq!(lambda[idx], expected,
                     "D-04 formula mismatch at (i={}, j={}, idx={})", i, j, idx);
             }

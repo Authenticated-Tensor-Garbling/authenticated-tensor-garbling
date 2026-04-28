@@ -121,16 +121,16 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.gen_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.gen_share).collect(),
-            alpha_d_ev_shares: self.alpha_auth_bits.iter()
+            alpha_eval: self.alpha_auth_bits.iter()
                 .map(|b| *b.gen_share.mac.as_block())
                 .collect(),
-            beta_d_ev_shares: self.beta_auth_bits.iter()
+            beta_eval: self.beta_auth_bits.iter()
                 .map(|b| *b.gen_share.mac.as_block())
                 .collect(),
-            correlated_d_ev_shares: self.correlated_auth_bits.iter()
+            correlated_eval: self.correlated_auth_bits.iter()
                 .map(|b| *b.gen_share.mac.as_block())
                 .collect(),
-            gamma_d_ev_shares: vec![],
+            gamma_eval: vec![],
         }, TensorFpreEval {
             n: self.n,
             m: self.m,
@@ -139,7 +139,7 @@ impl TensorFpre {
             alpha_auth_bit_shares: self.alpha_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             beta_auth_bit_shares: self.beta_auth_bits.iter().map(|bit| bit.eval_share).collect(),
             correlated_auth_bit_shares: self.correlated_auth_bits.iter().map(|bit| bit.eval_share).collect(),
-            alpha_d_ev_shares: {
+            alpha_eval: {
                 let delta_b = self.delta_b;
                 self.alpha_auth_bits.iter()
                     .map(|b| {
@@ -148,7 +148,7 @@ impl TensorFpre {
                     })
                     .collect()
             },
-            beta_d_ev_shares: {
+            beta_eval: {
                 let delta_b = self.delta_b;
                 self.beta_auth_bits.iter()
                     .map(|b| {
@@ -157,7 +157,7 @@ impl TensorFpre {
                     })
                     .collect()
             },
-            correlated_d_ev_shares: {
+            correlated_eval: {
                 let delta_b = self.delta_b;
                 self.correlated_auth_bits.iter()
                     .map(|b| {
@@ -166,7 +166,7 @@ impl TensorFpre {
                     })
                     .collect()
             },
-            gamma_d_ev_shares: vec![],
+            gamma_eval: vec![],
         })
     }
 
