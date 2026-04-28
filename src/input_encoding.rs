@@ -1,0 +1,171 @@
+//! Input encoding phase: sits between preprocessing and garbling.
+//!
+//! Generates input wire labels for both parties' input bits and produces the
+//! cleartext masked-input bits (`d_x[i] = x_i ⊕ α_i`, `d_y[j] = y_j ⊕ β_j`)
+//! used as GGM-tree choice bits during garble/evaluate.
+//!
+//! # Math (per wire i, mirror for y/β/m)
+//!
+//! Let `δ_a` be gen's global key. Per `gen_auth_bit` IT-MAC layout, the
+//! preprocessing exit boundary supplies the `_gen` Block-form components of
+//! the α sharing under δ_a:
+//!
+//!   gar.alpha_gen[i]  = K_b ⊕ a_i·δ_a
+//!   ev.alpha_gen[i] = M_b = K_b ⊕ b_i·δ_a
+//!   (XOR reveals α_i·δ_a)
+//!
+//! Input encoding samples a fresh wire-label sharing of `x_i` under δ_a:
+//!
+//!   K_x  ←  random Block, LSB cleared
+//!   M_x  =  K_x ⊕ x_i·δ_a               (held by gen, written to gar.x_gen[i])
+//!   eval receives K_x                    (written to ev.x_gen[i])
+//!
+//! XOR of components yields `x_i·δ_a`. The masked-input wire-label sharing
+//! `(x_i ⊕ α_i)·δ_a` is the linear sum of the two sharings:
+//!
+//!   gar.masked_x_gen[i]  = M_x ⊕ gar.alpha_gen[i]  ⊕ lsb_shift
+//!   ev.masked_x_gen[i] = K_x ⊕ ev.alpha_gen[i] ⊕ lsb_shift
+//!
+//! The `lsb_shift = (x_i ⊕ a_i)·δ_a` is applied to **both** sides so it
+//! cancels in the combined XOR sum, while landing the LSBs on (0, d_i) per
+//! the GGM-tree convention (gen's seed LSB=0, eval's seed LSB=d_i).
+//!
+//! # Cleartext masked bits
+//!
+//! `d_i = x_i ⊕ a_i ⊕ b_i = x_i ⊕ α_i`. Each party's α-bit (`a_i` for gen,
+//! `b_i` for eval) is read from its own `alpha_auth_bit_shares` — not from
+//! the other party's struct. In a real two-party deployment the gen→eval
+//! "interaction" is gen sending `(x_i ⊕ a_i)` (its share of d_i); eval
+//! XORs in its own `b_i` to recover `d_i`. The cleartext masked-bit
+//! sharing is asymmetric:
+//!   gar.masked_x_bits  = vec![false; n]   (0-vec; gen covers both branches)
+//!   ev.masked_x_bits = vec [d_x_0, d_x_1, ...]
+//! XOR of components yields the cleartext d-vector.
+
+use rand::{CryptoRng, Rng};
+
+use crate::auth_tensor_eval::AuthTensorEval;
+use crate::auth_tensor_gen::AuthTensorGen;
+use crate::block::Block;
+
+/// Encode gen's input vectors `x` (length n bits) and `y` (length m bits)
+/// into IT-MAC wire-label sharings under δ_a, and populate both parties'
+/// post-preprocessing state needed for the garble / evaluate phase.
+///
+/// Preconditions:
+/// - Both structs must already hold preprocessing output: `alpha_auth_bit_shares`,
+///   `beta_auth_bit_shares` (length n / m respectively) and the matching
+///   `alpha_gen` / `beta_gen` Block fields.
+/// - `gar.delta_a` is the garbler's key (also implicit in `*_gen` field
+///   construction).
+///
+/// Side effects on `gen`:
+/// - `x_gen` (length n), `y_gen` (m): gen's `mac` halves of input wire-label
+///   sharings under δ_a. LSB of x_gen[i] equals `x_i`; same for y_gen.
+/// - `masked_x_gen` (n), `masked_y_gen` (m): gen's halves of `(x_i ⊕ α_i)·δ_a`
+///   sharings. LSBs land on 0 (GGM-tree convention).
+/// - `masked_x_bits = vec![false; n]`, `masked_y_bits = vec![false; m]`.
+///   See module-level doc for the asymmetric cleartext masked-bit sharing.
+///
+/// Side effects on `eval`:
+/// - `x_gen` (n), `y_gen` (m): eval's `key` halves of input wire-label
+///   sharings under δ_a (received from gen).
+/// - `masked_x_gen` (n), `masked_y_gen` (m): eval's halves. LSBs land on
+///   `d_i` (GGM-tree choice bit).
+/// - `masked_x_bits` / `masked_y_bits`: cleartext `d_x` / `d_y` vectors.
+///
+/// # Panics
+/// Panics if `gar.alpha_auth_bit_shares.len() != gar.n` (or β/m), or if
+/// the `_gen` fields are not populated (length mismatch). Same for `eval`.
+pub fn encode_inputs<R: Rng + CryptoRng>(
+    gar: &mut AuthTensorGen,
+    ev: &mut AuthTensorEval,
+    x: usize,
+    y: usize,
+    rng: &mut R,
+) {
+    let n = gar.alpha_auth_bit_shares.len();
+    let m = gar.beta_auth_bit_shares.len();
+
+    assert_eq!(ev.alpha_auth_bit_shares.len(), n,
+        "encode_inputs: ev.alpha_auth_bit_shares.len() ({}) != gar.alpha_auth_bit_shares.len() ({})",
+        ev.alpha_auth_bit_shares.len(), n);
+    assert_eq!(ev.beta_auth_bit_shares.len(), m,
+        "encode_inputs: ev.beta_auth_bit_shares.len() ({}) != gar.beta_auth_bit_shares.len() ({})",
+        ev.beta_auth_bit_shares.len(), m);
+    assert_eq!(gar.alpha_gen.len(), n,
+        "encode_inputs: gar.alpha_gen must be populated by preprocessing; len={} expected={}",
+        gar.alpha_gen.len(), n);
+    assert_eq!(gar.beta_gen.len(), m,
+        "encode_inputs: gar.beta_gen must be populated; len={} expected={}",
+        gar.beta_gen.len(), m);
+    assert_eq!(ev.alpha_gen.len(), n,
+        "encode_inputs: ev.alpha_gen must be populated; len={} expected={}",
+        ev.alpha_gen.len(), n);
+    assert_eq!(ev.beta_gen.len(), m,
+        "encode_inputs: ev.beta_gen must be populated; len={} expected={}",
+        ev.beta_gen.len(), m);
+
+    let delta_a_block = *gar.delta_a.as_block();
+
+    gar.x_gen = Vec::with_capacity(n);
+    gar.masked_x_gen = Vec::with_capacity(n);
+    ev.x_gen = Vec::with_capacity(n);
+    ev.masked_x_gen = Vec::with_capacity(n);
+    let mut d_x: Vec<bool> = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let x_i = ((x >> i) & 1) != 0;
+        let a_i = gar.alpha_auth_bit_shares[i].bit();
+        let b_i = ev.alpha_auth_bit_shares[i].bit();
+        let d_i = x_i ^ a_i ^ b_i;
+
+        // Sample a fresh wire-label sharing of x_i under δ_a.
+        let mut input_key = Block::random(rng);
+        input_key.set_lsb(false);
+        let input_mac = if x_i { input_key ^ delta_a_block } else { input_key };
+
+        // lsb_shift = (x_i ⊕ a_i)·δ_a -- gen's local knowledge (its share of
+        // d_i lifted to a Block). Applied to both sides; cancels in the sum
+        // while flipping the LSBs to (0, d_i) per the GGM-tree convention.
+        let lsb_shift = if x_i ^ a_i { delta_a_block } else { Block::ZERO };
+
+        gar.x_gen.push(input_mac);
+        ev.x_gen.push(input_key);
+        gar.masked_x_gen.push(input_mac ^ gar.alpha_gen[i] ^ lsb_shift);
+        ev.masked_x_gen.push(input_key ^ ev.alpha_gen[i] ^ lsb_shift);
+        d_x.push(d_i);
+    }
+
+    gar.y_gen = Vec::with_capacity(m);
+    gar.masked_y_gen = Vec::with_capacity(m);
+    ev.y_gen = Vec::with_capacity(m);
+    ev.masked_y_gen = Vec::with_capacity(m);
+    let mut d_y: Vec<bool> = Vec::with_capacity(m);
+
+    for j in 0..m {
+        let y_j = ((y >> j) & 1) != 0;
+        let beta_a_j = gar.beta_auth_bit_shares[j].bit();
+        let beta_b_j = ev.beta_auth_bit_shares[j].bit();
+        let d_j = y_j ^ beta_a_j ^ beta_b_j;
+
+        let mut input_key = Block::random(rng);
+        input_key.set_lsb(false);
+        let input_mac = if y_j { input_key ^ delta_a_block } else { input_key };
+
+        let lsb_shift = if y_j ^ beta_a_j { delta_a_block } else { Block::ZERO };
+
+        gar.y_gen.push(input_mac);
+        ev.y_gen.push(input_key);
+        gar.masked_y_gen.push(input_mac ^ gar.beta_gen[j] ^ lsb_shift);
+        ev.masked_y_gen.push(input_key ^ ev.beta_gen[j] ^ lsb_shift);
+        d_y.push(d_j);
+    }
+
+    // Cleartext masked-bit sharing: gen's component is the 0-vec (gen
+    // covers both GGM branches); eval's component is the d-vector.
+    gar.masked_x_bits = vec![false; n];
+    gar.masked_y_bits = vec![false; m];
+    ev.masked_x_bits = d_x;
+    ev.masked_y_bits = d_y;
+}

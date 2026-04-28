@@ -17,6 +17,7 @@ pub mod tensor_macro;
 pub mod auth_tensor_fpre;
 pub mod auth_tensor_gen;
 pub mod auth_tensor_eval;
+pub mod input_encoding;
 
 pub mod bcot;
 pub mod feq;

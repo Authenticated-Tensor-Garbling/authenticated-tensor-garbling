@@ -96,6 +96,12 @@ pub struct AuthTensorGen {
     pub masked_x_gen: Vec<Block>,
     /// Gen's half of (sharing of y XOR β under δ_a). Length m.
     pub masked_y_gen: Vec<Block>,
+    /// Gen's component of the cleartext masked-bit sharing for `d_x`. The
+    /// 0-vec by convention -- gen covers both GGM-tree branches; eval owns
+    /// the d-vector for traversal choice. Populated by input encoding.
+    pub masked_x_bits: Vec<bool>,
+    /// Gen's component of the cleartext masked-bit sharing for `d_y`. 0-vec.
+    pub masked_y_bits: Vec<bool>,
 
     pub first_half_out: BlockMatrix,
     pub second_half_out: BlockMatrix,
@@ -137,6 +143,8 @@ impl AuthTensorGen {
             y_gen: Vec::new(),
             masked_x_gen: Vec::new(),
             masked_y_gen: Vec::new(),
+            masked_x_bits: Vec::new(),
+            masked_y_bits: Vec::new(),
             first_half_out: BlockMatrix::new(n, m),
             second_half_out: BlockMatrix::new(m, n),
             first_half_out_ev: BlockMatrix::new(n, m),
@@ -168,6 +176,8 @@ impl AuthTensorGen {
             y_gen: Vec::new(),
             masked_x_gen: Vec::new(),
             masked_y_gen: Vec::new(),
+            masked_x_bits: Vec::new(),
+            masked_y_bits: Vec::new(),
             first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
             second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
             first_half_out_ev: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
