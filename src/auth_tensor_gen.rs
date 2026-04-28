@@ -200,32 +200,39 @@ impl AuthTensorGen {
     ///
     /// Same construction for y / β / second half.
     ///
-    /// `eval_alpha_auth_bit_shares` and `eval_beta_auth_bit_shares` are
-    /// the in-process stand-in for the inter-party d-opening protocol
-    /// step. A real two-party implementation would replace this with a
-    /// network round-trip exchanging auth-bit values plus MAC checks.
+    /// `eval_alpha_gen` and `eval_beta_gen` are the eval's halves of the
+    /// α-under-δ_a and β-under-δ_a sharings respectively — i.e., the
+    /// "alpha_gen / beta_gen" fields per the user-defined naming
+    /// convention `<value>_<delta_owner>`. These are the in-process
+    /// stand-in for the inter-party d-opening protocol step: a real
+    /// two-party implementation would replace this with a network
+    /// round-trip exchanging the bit values plus MAC checks.
+    ///
+    /// Currently the parameter type is `&[AuthBitShare]` and we extract
+    /// `b_i` via `.bit()`. After the bigger preprocessing-struct
+    /// restructure the type becomes `&[Block]` and `b_i` derivation
+    /// switches to a delta-aware check (e.g. `.lsb()` against the
+    /// delta-encoding convention) since `.bit()` won't exist on the
+    /// pure-Block representation. The parameter name `eval_alpha_gen`
+    /// already matches the post-restructure shape.
     ///
     /// Side effects on `self`:
     /// - `self.x_gen`, `self.y_gen` populated (lengths n, m).
     /// - `self.masked_x_gen`, `self.masked_y_gen` populated.
     ///
-    /// MUST be called before `garble_first_half` / `garble_second_half`
-    /// once callers migrate to this API (Phase 1.2(b)). In Phase 1.2(a)'
-    /// the existing garble path still reads from `self.x_labels` /
-    /// `self.y_labels` (populated by preprocessing), so this method has
-    /// no behavioral effect on protocol output yet.
+    /// MUST be called before `garble_first_half` / `garble_second_half`.
     ///
     /// # Panics
-    /// Panics if `eval_*_auth_bit_shares.len()` does not match
-    /// `self.n` / `self.m`, or if `self.alpha_auth_bit_shares` /
+    /// Panics if `eval_alpha_gen.len()` / `eval_beta_gen.len()` does not
+    /// match `self.n` / `self.m`, or if `self.alpha_auth_bit_shares` /
     /// `self.beta_auth_bit_shares` are not populated.
     pub fn prepare_input_labels<R: Rng + CryptoRng>(
         &mut self,
         rng: &mut R,
         x: usize,
         y: usize,
-        eval_alpha_auth_bit_shares: &[AuthBitShare],
-        eval_beta_auth_bit_shares: &[AuthBitShare],
+        eval_alpha_gen: &[AuthBitShare],
+        eval_beta_gen: &[AuthBitShare],
     ) -> InputLabelsForEval {
         assert_eq!(self.alpha_auth_bit_shares.len(), self.n,
             "self.alpha_auth_bit_shares must be populated; len={} expected={}",
@@ -233,12 +240,12 @@ impl AuthTensorGen {
         assert_eq!(self.beta_auth_bit_shares.len(), self.m,
             "self.beta_auth_bit_shares must be populated; len={} expected={}",
             self.beta_auth_bit_shares.len(), self.m);
-        assert_eq!(eval_alpha_auth_bit_shares.len(), self.n,
-            "eval_alpha_auth_bit_shares.len() ({}) must equal self.n ({})",
-            eval_alpha_auth_bit_shares.len(), self.n);
-        assert_eq!(eval_beta_auth_bit_shares.len(), self.m,
-            "eval_beta_auth_bit_shares.len() ({}) must equal self.m ({})",
-            eval_beta_auth_bit_shares.len(), self.m);
+        assert_eq!(eval_alpha_gen.len(), self.n,
+            "eval_alpha_gen.len() ({}) must equal self.n ({})",
+            eval_alpha_gen.len(), self.n);
+        assert_eq!(eval_beta_gen.len(), self.m,
+            "eval_beta_gen.len() ({}) must equal self.m ({})",
+            eval_beta_gen.len(), self.m);
 
         let delta_a_block = *self.delta_a.as_block();
 
@@ -251,7 +258,10 @@ impl AuthTensorGen {
         for i in 0..self.n {
             let x_i = ((x >> i) & 1) != 0;
             let a_i = self.alpha_auth_bit_shares[i].bit();
-            let b_i = eval_alpha_auth_bit_shares[i].bit();
+            // Eval's local α-share bit. Today via .bit() on the auth-bit
+            // representation; post-restructure this becomes a lsb()/equality
+            // derivation on the Block-form share.
+            let b_i = eval_alpha_gen[i].bit();
 
             let mut input_key = Block::random(rng);
             input_key.set_lsb(false);
@@ -289,7 +299,9 @@ impl AuthTensorGen {
         for j in 0..self.m {
             let y_j = ((y >> j) & 1) != 0;
             let beta_a_j = self.beta_auth_bit_shares[j].bit();
-            let beta_b_j = eval_beta_auth_bit_shares[j].bit();
+            // Eval's local β-share bit. See note on `b_i` above for the
+            // post-restructure derivation.
+            let beta_b_j = eval_beta_gen[j].bit();
 
             let mut input_key = Block::random(rng);
             input_key.set_lsb(false);
