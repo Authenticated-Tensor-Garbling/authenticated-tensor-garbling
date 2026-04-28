@@ -27,21 +27,6 @@ pub struct TensorProductEval {
 }
 
 impl TensorProductEval {
-    pub fn new(tensor_eval: SemiHonestTensorPreEval) -> Self {
-        Self {
-            cipher: &(*FIXED_KEY_AES),
-            chunking_factor: tensor_eval.chunking_factor,
-            n: tensor_eval.n,
-            m: tensor_eval.m,
-            x_labels: tensor_eval.x_labels,
-            y_labels: tensor_eval.y_labels,
-            alpha_labels: BlockMatrix::constant(tensor_eval.n, 1, Block::default()),
-            beta_labels: BlockMatrix::constant(tensor_eval.m, 1, Block::default()),
-            first_half_out: BlockMatrix::new(tensor_eval.n, tensor_eval.m),
-            second_half_out: BlockMatrix::new(tensor_eval.m, tensor_eval.n),
-        }
-    }
-
     pub fn new_from_fpre_eval(fpre_eval: SemiHonestTensorPreEval) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
