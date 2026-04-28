@@ -45,14 +45,6 @@ impl Mac {
         // Mac is a newtype of block.
         unsafe { &*(slice as *const [Self] as *const [Block]) }
     }
-
-    /// Converts a `Vec` of blocks to a `Vec` of MACs.
-    #[inline]
-    pub fn from_blocks(blocks: Vec<Block>) -> Vec<Self> {
-        // Safety:
-        // Mac is a newtype of block.
-        unsafe { std::mem::transmute(blocks) }
-    }
 }
 
 impl From<Mac> for Block {

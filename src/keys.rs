@@ -81,22 +81,6 @@ impl Key {
         unsafe { &*(slice as *const [Self] as *const [Block]) }
     }
 
-    /// Converts a `Vec` of blocks to a `Vec` of keys.
-    #[inline]
-    pub fn from_blocks(blocks: Vec<Block>) -> Vec<Self> {
-        // Safety:
-        // Key is a newtype of block.
-        unsafe { std::mem::transmute(blocks) }
-    }
-
-    /// Converts a `Vec` of keys to a `Vec` of blocks.
-    #[inline]
-    pub fn into_blocks(keys: Vec<Self>) -> Vec<Block> {
-        // Safety:
-        // Key is a newtype of block.
-        unsafe { std::mem::transmute(keys) }
-    }
-
     #[inline]
     pub fn random<R: Rng>(rng: &mut R) -> Self {
         Self::new(Block::random(rng))
