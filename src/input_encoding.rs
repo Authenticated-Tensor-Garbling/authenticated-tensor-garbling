@@ -33,8 +33,9 @@
 //! # Cleartext masked bits
 //!
 //! `d_i = x_i ⊕ a_i ⊕ b_i = x_i ⊕ α_i`. Each party's α-bit (`a_i` for gen,
-//! `b_i` for eval) is read from its own `alpha_auth_bit_shares` — not from
-//! the other party's struct. In a real two-party deployment the gen→eval
+//! `b_i` for eval) is recovered locally from its own Block-form components
+//! via `LSB(party.alpha_eval[i] ⊕ party.alpha_gen[i])` (inverse of
+//! `derive_sharing_blocks`). In a real two-party deployment the gen→eval
 //! "interaction" is gen sending `(x_i ⊕ a_i)` (its share of d_i); eval
 //! XORs in its own `b_i` to recover `d_i`. The cleartext masked-bit
 //! sharing is asymmetric:
@@ -53,9 +54,9 @@ use crate::block::Block;
 /// post-preprocessing state needed for the garble / evaluate phase.
 ///
 /// Preconditions:
-/// - Both structs must already hold preprocessing output: `alpha_auth_bit_shares`,
-///   `beta_auth_bit_shares` (length n / m respectively) and the matching
-///   `alpha_gen` / `beta_gen` Block fields.
+/// - Both structs must already hold preprocessing output: the Block-form
+///   `alpha_eval` / `alpha_gen` (length n) and `beta_eval` / `beta_gen`
+///   (length m) sharings.
 /// - `gar.delta_a` is the garbler's key (also implicit in `*_gen` field
 ///   construction).
 ///
@@ -75,8 +76,8 @@ use crate::block::Block;
 /// - `masked_x_bits` / `masked_y_bits`: cleartext `d_x` / `d_y` vectors.
 ///
 /// # Panics
-/// Panics if `gar.alpha_auth_bit_shares.len() != gar.n` (or β/m), or if
-/// the `_gen` fields are not populated (length mismatch). Same for `eval`.
+/// Panics if `gar.alpha_eval.len()` (the source of n) doesn't match
+/// `gar.alpha_gen` / `ev.alpha_eval` / `ev.alpha_gen`. Same for β/m.
 pub fn encode_inputs<R: Rng + CryptoRng>(
     gar: &mut AuthTensorGen,
     ev: &mut AuthTensorEval,
@@ -84,27 +85,27 @@ pub fn encode_inputs<R: Rng + CryptoRng>(
     y: usize,
     rng: &mut R,
 ) {
-    let n = gar.alpha_auth_bit_shares.len();
-    let m = gar.beta_auth_bit_shares.len();
+    let n = gar.alpha_gen.len();
+    let m = gar.beta_gen.len();
 
-    assert_eq!(ev.alpha_auth_bit_shares.len(), n,
-        "encode_inputs: ev.alpha_auth_bit_shares.len() ({}) != gar.alpha_auth_bit_shares.len() ({})",
-        ev.alpha_auth_bit_shares.len(), n);
-    assert_eq!(ev.beta_auth_bit_shares.len(), m,
-        "encode_inputs: ev.beta_auth_bit_shares.len() ({}) != gar.beta_auth_bit_shares.len() ({})",
-        ev.beta_auth_bit_shares.len(), m);
-    assert_eq!(gar.alpha_gen.len(), n,
-        "encode_inputs: gar.alpha_gen must be populated by preprocessing; len={} expected={}",
-        gar.alpha_gen.len(), n);
-    assert_eq!(gar.beta_gen.len(), m,
-        "encode_inputs: gar.beta_gen must be populated; len={} expected={}",
-        gar.beta_gen.len(), m);
+    assert_eq!(gar.alpha_eval.len(), n,
+        "encode_inputs: gar.alpha_eval must be populated by preprocessing; len={} expected={}",
+        gar.alpha_eval.len(), n);
+    assert_eq!(gar.beta_eval.len(), m,
+        "encode_inputs: gar.beta_eval must be populated; len={} expected={}",
+        gar.beta_eval.len(), m);
     assert_eq!(ev.alpha_gen.len(), n,
         "encode_inputs: ev.alpha_gen must be populated; len={} expected={}",
         ev.alpha_gen.len(), n);
+    assert_eq!(ev.alpha_eval.len(), n,
+        "encode_inputs: ev.alpha_eval must be populated; len={} expected={}",
+        ev.alpha_eval.len(), n);
     assert_eq!(ev.beta_gen.len(), m,
         "encode_inputs: ev.beta_gen must be populated; len={} expected={}",
         ev.beta_gen.len(), m);
+    assert_eq!(ev.beta_eval.len(), m,
+        "encode_inputs: ev.beta_eval must be populated; len={} expected={}",
+        ev.beta_eval.len(), m);
 
     let delta_a_block = *gar.delta_a.as_block();
 
@@ -116,8 +117,11 @@ pub fn encode_inputs<R: Rng + CryptoRng>(
 
     for i in 0..n {
         let x_i = ((x >> i) & 1) != 0;
-        let a_i = gar.alpha_auth_bit_shares[i].bit();
-        let b_i = ev.alpha_auth_bit_shares[i].bit();
+        // Bit-recovery: own party's local α-bit = LSB(party._eval ^ party._gen)
+        // (inverse of derive_sharing_blocks). Each party reads its OWN bit from
+        // its OWN state — gar.alpha_*[i] for a_i, ev.alpha_*[i] for b_i.
+        let a_i = (gar.alpha_eval[i] ^ gar.alpha_gen[i]).lsb();
+        let b_i = (ev.alpha_eval[i] ^ ev.alpha_gen[i]).lsb();
         let d_i = x_i ^ a_i ^ b_i;
 
         // Sample a fresh wire-label sharing of x_i under δ_a.
@@ -145,8 +149,9 @@ pub fn encode_inputs<R: Rng + CryptoRng>(
 
     for j in 0..m {
         let y_j = ((y >> j) & 1) != 0;
-        let beta_a_j = gar.beta_auth_bit_shares[j].bit();
-        let beta_b_j = ev.beta_auth_bit_shares[j].bit();
+        // Bit-recovery (β analog) — see α loop.
+        let beta_a_j = (gar.beta_eval[j] ^ gar.beta_gen[j]).lsb();
+        let beta_b_j = (ev.beta_eval[j] ^ ev.beta_gen[j]).lsb();
         let d_j = y_j ^ beta_a_j ^ beta_b_j;
 
         let mut input_key = Block::random(rng);

@@ -690,7 +690,7 @@ mod tests {
     fn test_auth_tensor_product() {
         let mut rng = rand::rng();
         let delta_a = Delta::random(&mut rng);
-        let delta_b = Delta::random(&mut rng);
+        let delta_b = Delta::random_b(&mut rng);
 
         let n = 16;
         let m = 16;
