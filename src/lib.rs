@@ -36,17 +36,6 @@ const CSP: usize = 128;
 #[allow(dead_code)]
 const SSP: usize = 40;
 
-/// Block for public 0 MAC.
-#[allow(dead_code)]
-pub(crate) const MAC_ZERO: Block = Block::new([
-    146, 239, 91, 41, 80, 62, 197, 196, 204, 121, 176, 38, 171, 216, 63, 120,
-]);
-/// Block for public 1 MAC.
-#[allow(dead_code)]
-pub(crate) const MAC_ONE: Block = Block::new([
-    219, 104, 26, 50, 91, 130, 201, 178, 144, 31, 95, 155, 206, 113, 5, 103,
-]);
-
 /// Gate-semantics sanity check — verifies that an honestly garbled tensor gate
 /// produces `v_γ = v_α · v_β` at every output position.
 ///

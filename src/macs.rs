@@ -3,24 +3,11 @@ use std::ops::Add;
 use crate::block::Block;
 use serde::{Deserialize, Serialize};
 
-/// Block for public 0 MAC.
-pub(crate) const MAC_ZERO: Block = Block::new([
-    146, 239, 91, 41, 80, 62, 197, 196, 204, 121, 176, 38, 171, 216, 63, 120,
-]);
-/// Block for public 1 MAC.
-pub(crate) const MAC_ONE: Block = Block::new([
-    219, 104, 26, 50, 91, 130, 201, 178, 144, 31, 95, 155, 206, 113, 5, 103,
-]);
-
-
 /// MAC.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Mac(Block);
 
 impl Mac {
-    /// Public MACs.
-    pub const PUBLIC: [Mac; 2] = [Mac(MAC_ZERO), Mac(MAC_ONE)];
-
     /// Creates a new MAC.
     #[inline]
     pub(crate) fn new(block: Block) -> Self {
@@ -65,12 +52,6 @@ impl Mac {
         // Safety:
         // Mac is a newtype of block.
         unsafe { std::mem::transmute(blocks) }
-    }
-
-    /// Returns MACs for public data.
-    #[inline]
-    pub fn public(data: impl IntoIterator<Item = bool>) -> impl Iterator<Item = Self> {
-        data.into_iter().map(|bit| Self::PUBLIC[bit as usize])
     }
 }
 
