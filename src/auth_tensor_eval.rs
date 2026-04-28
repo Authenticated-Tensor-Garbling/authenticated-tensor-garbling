@@ -184,20 +184,25 @@ impl AuthTensorEval {
              len={} expected={}",
             self.beta_auth_bit_shares.len(), self.m);
 
+        assert_eq!(labels.x_lsb_shifts.len(), self.n);
+        assert_eq!(labels.y_lsb_shifts.len(), self.m);
+
         // Eval's α-share half under δ_a is `mac_e_α` (auth-bit `mac`
         // held by eval); pair with gen's `key_g_α XOR a · δ_a` encodes
-        // `α · δ_a`. Wire-label eval half is therefore the IT-MAC sum:
-        // `input_eval_key XOR mac_e_α`.
+        // `α · δ_a`. Wire-label eval half is the IT-MAC sum
+        // `input_eval_key XOR mac_e_α`, plus the gen-supplied LSB-shift
+        // `(x_i XOR a_i) · δ_a` that lands eval's LSB on `d_i` (GGM-tree
+        // convention). The shift cancels in the combined gen+eval sum.
         self.masked_x_gen = (0..self.n)
             .map(|i| {
                 let mac_e_alpha = *self.alpha_auth_bit_shares[i].mac.as_block();
-                labels.x_input_eval_keys[i] ^ mac_e_alpha
+                labels.x_input_eval_keys[i] ^ mac_e_alpha ^ labels.x_lsb_shifts[i]
             })
             .collect();
         self.masked_y_gen = (0..self.m)
             .map(|j| {
                 let mac_e_beta = *self.beta_auth_bit_shares[j].mac.as_block();
-                labels.y_input_eval_keys[j] ^ mac_e_beta
+                labels.y_input_eval_keys[j] ^ mac_e_beta ^ labels.y_lsb_shifts[j]
             })
             .collect();
 
@@ -207,17 +212,29 @@ impl AuthTensorEval {
         self.masked_y_bits = labels.masked_y_bits;
     }
 
+    /// Choice bits for GGM-tree traversal MUST be supplied explicitly via
+    /// `choice_bits` (typically `&self.masked_x_bits` for first half, or
+    /// `&self.masked_y_bits` for second half). Per BUG-02 / Phase 1.2, the
+    /// previous LSB-of-wire-label readout is no longer correct under the
+    /// auth-bit-style construction — eval's wire-label LSB is now the
+    /// local α-share (`b_α`), not the masked input bit `d_α`.
+    ///
+    /// `choice_bits.len()` must equal `x.rows()`.
     fn eval_chunked_half_outer_product(
         &mut self,
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
+        choice_bits: &[bool],
         chunk_levels: Vec<Vec<(Block, Block)>>,
         chunk_cts: Vec<Vec<Block>>,
         first_half: bool,
     ) {
-    
+        assert_eq!(choice_bits.len(), x.rows(),
+            "choice_bits.len() ({}) must equal x.rows() ({})",
+            choice_bits.len(), x.rows());
+
         let chunking_factor = self.chunking_factor;
-    
+
         for s in 0..((x.rows() + chunking_factor-1)/chunking_factor) {
             let slice_size: usize;
             if chunking_factor *(s+1) > x.rows() {slice_size = x.rows() % chunking_factor;} else {slice_size = chunking_factor;}
@@ -227,7 +244,18 @@ impl AuthTensorEval {
             }
 
             let cipher = self.cipher;
-            let slice_clear = slice.get_clear_value();
+
+            // Slice the explicit choice bits for this chunk and pack
+            // them into `slice_clear` (bit-i ↔ position-i, matching the
+            // prior `slice.get_clear_value()` semantics under the
+            // pre-Phase-1.2 LSB convention).
+            let chunk_choice_bits: Vec<bool> = (0..slice_size)
+                .map(|i| choice_bits[i + s * chunking_factor])
+                .collect();
+            let mut slice_clear: usize = 0;
+            for (i, &b) in chunk_choice_bits.iter().enumerate() {
+                if b { slice_clear |= 1usize << i; }
+            }
 
             // IMPORTANT: transpose the out matrix before calling with_subrows for the second half
             let mut out = if first_half {
@@ -235,15 +263,11 @@ impl AuthTensorEval {
             } else {
                 self.second_half_out.as_view_mut()
             };
-            
-
-            // Extract explicit choice bits from slice LSBs (index 0 = LSB of bit vector).
-            let slice_bits: Vec<bool> = slice.elements_slice().iter().map(|b| b.lsb()).collect();
 
             out.with_subrows(chunking_factor * s, slice_size, |part| {
                 let (eval_seeds, _missing_derived) = crate::tensor_ops::eval_populate_seeds_mem_optimized(
                     slice.elements_slice(),
-                    &slice_bits,
+                    &chunk_choice_bits,
                     &chunk_levels[s],
                     cipher,
                 );
@@ -263,15 +287,23 @@ impl AuthTensorEval {
     /// Consumes wide ciphertexts `Vec<Vec<(Block, Block)>>` and writes BOTH the
     /// D_gb output (`first_half_out` / `second_half_out`) AND the D_ev output
     /// (`first_half_out_ev` / `second_half_out_ev`) in a single pass.
+    ///
+    /// Choice bits MUST be supplied explicitly via `choice_bits` (BUG-02 /
+    /// Phase 1.2). `choice_bits.len()` must equal `x.rows()`.
     fn eval_chunked_half_outer_product_wide(
         &mut self,
         x: &MatrixViewRef<Block>,
         y_d_gb: &MatrixViewRef<Block>,
         y_d_ev: &MatrixViewRef<Block>,
+        choice_bits: &[bool],
         chunk_levels: Vec<Vec<(Block, Block)>>,
         chunk_cts: Vec<Vec<(Block, Block)>>,
         first_half: bool,
     ) {
+        assert_eq!(choice_bits.len(), x.rows(),
+            "choice_bits.len() ({}) must equal x.rows() ({})",
+            choice_bits.len(), x.rows());
+
         let chunking_factor = self.chunking_factor;
 
         for s in 0..((x.rows() + chunking_factor - 1) / chunking_factor) {
@@ -287,9 +319,14 @@ impl AuthTensorEval {
             }
 
             let cipher = self.cipher;
-            let slice_clear = slice.get_clear_value();
-            let slice_bits: Vec<bool> =
-                slice.elements_slice().iter().map(|b| b.lsb()).collect();
+
+            let chunk_choice_bits: Vec<bool> = (0..slice_size)
+                .map(|i| choice_bits[i + s * chunking_factor])
+                .collect();
+            let mut slice_clear: usize = 0;
+            for (i, &b) in chunk_choice_bits.iter().enumerate() {
+                if b { slice_clear |= 1usize << i; }
+            }
 
             // Disjoint-field split: borrow both D_gb and D_ev output halves.
             let (out_gb_full, out_ev_full): (
@@ -312,7 +349,7 @@ impl AuthTensorEval {
                     let (eval_seeds, _missing_derived) =
                         crate::tensor_ops::eval_populate_seeds_mem_optimized(
                             slice.elements_slice(),
-                            &slice_bits,
+                            &chunk_choice_bits,
                             &chunk_levels[s],
                             cipher,
                         );
@@ -331,24 +368,48 @@ impl AuthTensorEval {
         }
     }
 
+    /// Eval-side counterpart of `AuthTensorGen::get_first_inputs`.
+    ///
+    /// Under the auth-bit-style construction (BUG-02 / Phase 1.2):
+    /// - `x[i] = masked_x_gen[i]` — eval's half of the wire-label
+    ///   sharing `(x XOR α) · δ_a` (= `input_eval_key XOR mac_e_α`).
+    /// - `y[i] = y_gen[i]` — eval's half of the input sharing of y
+    ///   under δ_a (= `input_eval_key` for y; LSB=0). The β-share
+    ///   cancellation: `masked_y_gen XOR mac_e_β = y_gen`.
+    ///
+    /// MUST be called after `install_input_labels`.
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+        assert_eq!(self.masked_x_gen.len(), self.n,
+            "get_first_inputs: masked_x_gen not populated; call install_input_labels first");
+        assert_eq!(self.y_gen.len(), self.m,
+            "get_first_inputs: y_gen not populated; call install_input_labels first");
+
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            x[i] = self.x_labels[i];
+            x[i] = self.masked_x_gen[i];
         }
 
         let mut y = BlockMatrix::new(self.m, 1);
-        for i in 0..self.m {
-            y[i] = self.y_labels[i] ^ self.beta_auth_bit_shares[i].mac.as_block();
+        for j in 0..self.m {
+            y[j] = self.y_gen[j];
         }
 
         (x, y)
     }
 
+    /// Eval-side counterpart of `AuthTensorGen::get_second_inputs`.
+    ///
+    /// Under the auth-bit-style construction:
+    /// - `x[i] = masked_y_gen[i]` — eval's half of `(y XOR β) · δ_a`.
+    /// - `y[i] = mac_e_α` — eval's half of α-sharing under δ_a
+    ///   (auth-bit `mac` held by eval). Unchanged from before.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
+        assert_eq!(self.masked_y_gen.len(), self.m,
+            "get_second_inputs: masked_y_gen not populated; call install_input_labels first");
+
         let mut x = BlockMatrix::new(self.m, 1);
-        for i in 0..self.m {
-            x[i] = self.y_labels[i];
+        for j in 0..self.m {
+            x[j] = self.masked_y_gen[j];
         }
 
         let mut y = BlockMatrix::new(self.n, 1);
@@ -387,12 +448,15 @@ impl AuthTensorEval {
 
     pub fn evaluate_first_half(&mut self, chunk_levels: Vec<Vec<(Block, Block)>>, chunk_cts: Vec<Vec<Block>>) {
         let (x, y) = self.get_first_inputs();
-        self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), chunk_levels, chunk_cts, true);
-    }   
+        // Choice bits cloned out so we don't hold &self while &mut self is in use.
+        let choice_bits = self.masked_x_bits.clone();
+        self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), &choice_bits, chunk_levels, chunk_cts, true);
+    }
 
     pub fn evaluate_second_half(&mut self, chunk_levels: Vec<Vec<(Block, Block)>>, chunk_cts: Vec<Vec<Block>>) {
         let (x, y) = self.get_second_inputs();
-        self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), chunk_levels, chunk_cts, false);
+        let choice_bits = self.masked_y_bits.clone();
+        self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), &choice_bits, chunk_levels, chunk_cts, false);
     }
 
     /// Combines both half-outer-product outputs with the correlated preprocessing
@@ -424,10 +488,12 @@ impl AuthTensorEval {
     ) {
         let (x, y_d_gb) = self.get_first_inputs();
         let y_d_ev = self.get_first_inputs_p2_y_d_ev();
+        let choice_bits = self.masked_x_bits.clone();
         self.eval_chunked_half_outer_product_wide(
             &x.as_view(),
             &y_d_gb.as_view(),
             &y_d_ev.as_view(),
+            &choice_bits,
             chunk_levels,
             chunk_cts,
             true,
@@ -443,10 +509,12 @@ impl AuthTensorEval {
     ) {
         let (x, y_d_gb) = self.get_second_inputs();
         let y_d_ev = self.get_second_inputs_p2_y_d_ev();
+        let choice_bits = self.masked_y_bits.clone();
         self.eval_chunked_half_outer_product_wide(
             &x.as_view(),
             &y_d_gb.as_view(),
             &y_d_ev.as_view(),
+            &choice_bits,
             chunk_levels,
             chunk_cts,
             false,
@@ -572,11 +640,25 @@ mod tests {
     use super::*;
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
 
+    /// Build a paired (gb, ev) and run the in-process d-opening + label
+    /// hand-off for x = y = 0. After Phase 1.2 / BUG-02, `garble_*_half`
+    /// and `evaluate_*_half` require `prepare_input_labels` /
+    /// `install_input_labels` to have been called first; this helper does
+    /// both with a fixed seed so unit tests stay deterministic.
+    /// Tests needing non-zero inputs should call the builders directly.
     fn build_pair(n: usize, m: usize) -> (AuthTensorGen, AuthTensorEval) {
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
-        let gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-        let ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xDEAD_BEEF);
+        let labels = gb.prepare_input_labels(
+            &mut rng, 0, 0,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
         (gb, ev)
     }
 

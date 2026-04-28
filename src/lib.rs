@@ -642,7 +642,11 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // check that gb and ev have correct masks
+        // check that gb and ev have correct masks (preprocessing-populated
+        // x_labels still encodes masked_x because the ideal trusted dealer
+        // path retains input-dependent label generation in
+        // generate_for_ideal_trusted_dealer; this assertion goes away in
+        // Phase 1.2(c) when x_labels itself is dropped).
         assert!(
             verify_vector_sharing(masked_x, &gb.x_labels, &ev.x_labels, &delta_a, n)
         );
@@ -650,6 +654,16 @@ mod tests {
             verify_vector_sharing(masked_y, &gb.y_labels, &ev.y_labels, &delta_a, m)
         );
 
+        // Phase 1.2 / BUG-02: install garble-time input labels via the new
+        // auth-bit-style API. After this call, gb.masked_x_gen / ev.masked_x_gen
+        // and the cleartext masked-bit vectors (ev.masked_x_bits) are populated;
+        // get_first_inputs / evaluate_first_half / etc. read from them instead
+        // of the preprocessing-faked x_labels.
+        let labels = gb.prepare_input_labels(
+            &mut rng, input_x, input_y,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
 
         //check the inputs to the first half outer product: masked_x (x) beta
         let (gen_x, gen_y) = gb.get_first_inputs();
@@ -759,6 +773,16 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
+        // Phase 1.2 / BUG-02: install garble-time input labels with cleartext
+        // input = (0, 0). The doc above explicitly notes "v_alpha = v_beta = 0
+        // because masked_x = alpha and masked_y = beta with x = y = 0".
+        let mut prep_rng = rand::rng();
+        let labels = gb.prepare_input_labels(
+            &mut prep_rng, 0, 0,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
+
         // Standard Protocol 1 garble + evaluate sequence.
         let (cl1, ct1) = gb.garble_first_half();
         ev.evaluate_first_half(cl1, ct1);
@@ -847,6 +871,14 @@ mod tests {
         let (fpre_gen, fpre_eval) = backend.run(n, m, 1, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
+        let mut prep_rng = rand::rng();
+        let labels = gb.prepare_input_labels(
+            &mut prep_rng, 0, 0,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
 
         // Protocol 2 garble + evaluate sequence (wide ciphertexts).
         let (cl1, ct1) = gb.garble_first_half_p2();
@@ -971,6 +1003,14 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
+        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
+        let mut prep_rng = rand::rng();
+        let labels = gb.prepare_input_labels(
+            &mut prep_rng, 0, 0,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
+
         let (cl1, ct1) = gb.garble_first_half();
         ev.evaluate_first_half(cl1, ct1);
         let (cl2, ct2) = gb.garble_second_half();
@@ -1032,6 +1072,14 @@ mod tests {
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
+        let mut prep_rng = rand::rng();
+        let labels = gb.prepare_input_labels(
+            &mut prep_rng, 0, 0,
+            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
+        );
+        ev.install_input_labels(labels);
 
         let (cl1, ct1) = gb.garble_first_half();
         ev.evaluate_first_half(cl1, ct1);
