@@ -1,4 +1,5 @@
 use crate::{
+    SSP,
     leaky_tensor_pre::LeakyTriple,
     preprocessing::{TensorFpreGen, TensorFpreEval},
     sharing::{AuthBitShare, verify_cross_party},
@@ -119,23 +120,27 @@ pub(crate) fn two_to_one_combine(
 
 /// Compute the bucket size B for Pi_aTensor' (Construction 4, Appendix F).
 ///
-/// Formula: `B = 1 + ceil(SSP / log2(n * ell))` for `n * ell >= 2`, where SSP = 40.
-/// For `n * ell <= 1`, the bucketing amplification is degenerate; fall back to
-/// the naive combining bound B = SSP (paper §3.1 preamble).
+/// Formula: `B = 1 + ceil(crate::SSP / log2(n * ell))` for `n * ell >= 2`. For
+/// `n * ell <= 1`, the bucketing amplification is degenerate; fall back to
+/// the naive combining bound `B = crate::SSP` (paper §3.1 preamble).
 ///
 /// Integer ceiling: `1 + (SSP + log2_floor(n*ell) - 1) / log2_floor(n*ell)`.
 /// `log2_floor(k) = usize::BITS - k.leading_zeros() - 1`.
+///
+/// `SSP` (statistical security parameter, in bits) is the crate-level constant
+/// defined in `src/lib.rs`. With the current value `SSP = 40` the worked
+/// examples below are stable; any future change to `crate::SSP` will shift
+/// these numbers and the `test_bucket_size_formula` pins will catch the drift.
 ///
 /// Parameters:
 ///   n   — tensor row dimension.
 ///   ell — number of OUTPUT authenticated tensor triples desired.
 ///
-/// Examples:
+/// Examples (with `SSP = 40`):
 ///   bucket_size_for(4, 1)    = 21   (1 + ceil(40 / log2(4))  = 1 + 20)
 ///   bucket_size_for(4, 2)    = 15   (1 + ceil(40 / log2(8))  = 1 + ceil(40/3) = 1 + 14)
 ///   bucket_size_for(16, 1)   = 11   (1 + ceil(40 / log2(16)) = 1 + 10)
 pub fn bucket_size_for(n: usize, ell: usize) -> usize {
-    const SSP: usize = 40;
     let product = n.saturating_mul(ell);
     if product <= 1 {
         return SSP;
