@@ -92,6 +92,34 @@ impl<'a> LeakyTensorPre<'a> {
     /// uniformly at random from `self.rng`. The output shape is exactly
     /// `(itmac{x}{Δ}, itmac{y}{Δ}, itmac{Z}{Δ})` with no extra fields.
     pub fn generate(&mut self) -> LeakyTriple {
+        let (triple, _bytes) = self.generate_with_bytes();
+        triple
+    }
+
+    /// Same as [`generate`] but additionally returns the on-wire byte count
+    /// for the messages this protocol emits cross-party. Used by the
+    /// preprocessing-communication bench accounting (`benches/benchmarks.rs`
+    /// `prep_bytes`).
+    ///
+    /// **What is counted** (matches the paper's `Π_LeakyTensor` envelope at
+    /// `appendix_krrw_pre.tex:495-499`, but with our impl's actual struct
+    /// sizes — chiefly a κ-factor blow-up on the leaf-ct term because our
+    /// macro sends full κ-bit `Block`s, not the paper's 1-bit-per-leaf
+    /// idealization):
+    ///   * `g_1` ciphertexts (`chunk_level_cts` + `chunk_leaf_cts`,
+    ///     `Vec<Vec<Block>>` × `size_of::<Block>()`) sent gb→ev.
+    ///   * `g_2` ciphertexts, sent ev→gb.
+    ///   * `lsb(S_1)` (n·m bits, sent gb→ev) + `lsb(S_2)` (n·m bits, sent
+    ///     ev→gb) for the joint D-extraction reveal.
+    ///
+    /// **What is NOT counted** (all ideal subprotocols, like the paper's
+    /// formula):
+    ///   * The 6 `IdealBCot::transfer_*` calls in Step 1 (F_COT).
+    ///   * `feq::check` on (L_1, L_2) (F_eq).
+    pub fn generate_with_bytes(&mut self) -> (LeakyTriple, usize) {
+        let mut comm_bytes: usize = 0;
+        let block_bytes: usize = std::mem::size_of::<Block>();
+
         // ========================================================
         // Step 1: Correlated randomness from IdealBCot (PROTO-04)
         // ========================================================
@@ -221,6 +249,9 @@ impl<'a> LeakyTensorPre<'a> {
             &cot_x_gb_to_ev.sender_keys,
             &t_a,
         );
+        // Macro Call 1 ciphertexts sent gb→ev.
+        comm_bytes += g_1.chunk_level_cts.iter().map(|row| row.len()).sum::<usize>() * block_bytes
+                    + g_1.chunk_leaf_cts.iter().map(|row| row.len()).sum::<usize>() * block_bytes;
         let e_1 = chunked_tensor_evaluator(
             self.n, self.m, self.chunking_factor, &g_1,
             &cot_x_gb_to_ev.receiver_macs,
@@ -237,6 +268,9 @@ impl<'a> LeakyTensorPre<'a> {
             &cot_x_ev_to_gb.sender_keys,
             &t_b,
         );
+        // Macro Call 2 ciphertexts sent ev→gb.
+        comm_bytes += g_2.chunk_level_cts.iter().map(|row| row.len()).sum::<usize>() * block_bytes
+                    + g_2.chunk_leaf_cts.iter().map(|row| row.len()).sum::<usize>() * block_bytes;
         let e_2 = chunked_tensor_evaluator(
             self.n, self.m, self.chunking_factor, &g_2,
             &cot_x_ev_to_gb.receiver_macs,
@@ -263,6 +297,14 @@ impl<'a> LeakyTensorPre<'a> {
 
         let s_1: BlockMatrix = &(&z_gb1 ^ &e_2) ^ &c_a_r_mat;
         let s_2: BlockMatrix = &(&z_gb2 ^ &e_1) ^ &c_b_r_mat;
+
+        // D-extraction reveal: each party sends `lsb(S_*)` (n·m bits) to the
+        // other so both can derive `D = lsb(S_1) ⊕ lsb(S_2)`. Two directions,
+        // one bit per (i, j) cell each — round each direction to whole bytes
+        // independently to match real-message framing.
+        let nm_bits = self.n * self.m;
+        let nm_bytes = (nm_bits + 7) / 8;
+        comm_bytes += 2 * nm_bytes;
 
         // D = lsb(S_1) ⊕ lsb(S_2), stored column-major (k = j*n + i).
         // Paper correctness precondition: lsb(Δ_gb ⊕ Δ_ev) == 1 (enforced by Plan 1
@@ -322,7 +364,7 @@ impl<'a> LeakyTensorPre<'a> {
         // ev side: ev holds no D contribution (D is public; eval_z = eval_r only).
         let ev_z_shares: Vec<AuthBitShare> = ev_r_shares;
 
-        LeakyTriple {
+        let triple = LeakyTriple {
             n: self.n,
             m: self.m,
             gb_x_shares,
@@ -333,7 +375,8 @@ impl<'a> LeakyTensorPre<'a> {
             ev_z_shares,
             delta_gb: self.bcot.delta_gb,
             delta_ev: self.bcot.delta_ev,
-        }
+        };
+        (triple, comm_bytes)
     }
 }
 
