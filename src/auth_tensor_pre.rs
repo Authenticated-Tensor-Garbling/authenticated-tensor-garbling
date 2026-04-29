@@ -198,6 +198,59 @@ pub fn combine_leaky_triples(
     chunking_factor: usize,
     shuffle_seed: u64,
 ) -> (TensorFpreGen, TensorFpreEval) {
+    let (out, _bytes) = combine_leaky_triples_with_bytes(
+        triples, bucket_size, n, m, chunking_factor, shuffle_seed,
+    );
+    out
+}
+
+/// Same as [`combine_leaky_triples`] but additionally returns the on-wire
+/// byte count this protocol emits cross-party. Used by the
+/// preprocessing-communication bench accounting (`benches/benchmarks.rs`
+/// `prep_bytes`).
+///
+/// The fold body has exactly one wire-emission site per
+/// [`two_to_one_combine`] call: the public reveal of `d := y' ⊕ y''`
+/// (`m` bits per combine, paper Construction 3 line 428). Across the
+/// `bucket_size − 1` combines this yields `(bucket_size − 1) · ⌈m / 8⌉`
+/// bytes — matches the paper's `(B − 1)·m` term at
+/// `appendix_krrw_pre.tex:495-499` (rounded per-combine to whole bytes
+/// for real-message framing; identical when `m` divides 8 as in all
+/// `BENCHMARK_PARAMS`).
+///
+/// **NOT counted** (ideal subprotocols, like the paper's formula):
+///   * `verify_cross_party` MAC checks inside `two_to_one_combine`
+///     (F_check).
+///   * The local permutation seeds (`shuffle_seed.wrapping_add(j)`) —
+///     in a real protocol the master `shuffle_seed` would be agreed via
+///     coin-flip / hash commit, but that's a constant overhead
+///     independent of `(n, m, B)` and folded into the protocol's setup
+///     cost rather than per-call communication.
+pub fn combine_leaky_triples_with_bytes(
+    triples: Vec<LeakyTriple>,
+    bucket_size: usize,
+    n: usize,
+    m: usize,
+    chunking_factor: usize,
+    shuffle_seed: u64,
+) -> ((TensorFpreGen, TensorFpreEval), usize) {
+    let bytes_per_combine = (m + 7) / 8;
+    let combines = bucket_size.saturating_sub(1);
+    let comm_bytes = combines * bytes_per_combine;
+    let out = combine_leaky_triples_inner(
+        triples, bucket_size, n, m, chunking_factor, shuffle_seed,
+    );
+    (out, comm_bytes)
+}
+
+fn combine_leaky_triples_inner(
+    triples: Vec<LeakyTriple>,
+    bucket_size: usize,
+    n: usize,
+    m: usize,
+    chunking_factor: usize,
+    shuffle_seed: u64,
+) -> (TensorFpreGen, TensorFpreEval) {
     assert_eq!(triples.len(), bucket_size, "triples.len() must equal bucket_size");
     assert!(bucket_size >= 1);
 
