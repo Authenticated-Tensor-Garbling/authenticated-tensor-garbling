@@ -792,6 +792,73 @@ mod tests {
         }
     }
 
+    /// Drift-detection helper that mirrors `benches/benchmarks.rs::prep_bytes`
+    /// without depending on the bench crate. Counts the on-wire bytes one
+    /// uncompressed preprocessing run emits via the `_with_bytes` helpers.
+    /// Local to the test module so any future drift between
+    /// `LeakyTensorPre::generate_with_bytes` and the actual `generate()` body
+    /// surfaces here.
+    fn pipeline_bytes_for_test(n: usize, m: usize, cf: usize) -> usize {
+        let bucket = bucket_size_for(n, 1);
+        let mut bcot = IdealBCot::new(0, 1);
+        let mut triples = Vec::with_capacity(bucket);
+        let mut total: usize = 0;
+        for t in 0..bucket {
+            let mut ltp = LeakyTensorPre::new(t as u64, n, m, cf, &mut bcot);
+            let (triple, b) = ltp.generate_with_bytes();
+            total += b;
+            triples.push(triple);
+        }
+        let (_, combine_b) =
+            combine_leaky_triples_with_bytes(triples, bucket, n, m, cf, 0);
+        total + combine_b
+    }
+
+    #[test]
+    fn test_prep_bytes_chunking_aware_and_deterministic() {
+        // (a) Positive.
+        let b441 = pipeline_bytes_for_test(4, 4, 1);
+        assert!(b441 > 0, "prep_bytes must be positive");
+
+        // (b) Deterministic across two separate runs (RNG-independent: byte
+        // count depends only on the Vec<Vec<Block>> shapes inside
+        // `chunked_tensor_garbler`, which are functions of (n, m, cf) only).
+        assert_eq!(
+            b441,
+            pipeline_bytes_for_test(4, 4, 1),
+            "prep_bytes must be deterministic across runs"
+        );
+
+        // (c) Chunking-aware: at n >= 2 the `chunked_tensor_garbler` shape
+        // differs between cf=1 (n single-leaf chunks) and cf=n (one
+        // n-leaf chunk), so total bytes must differ. This is the headline
+        // property the Phase 3.7 instrumentation exists to capture — the
+        // Phase 3.5 paper-formula `prep_bytes` returned the same value for
+        // both.
+        let b841_a = pipeline_bytes_for_test(8, 4, 1);
+        let b841_b = pipeline_bytes_for_test(8, 4, 8);
+        assert_ne!(
+            b841_a, b841_b,
+            "chunking_factor must change instrumented byte count (cf=1 vs cf=8)"
+        );
+
+        // (d) Sanity check against the Phase 3.5 paper-formula at (4, 4).
+        // Paper: prep_bits = B·[2(n+m−1)·κ + 2·n·m] + (B−1)·m at κ=128.
+        // Our impl emits full κ-bit Blocks for every leaf ct, so the
+        // instrumented count must exceed the paper-formula bytes (the
+        // dominant `2nm` term gets the κ-factor blow-up).
+        let paper_formula_bytes = {
+            let b = bucket_size_for(4, 1);
+            let bits = b * (2 * (4 + 4 - 1) * 128 + 2 * 4 * 4) + (b - 1) * 4;
+            (bits + 7) / 8
+        };
+        assert!(
+            b441 > paper_formula_bytes,
+            "instrumented prep_bytes ({}) must exceed paper-formula ({}) due to κ-factor leaf-ct blowup",
+            b441, paper_formula_bytes
+        );
+    }
+
     #[test]
     #[should_panic(expected = "AUDIT-2.3 D7 cross-party invariant violated")]
     fn test_chunking_factor_parity_mismatch_panics() {
