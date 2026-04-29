@@ -22,14 +22,14 @@ rand_chacha = "0.9"
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
-bytemuck = { version = "1.13", features = ["derive"] }
+bytemuck = { version = "1.13", features = ["derive", "min_const_generics"] }
 serde_arrays = "0.1"
 
 # error/logging
 thiserror = "2"
 
 # misc
-hybrid-array = "0.3"
+hybrid-array = { version = "0.3", features = ["bytemuck"] }
 itybity = "0.3"
 once_cell = "1.21.3"
 

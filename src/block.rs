@@ -6,10 +6,7 @@ use hybrid_array::{Array, typenum::consts::U16};
 use itybity::{BitIterable, BitLength, FromBitIterator, GetBit, Lsb0, Msb0};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt::{Debug, Display},
-    slice::from_raw_parts,
-};
+use std::fmt::{Debug, Display};
 
 /// A block of 128 bits
 #[repr(transparent)]
@@ -118,24 +115,12 @@ impl Block {
 
     /// Converts a slice of blocks to a slice of bytes.
     pub fn as_flattened_bytes(slice: &[Self]) -> &[u8] {
-        // This is equivalent to `<[[u8; 16]]>::as_flattened`
-
-        // SAFETY: `slice.len() * Block::LEN` cannot overflow because `slice` is
-        // already in the address space.
-        let len = unsafe { slice.len().unchecked_mul(Self::LEN) };
-        // SAFETY: `[u8]` is layout-identical to `[u8; 16]` of which block is a newtype.
-        unsafe { from_raw_parts(slice.as_ptr().cast(), len) }
+        bytemuck::cast_slice(slice)
     }
 
     /// Converts a slice of block arrays to a slice of bytes.
     pub fn array_as_flattened_bytes<const N: usize>(slice: &[[Self; N]]) -> &[u8] {
-        // This is equivalent to `<[[u8; 16 * N]]>::as_flattened`
-
-        // SAFETY: `slice.len() * N * Block::LEN` cannot overflow because `slice` is
-        // already in the address space.
-        let len = unsafe { slice.len().unchecked_mul(N * Self::LEN) };
-        // SAFETY: `[u8]` is layout-identical to `[u8; 16]` of which block is a newtype.
-        unsafe { from_raw_parts(slice.as_ptr().cast(), len) }
+        bytemuck::cast_slice(slice)
     }
 
     /// Converts a block to a [`Array<u8,
@@ -155,13 +140,13 @@ impl Block {
     /// U16>`]from the [`hybrid-array`](https://docs.rs/hybrid-array/latest/hybrid_array/) crate.
     #[allow(dead_code)]
     pub(crate) fn as_array_slice(slice: &[Self]) -> &[Array<u8, U16>] {
-        unsafe { std::mem::transmute(slice) }
+        bytemuck::cast_slice(slice)
     }
 
     /// Converts a mutable slice of blocks to a mutable slice of
     ///  from the [`hybrid-array`](https://docs.rs/hybrid-array/latest/hybrid_array/) crate.
     pub(crate) fn as_array_mut_slice(slice: &mut [Self]) -> &mut [Array<u8, U16>] {
-        unsafe { std::mem::transmute(slice) }
+        bytemuck::cast_slice_mut(slice)
     }
 }
 
