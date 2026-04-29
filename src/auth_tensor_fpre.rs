@@ -1,4 +1,11 @@
-// TODO refactor authbit from fpre to a common module, or redefine with new name.
+//! Insecure ideal `F_pre` for tensor-gate inputs. Pre-generates correlated
+//! authenticated bits for `α` (input wire `a` masks), `β` (input wire `b`
+//! masks), and the AND-correlated `γ = α ⊗ β` triple set.
+//!
+//! The auth-bit primitives — `AuthBit`, `AuthBitShare`, `build_share`,
+//! `InputSharing` — live in [`crate::sharing`]; this module is a consumer,
+//! not a definer.
+
 use crate::{delta::Delta, sharing::{AuthBit, build_share, AuthBitShare}};
 use crate::preprocessing::{TensorFpreGen, TensorFpreEval};
 
