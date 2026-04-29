@@ -10,7 +10,6 @@ use network_simulator::SimpleNetworkSimulator;
 
 use authenticated_tensor_garbling::{
     auth_tensor_eval::AuthTensorEval,
-    auth_tensor_fpre::TensorFpre,
     auth_tensor_gen::AuthTensorGen,
     block::Block,
     input_encoding::encode_inputs,
@@ -66,47 +65,18 @@ const BENCHMARK_PARAMS: &[(usize, usize)] = &[
     (256, 256),
 ];
 
-const X_INPUT: usize = 0b1101;
-const Y_INPUT: usize = 0b110;
-
 // ---------------------------------------------------------------------------
 // Setup helpers
 // ---------------------------------------------------------------------------
 
-fn setup_auth_gen(n: usize, m: usize, chunking_factor: usize) -> AuthTensorGen {
-    let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
-    fpre.generate_ideal();
-    let (fpre_gen, _) = fpre.into_gen_eval();
-    AuthTensorGen::new_from_fpre_gen(fpre_gen)
-}
-
-fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval {
-    let mut fpre = TensorFpre::new(1, n, m, chunking_factor);
-    fpre.generate_ideal();
-    let (_, fpre_eval) = fpre.into_gen_eval();
-    AuthTensorEval::new_from_fpre_eval(fpre_eval)
-}
-
-/// Build a CORRELATED (AuthTensorGen, AuthTensorEval) pair for the online-phase
+/// Build a correlated (AuthTensorGen, AuthTensorEval) pair for the online-phase
 /// benches.
 ///
-/// Unlike `setup_auth_gen` / `setup_auth_eval` — which each spin up an independent
-/// `TensorFpre` and call `into_gen_eval()` (leaving `gamma_auth_bit_shares` empty per
-/// `src/auth_tensor_fpre.rs:180-183, 194-197`) — this helper invokes the ideal
-/// trusted-dealer backend `IdealPreprocessingBackend::run`, which populates the
-/// four D_ev field pairs (`alpha_eval` length n, `beta_eval` length m,
-/// `correlated_eval` length n*m, `gamma_auth_bit_shares` length n*m) on BOTH
-/// the generator and the evaluator with matching IT-MAC shares.
-///
-/// Required for any online benchmark that calls `assemble_e_input_wire_shares_p1`
-/// (paper-faithful P1) or `assemble_c_alpha_beta_shares_p2` (paper-faithful P2).
-/// Both helpers assert the `*_eval_shares` lengths (n and m) and the
-/// `*_auth_bit_shares` lengths. Without a correlated pair, those asserts
-/// panic on the first iteration.
-///
-/// `count = 1` matches `IdealPreprocessingBackend`'s only supported batch size
-/// (see `src/preprocessing.rs:145-150`). The `chunking_factor` is forwarded
-/// unchanged.
+/// Invokes the ideal trusted-dealer backend `IdealPreprocessingBackend::run`,
+/// which populates matching IT-MAC shares for alpha (length n), beta (length m),
+/// correlated (length n*m), and gamma (length n*m) on BOTH parties. Required by
+/// any bench whose assemble helpers (`assemble_e_input_wire_blocks_p1`,
+/// `assemble_c_alpha_beta_blocks_p2`) read those lengths.
 fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen, AuthTensorEval) {
     let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, chunking_factor);
     (
@@ -124,7 +94,10 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 /// All P1 ciphertexts are κ-wide (no ρ widening); the protocol is unauthenticated.
 fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
-    encode_inputs(&mut generator, &mut evaluator, X_INPUT, Y_INPUT, &mut rand::rng());
+    // Garble output sizes are input-independent (determined by n/m/chunking
+    // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
+    // n > usize::BITS without tripping the encode_inputs bit-pack assert.
+    encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half();
     let (second_levels, second_cts) = generator.garble_second_half();
     // GGM-tree internal-node ciphertexts: 2 × κ bits per row.
@@ -152,7 +125,10 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// formulas refer to.
 fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
-    encode_inputs(&mut generator, &mut evaluator, X_INPUT, Y_INPUT, &mut rand::rng());
+    // Garble output sizes are input-independent (determined by n/m/chunking
+    // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
+    // n > usize::BITS without tripping the encode_inputs bit-pack assert.
+    encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half_p2();
     let (second_levels, second_cts) = generator.garble_second_half_p2();
     // GGM-tree internal-node ciphertexts stay κ-wide (`6_total.tex:90`).
@@ -502,23 +478,11 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
     let block_sz = size_of::<Block>();
 
     for chunking_factor in 1..=8_usize {
-        // NOTE: generator and evaluator are intentionally uncorrelated — each is
-        // constructed from an independent TensorFpre instance. The evaluator's
-        // wire-label decoding produces garbage because the MACs were authenticated
-        // under a different delta. This benchmark measures garble-time + network-
-        // transfer latency only; correctness of the evaluate output is not tested.
-        //
         // Pre-compute garble output byte count outside the timed loop for
-        // accurate network-cost accounting (matches existing per-size approach).
-        // Byte-counting setup (outside timed loop). Use a correlated pair just
-        // for getting valid post-encode_inputs state — only the gen-side garble
-        // outputs are read. Bench timing path below remains uncorrelated.
-        let mut generator = setup_auth_gen(n, m, chunking_factor);
-        let mut throwaway_eval = setup_auth_eval(n, m, chunking_factor);
-        // Independent fpre instances → encode_inputs populates each side's
-        // masked_*_gen / y_gen from its OWN _eval/_gen (no cross-correlation
-        // dependency in the function); the resulting state is enough to
-        // run garble_first_half / second_half / final without panicking.
+        // accurate network-cost accounting (matches the synchronous P1 / P2
+        // benches). Use a correlated `setup_auth_pair` so the bench traverses
+        // a valid honest run — same setup as the rest of the bench file.
+        let (mut generator, mut throwaway_eval) = setup_auth_pair(n, m, chunking_factor);
         encode_inputs(&mut generator, &mut throwaway_eval, 0, 0, &mut rand::rng());
         let (first_levels, first_cts) = generator.garble_first_half();
         let (second_levels, second_cts) = generator.garble_second_half();
@@ -541,10 +505,9 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
             |b, &chunking_factor| {
                 b.to_async(&*RT).iter_batched(
                     || {
-                        // Uncorrelated setup: timing-only benchmark, not a correctness check.
-                        // encode_inputs runs in setup (not timed) per the P1/P2 bench convention.
-                        let mut generator = setup_auth_gen(n, m, chunking_factor);
-                        let mut evaluator = setup_auth_eval(n, m, chunking_factor);
+                        // Correlated honest-run setup; encode_inputs runs in setup
+                        // (not timed) per the P1/P2 bench convention.
+                        let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
                         encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
                         (
                             generator,

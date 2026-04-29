@@ -76,15 +76,18 @@ use crate::block::Block;
 /// - `masked_x_bits` / `masked_y_bits`: cleartext `d_x` / `d_y` vectors.
 ///
 /// # Bit-packing convention
-/// `x` and `y` are bit-packed in a `usize`: `x_i = (x >> i) & 1`. Therefore
-/// `n` and `m` MUST be `<= usize::BITS` (64 on 64-bit targets) — beyond
-/// that the right-shift would silently saturate and bits past index 63
-/// would read as zero. The asserts below enforce this.
+/// `x` and `y` are bit-packed in a `usize`: `x_i = (x >> i) & 1`. For
+/// `n > usize::BITS` (typically 64) the right-shift saturates and bits past
+/// index 63 read as zero. The asserts below enforce that any non-zero
+/// input fits in `usize::BITS`; zero inputs are permitted at any `n` since
+/// `(0 >> i) & 1 == 0` for all `i` — bench harnesses that exercise wide
+/// matrices with zero inputs (correctness verified by the lib-level tests
+/// at smaller sizes) thus remain unaffected.
 ///
 /// # Panics
 /// Panics if `gar.alpha_eval.len()` (the source of n) doesn't match
 /// `gar.alpha_gen` / `ev.alpha_eval` / `ev.alpha_gen`. Same for β/m.
-/// Panics if `n > usize::BITS` or `m > usize::BITS`.
+/// Panics if `x != 0` with `n > usize::BITS` (or `y != 0` with `m > usize::BITS`).
 pub fn encode_inputs<R: Rng + CryptoRng>(
     gar: &mut AuthTensorGen,
     ev: &mut AuthTensorEval,
@@ -95,12 +98,12 @@ pub fn encode_inputs<R: Rng + CryptoRng>(
     let n = gar.alpha_gen.len();
     let m = gar.beta_gen.len();
 
-    assert!(n <= usize::BITS as usize,
-        "encode_inputs: n={} exceeds usize::BITS={}; bit-packed `x` would silently truncate",
-        n, usize::BITS);
-    assert!(m <= usize::BITS as usize,
-        "encode_inputs: m={} exceeds usize::BITS={}; bit-packed `y` would silently truncate",
-        m, usize::BITS);
+    assert!(x == 0 || n <= usize::BITS as usize,
+        "encode_inputs: n={} exceeds usize::BITS={} with non-zero x={:#x}; bit-packed `x` would silently truncate",
+        n, usize::BITS, x);
+    assert!(y == 0 || m <= usize::BITS as usize,
+        "encode_inputs: m={} exceeds usize::BITS={} with non-zero y={:#x}; bit-packed `y` would silently truncate",
+        m, usize::BITS, y);
 
     assert_eq!(gar.alpha_eval.len(), n,
         "encode_inputs: gar.alpha_eval must be populated by preprocessing; len={} expected={}",
@@ -198,15 +201,17 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "exceeds usize::BITS")]
-    fn encode_inputs_panics_when_n_exceeds_usize_bits() {
+    fn encode_inputs_panics_when_n_exceeds_usize_bits_with_nonzero_x() {
         // n = 65 makes `(x >> i) & 1` saturate for i >= 64, silently zeroing
-        // high-index bits. The assert must catch this at the entry boundary.
+        // high-index bits. The assert must catch this at the entry boundary
+        // when x != 0 (zero inputs are bit-packing-invariant; benches that use
+        // wide matrices with x=y=0 are explicitly permitted).
         let n = (usize::BITS as usize) + 1;
         let m = 1;
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         let mut rng = rand::rng();
-        encode_inputs(&mut gar, &mut ev, 0, 0, &mut rng);
+        encode_inputs(&mut gar, &mut ev, 0b1, 0, &mut rng);
     }
 }
