@@ -29,48 +29,6 @@ pub mod online;
 use crate::block::Block;
 use crate::auth_tensor_gen::AuthTensorGen;
 use crate::auth_tensor_eval::AuthTensorEval;
-use crate::delta::Delta;
-use crate::sharing::AuthBitShare;
-use crate::keys::Key;
-
-/// Recover gen-side IT-MAC key block under δ_a + combined two-party bit, for
-/// an authenticated bit X (alpha[i], beta[j], correlated[idx], or gamma[idx]),
-/// from its Block-form components. Inverse of `derive_sharing_blocks`.
-///
-/// Equivalent to `(gb.X_auth_bit_shares[idx].key.as_block(),
-/// gb.X.value ^ ev.X.value)` but reads only the new `_eval` / `_gen` Block
-/// fields. See `src/preprocessing.rs::derive_sharing_blocks` for the lowering
-/// direction; this helper is its inverse over both parties' state.
-///
-/// Output `key_block` has LSB = 0 (Key invariant: LSB(gen_g)=gb.bit by
-/// construction, XORing bit·δ_a with LSB(δ_a)=1 cancels it back to 0).
-#[inline]
-fn gen_key_and_combined_bit(
-    eval_g: Block, gen_g: Block,
-    eval_e: Block, gen_e: Block,
-    delta_a: &Delta,
-) -> (Block, bool) {
-    let gb_bit = (eval_g ^ gen_g).lsb();
-    let ev_bit = (eval_e ^ gen_e).lsb();
-    let key_block = if gb_bit { gen_g ^ *delta_a.as_block() } else { gen_g };
-    (key_block, gb_bit ^ ev_bit)
-}
-
-/// Recover eval-side IT-MAC key block under δ_b for an authenticated bit X
-/// from its Block-form components. Equivalent to
-/// `ev.X_auth_bit_shares[idx].key.as_block()`. Symmetric to
-/// `gen_key_and_combined_bit` but uses ev's local bit and δ_b.
-///
-/// Output `key_block` has LSB = 0 (LSB(ev.X_eval) = 0 since LSB(δ_b)=0; XOR
-/// with ev_bit·δ_b preserves that).
-#[inline]
-fn ev_key_block_under_delta_b(
-    eval_e: Block, gen_e: Block,
-    delta_b: &Delta,
-) -> Block {
-    let ev_bit = (eval_e ^ gen_e).lsb();
-    if ev_bit { eval_e ^ *delta_b.as_block() } else { eval_e }
-}
 
 /// κ — computational security parameter (in bits). Determines `Block` width
 /// and all κ-bit cipher / hash output widths.
@@ -83,40 +41,37 @@ pub const SSP: usize = 40;
 /// Gate-semantics sanity check — verifies that an honestly garbled tensor gate
 /// produces `v_γ = v_α · v_β` at every output position.
 ///
-/// **NOT the paper's Protocol 1 consistency check.** For the paper-faithful P1
-/// abort check (per `5_online.tex` lines 226–247), see
-/// `assemble_e_input_wire_shares_p1` instead. That helper checks `e_a, e_b` on
-/// input wires under `delta_b` (D_ev) — the structurally-correct CheckZero for
-/// catching a malicious garbler. This one checks gate semantics under `delta_a`
-/// (D_gb) and so its threat-model direction (catches a cheating evaluator,
-/// not garbler) is opposite to what P1's abort logic requires. It is retained
-/// as a regression check on AND-truth-table garbling correctness, exercised by
-/// `test_gate_semantics_check_aborts_on_tampered_lambda`.
+/// **NOT the paper's Protocol 1 consistency check.** For the paper-faithful
+/// P1 / P2 abort check (per `5_online.tex` §240–246 / `6_total.tex` §215–222),
+/// see `assemble_e_input_wire_blocks_p1` / `assemble_c_alpha_beta_blocks_p2`.
+/// This helper is a sim-only regression check on AND-truth-table garbling
+/// correctness, exercised by `test_gate_semantics_check_aborts_on_tampered_lambda`.
 ///
-/// For each (i, j) output position, computes the linear combination:
+/// For each (i, j) output position, the gate-semantics quantity is:
 /// ```text
-///   c_gamma[(i,j)] = (L_alpha[i] AND L_beta[j])              [public bit]
-///                  XOR L_alpha[i] · l_beta[j]                 [shared, conditional]
-///                  XOR L_beta [j] · l_alpha[i]                [shared, conditional]
-///                  XOR l_gamma_star[(i,j)]                    [= l_alpha · l_beta]
-///                  XOR L_gamma[(i,j)]                          [public bit]
-///                  XOR l_gamma[(i,j)]                          [shared]
+///   c_gamma[(i,j)] = (L_α[i] AND L_β[j])    [public]
+///                  ⊕ L_α[i] · l_β[j]         [shared, conditional]
+///                  ⊕ L_β[j] · l_α[i]         [shared, conditional]
+///                  ⊕ l_γ*[(i,j)]             [shared, always]
+///                  ⊕ L_γ[(i,j)]              [public]
+///                  ⊕ l_γ[(i,j)]              [shared, always]
 /// ```
-/// which simplifies algebraically to `v_α · v_β ⊕ v_γ`. This is zero iff the
-/// AND truth table was honestly garbled. Verified under `delta_a`.
+/// which simplifies algebraically to `v_α · v_β ⊕ v_γ` and is zero iff the
+/// AND truth table was honestly garbled.
 ///
-/// SIMULATION ONLY: requires both parties' state. In a real protocol each
-/// party assembles its half independently and the parties run `check_zero` on
-/// the combined share over the network. The combined-key construction sums
-/// gen-side IT-MAC keys (which authenticate eval-side values under delta_a per
-/// `gen_auth_bit` in `src/auth_tensor_fpre.rs:66-86`), and the MAC is freshly
-/// recomputed via `combined_key.auth(c_gamma_bit, &gb.delta_a)` (never naive
-/// cross-party MAC XOR — see `src/online.rs:30-36`).
+/// Each party computes its share-block of `c_gamma[(i,j)] · δ_a` using its own
+/// `_gen` Block-form components (which encode its share of `λ · δ_a`). For
+/// honest gates the per-index pair satisfies `gen_block[idx] == eval_block[idx]`
+/// (their XOR equals `0 · δ_a = 0`). Public bits are absorbed into the gen-side
+/// share by convention (could equally go on the eval side; the choice doesn't
+/// affect the equality).
 ///
-/// Returns `Vec<AuthBitShare>` of length `n * m` in column-major order
-/// (`j * n + i`).
+/// SIMULATION ONLY in this in-process testbed.
+///
+/// Returns `(gen_blocks, eval_blocks)` — each length `n * m` in column-major
+/// order (`j * n + i`). Pass to `block_check_zero` for full-block equality.
 #[allow(clippy::too_many_arguments)]
-pub fn assemble_gate_semantics_shares(
+pub fn assemble_gate_semantics_blocks(
     n: usize,
     m: usize,
     l_alpha_pub: &[bool],          // length n — public masked alpha bits
@@ -124,186 +79,119 @@ pub fn assemble_gate_semantics_shares(
     l_gamma_pub: &[bool],          // length n*m — public masked gamma bits (column-major)
     gb: &AuthTensorGen,
     ev: &AuthTensorEval,
-) -> Vec<AuthBitShare> {
+) -> (Vec<Block>, Vec<Block>) {
     assert_eq!(l_alpha_pub.len(), n);
     assert_eq!(l_beta_pub.len(),  m);
     assert_eq!(l_gamma_pub.len(), n * m);
-    assert_eq!(gb.alpha_eval.len(),      n);
     assert_eq!(gb.alpha_gen.len(),       n);
-    assert_eq!(gb.beta_eval.len(),       m);
     assert_eq!(gb.beta_gen.len(),        m);
-    assert_eq!(gb.correlated_eval.len(), n * m);
     assert_eq!(gb.correlated_gen.len(),  n * m);
-    assert_eq!(gb.gamma_eval.len(),      n * m);
     assert_eq!(gb.gamma_gen.len(),       n * m);
-    assert_eq!(ev.alpha_eval.len(),      n);
     assert_eq!(ev.alpha_gen.len(),       n);
-    assert_eq!(ev.beta_eval.len(),       m);
     assert_eq!(ev.beta_gen.len(),        m);
-    assert_eq!(ev.correlated_eval.len(), n * m);
     assert_eq!(ev.correlated_gen.len(),  n * m);
-    assert_eq!(ev.gamma_eval.len(),      n * m);
     assert_eq!(ev.gamma_gen.len(),       n * m);
 
-    let mut out: Vec<AuthBitShare> = Vec::with_capacity(n * m);
+    let delta_a_block = *gb.delta_a.as_block();
+
+    let mut gen_blocks: Vec<Block> = Vec::with_capacity(n * m);
+    let mut eval_blocks: Vec<Block> = Vec::with_capacity(n * m);
+
     for j in 0..m {
         for i in 0..n {
             let idx = j * n + i;
 
-            // Accumulate the combined key block (XOR of gen-side IT-MAC keys
-            // under δ_a) and the full reconstructed c_gamma bit (XOR of both
-            // parties' values). Each per-term `gen_key_and_combined_bit` call
-            // recovers (gb.X_auth_bit_shares[idx].key.as_block(),
-            // gb.X.value ^ ev.X.value) directly from the new Block-form
-            // components — no `*_auth_bit_shares` reads.
-            let mut combined_key_block = Block::ZERO;
-            let mut c_gamma_bit = false;
+            // Each party's share-block of `c_gamma[(i,j)] · δ_a`, built from
+            // its own _gen Block fields (= `[λ · δ_a]^party` per category).
+            let mut gb_block = Block::ZERO;
+            let mut ev_block = Block::ZERO;
 
-            // Term: L_alpha[i] · l_beta[j]   (include iff L_alpha[i] is true)
+            // Term: L_α[i] · l_β[j]   (include iff L_α[i] is true)
             if l_alpha_pub[i] {
-                let (k, b) = gen_key_and_combined_bit(
-                    gb.beta_eval[j], gb.beta_gen[j],
-                    ev.beta_eval[j], ev.beta_gen[j],
-                    &gb.delta_a,
-                );
-                combined_key_block ^= k;
-                c_gamma_bit ^= b;
+                gb_block ^= gb.beta_gen[j];
+                ev_block ^= ev.beta_gen[j];
             }
 
-            // Term: L_beta[j] · l_alpha[i]   (include iff L_beta[j] is true)
+            // Term: L_β[j] · l_α[i]   (include iff L_β[j] is true)
             if l_beta_pub[j] {
-                let (k, b) = gen_key_and_combined_bit(
-                    gb.alpha_eval[i], gb.alpha_gen[i],
-                    ev.alpha_eval[i], ev.alpha_gen[i],
-                    &gb.delta_a,
-                );
-                combined_key_block ^= k;
-                c_gamma_bit ^= b;
+                gb_block ^= gb.alpha_gen[i];
+                ev_block ^= ev.alpha_gen[i];
             }
 
-            // Term: l_gamma*[(i,j)] = l_alpha[i] · l_beta[j]   (always)
-            let (k, b) = gen_key_and_combined_bit(
-                gb.correlated_eval[idx], gb.correlated_gen[idx],
-                ev.correlated_eval[idx], ev.correlated_gen[idx],
-                &gb.delta_a,
-            );
-            combined_key_block ^= k;
-            c_gamma_bit ^= b;
+            // Term: l_γ*[(i,j)]   (always)
+            gb_block ^= gb.correlated_gen[idx];
+            ev_block ^= ev.correlated_gen[idx];
 
-            // Term: l_gamma[(i,j)]   (always)
-            let (k, b) = gen_key_and_combined_bit(
-                gb.gamma_eval[idx], gb.gamma_gen[idx],
-                ev.gamma_eval[idx], ev.gamma_gen[idx],
-                &gb.delta_a,
-            );
-            combined_key_block ^= k;
-            c_gamma_bit ^= b;
+            // Term: l_γ[(i,j)]   (always)
+            gb_block ^= gb.gamma_gen[idx];
+            ev_block ^= ev.gamma_gen[idx];
 
-            let combined_key = Key::from(combined_key_block);
-
-            // Fold the PUBLIC-bit value contribution.
-            // (L_alpha[i] AND L_beta[j]) XOR L_gamma[(i,j)] contribute only to
-            // the bit value — no IT-MAC structure.
+            // Public bit: `(L_α[i] AND L_β[j]) ⊕ L_γ[(i,j)]`. Lifted to a
+            // δ_a Block contribution and absorbed into gb's side (convention;
+            // ev's side could equally hold it — the equality check is
+            // unaffected since public bits are known to both parties).
             let public_bit = (l_alpha_pub[i] & l_beta_pub[j]) ^ l_gamma_pub[idx];
-            c_gamma_bit ^= public_bit;
+            if public_bit {
+                gb_block ^= delta_a_block;
+            }
 
-            // Build a properly-formed AuthBitShare verified under delta_a.
-            // key = XOR(gen-side B-keys), mac = key.auth(c_gamma_bit, delta_a).
-            // value = c_gamma_bit.
-            let combined_mac = combined_key.auth(c_gamma_bit, &gb.delta_a);
-            let share = AuthBitShare {
-                key: combined_key,
-                mac: combined_mac,
-                value: c_gamma_bit,
-            };
-
-            out.push(share);
+            gen_blocks.push(gb_block);
+            eval_blocks.push(ev_block);
         }
     }
-    out
+
+    (gen_blocks, eval_blocks)
 }
 
 /// Paper-faithful Protocol 1 input-wire CheckZero assembly under `delta_b`.
 ///
-/// Implements the Protocol 1 consistency check from
-/// `references/Authenticated_Garbling_with_Tensor_Gates/CCS2026/5_online.tex`
-/// lines 226–247, in conjunction with the input-encoding identity at lines
-/// 211–217:
+/// Implements the Protocol 1 consistency check per `5_online.tex` §240–246
+/// (and `6_total.tex` §215–222 for P2; same formula). For each tensor-gate
+/// input wire, each party computes its share-block of:
 ///
 /// ```text
-///   gb sets [v_x D_ev]^gb := [l_x D_ev]^gb
-///   ev sets [v_x D_ev]^ev := [l_x D_ev]^ev XOR (x XOR l_x) D_ev
+///   [e_a[i] D_ev] := [a[i] D_ev] ⊕ [l_a[i] D_ev] ⊕ (a[i] ⊕ l_a[i]) D_ev
+///   [e_b[j] D_ev] := [b[j] D_ev] ⊕ [l_b[j] D_ev] ⊕ (b[j] ⊕ l_b[j]) D_ev
 /// ```
 ///
-/// For each tensor gate with input vectors `a` (length n) and `b` (length m),
-/// the paper builds two shares per input wire (line 242–243):
+/// For honest parties this reduces to zero by Lemma `lem:protocol1-correctness`
+/// (line 297) — i.e., `gen_block[k] == eval_block[k]` per index. CheckZero
+/// (paper line 246) detects deviation: a malicious garbler that lies about
+/// `[v D_ev]^gb` makes the per-index pair unequal.
 ///
-/// ```text
-///   [e_a[i] D_ev] := [a[i] D_ev] XOR [l_a[i] D_ev] XOR (a[i] XOR l_a[i]) D_ev
-///   [e_b[j] D_ev] := [b[j] D_ev] XOR [l_b[j] D_ev] XOR (b[j] XOR l_b[j]) D_ev
-/// ```
-///
-/// CheckZero (paper line 246) verifies these are all zero under `delta_b`.
-/// For honest parties the identity reduces to zero by definition of input
-/// encoding (paper Lemma `lem:protocol1-correctness`, line 297). The
-/// substantive security comes from the IT-MAC structure under `delta_b`: a
-/// malicious garbler that lies about its `[v D_ev]^gb` share during input
-/// encoding produces a non-zero combined block, breaking the bit-zero
-/// invariant.
-///
-/// # Differences from `assemble_gate_semantics_shares`
-/// - **Wire**: input wires `a, b`, not output wire `c`. Length `n + m`, not
-///   `n * m`.
-/// - **Formula**: 3 terms (paper line 242–243), no `correlated_eval`
-///   (no tensor-product term).
-/// - **Delta**: this helper verifies under `delta_b` (D_ev), the paper-
-///   faithful direction for catching a malicious garbler.
-///   `assemble_gate_semantics_shares` uses `delta_a` for a *different*
-///   (gate-semantics) check, not the paper's protocol abort check.
-///
-/// Used by both Protocol 1 (`5_online.tex` lines 242–246) and Protocol 2
-/// (`6_total.tex` lines 207–214 — same formula on `c_α/c_β`); see
-/// `assemble_c_alpha_beta_shares_p2` for the paper-mapped P2 alias.
-///
-/// # Combined-key choice
-///
-/// Per `gen_auth_bit` in `src/auth_tensor_fpre.rs:66-86`, under `delta_b`
-/// `ev.alpha_auth_bit_shares[i].key` is the canonical "key authenticating
-/// `gb.value` under `delta_b`". The helper uses these eval-side keys to build
-/// a combined `AuthBitShare` verifying under `delta_b` for the full
-/// reconstructed `e_a` bit.
+/// Returns `(gen_blocks, eval_blocks)` — each length `n + m`, layout
+/// `[e_a[0..n], e_b[0..m]]`. Pass to `block_check_zero` (full-block equality)
+/// or hash each side via `block_hash_check_zero` for the paper-faithful
+/// `H({V_w})` digest semantics.
 ///
 /// # SIMULATION ONLY
 ///
-/// Requires both parties' state. In a real protocol each party assembles its
-/// half independently using only its own preprocessing and `[v D_ev]` shares,
-/// then runs `check_zero` over the network.
+/// Takes both parties' state in-process; in a real two-party run each party
+/// would compute its own block vector locally from its own `_eval` fields and
+/// `[v D_ev]` shares, then exchange digests. To make the simulation sensitive
+/// to a malicious garbler that lies about `[v_a D_ev]^gb`, the helper accepts
+/// `[v_a D_ev]^gb` as an explicit parameter rather than aliasing it to
+/// `gb.alpha_eval[i]`. Honest callers pass `gb.alpha_eval.clone()`; negative
+/// tests pass tampered Blocks.
 ///
-/// To make the simulation sensitive to a malicious garbler that lies about its
-/// `[v_a D_ev]^gb` (NOT just its preprocessing), this helper accepts `[v_a
-/// D_ev]^gb` as an explicit parameter rather than aliasing it to
-/// `gb.alpha_eval[i]`. Honest callers pass `gb.alpha_eval.clone()`;
-/// negative tests can pass tampered Blocks.
+/// # Detection power vs the prior `assemble_e_input_wire_shares_p1`
 ///
-/// # Inputs
+/// The prior helper extracted `combined_block.lsb()` and emitted
+/// `Vec<AuthBitShare>` for `check_zero` consumption — detection was LSB-only
+/// (caught only tampers whose XOR delta has LSB=1). This helper emits the
+/// full per-party blocks so `block_check_zero` can detect any non-zero
+/// combined block. Aligns with paper §246 (`H({V_w})` digest comparison).
+///
+/// # Inputs (unchanged from prior helper)
 /// - `n`, `m`: input vector lengths.
-/// - `gb_v_alpha_eval`: `[v_a D_ev]^gb` for each i (length n). Honest input
-///   encoding sets this equal to `gb.alpha_eval`.
-/// - `ev_v_alpha_eval`: `[v_a D_ev]^ev` for each i (length n). Honest input
-///   encoding sets this equal to `ev.alpha_eval[i] ^ (L_a · delta_b)`.
-/// - `gb_v_beta_eval`, `ev_v_beta_eval`: same for the β input vector (length m).
-/// - `l_alpha_pub`, `l_beta_pub`: announced masked input values
-///   `vec a XOR vec l_a` and `vec b XOR vec l_b`.
-/// - `gb`, `ev`: party preprocessing/state for `_eval_shares` and
-///   `_auth_bit_shares` reads.
-///
-/// # Returns
-///
-/// `Vec<AuthBitShare>` of length `n + m`, layout
-/// `[e_a_0, …, e_a_{n-1}, e_b_0, …, e_b_{m-1}]`. Each share verifies under
-/// `ev.delta_b`.
+/// - `gb_v_alpha_eval` / `ev_v_alpha_eval`: `[v_a D_ev]` shares (length n).
+///   Honest: gb's = `gb.alpha_eval`; ev's = `ev.alpha_eval[i] ⊕ L_a·δ_b`.
+/// - `gb_v_beta_eval` / `ev_v_beta_eval`: same for β (length m).
+/// - `l_alpha_pub` / `l_beta_pub`: announced masked-input vectors
+///   `vec a ⊕ vec l_a`, `vec b ⊕ vec l_b`.
+/// - `gb`, `ev`: party state for `_eval` Block fields.
 #[allow(clippy::too_many_arguments)]
-pub fn assemble_e_input_wire_shares_p1(
+pub fn assemble_e_input_wire_blocks_p1(
     n: usize,
     m: usize,
     gb_v_alpha_eval: &[Block],
@@ -314,7 +202,7 @@ pub fn assemble_e_input_wire_shares_p1(
     l_beta_pub: &[bool],
     gb: &AuthTensorGen,
     ev: &AuthTensorEval,
-) -> Vec<AuthBitShare> {
+) -> (Vec<Block>, Vec<Block>) {
     assert_eq!(gb_v_alpha_eval.len(), n);
     assert_eq!(ev_v_alpha_eval.len(), n);
     assert_eq!(gb_v_beta_eval.len(),  m);
@@ -322,130 +210,54 @@ pub fn assemble_e_input_wire_shares_p1(
     assert_eq!(l_alpha_pub.len(), n);
     assert_eq!(l_beta_pub.len(),  m);
     assert_eq!(gb.alpha_eval.len(), n);
-    assert_eq!(gb.alpha_gen.len(),  n);
     assert_eq!(gb.beta_eval.len(),  m);
-    assert_eq!(gb.beta_gen.len(),   m);
     assert_eq!(ev.alpha_eval.len(), n);
-    assert_eq!(ev.alpha_gen.len(),  n);
     assert_eq!(ev.beta_eval.len(),  m);
-    assert_eq!(ev.beta_gen.len(),   m);
 
-    let mut out: Vec<AuthBitShare> = Vec::with_capacity(n + m);
+    let mut gen_blocks: Vec<Block> = Vec::with_capacity(n + m);
+    let mut eval_blocks: Vec<Block> = Vec::with_capacity(n + m);
 
-    // e_a checks: one per α-input wire.
+    // e_a per α-input wire: paper §242
+    //   gb's share-block = [v_a D_ev]^gb ⊕ [l_a D_ev]^gb
+    //   ev's share-block = [v_a D_ev]^ev ⊕ [l_a D_ev]^ev ⊕ L_a·D_ev
     for i in 0..n {
-        // L_a · delta_b correction Block.
         let l_a_correction = if l_alpha_pub[i] {
             *ev.delta_b.as_block()
         } else {
             Block::default()
         };
-
-        // Each party's half-share of [e_a D_ev] per paper line 242:
-        //   gb's half = [v_a D_ev]^gb XOR [l_a D_ev]^gb
-        //   ev's half = [v_a D_ev]^ev XOR [l_a D_ev]^ev XOR L_a · D_ev
-        let gb_e_block = gb_v_alpha_eval[i] ^ gb.alpha_eval[i];
-        let ev_e_block = ev_v_alpha_eval[i]
-                         ^ ev.alpha_eval[i]
-                         ^ l_a_correction;
-        let combined_e_block = gb_e_block ^ ev_e_block;
-
-        // For honest parties combined_e_block is the zero block. For a
-        // malicious garbler whose `gb_v_alpha_eval[i]` deviates from
-        // `gb.alpha_eval[i]`, the combined block is non-zero. The
-        // .lsb() reading captures tampers whose XOR delta has bit 0 set
-        // (e.g., XOR delta_a with LSB=1) — sufficient for the negative test.
-        let e_a_bit = combined_e_block.lsb();
-
-        // Combined key under delta_b: eval-side key block of the α-share,
-        // recovered from Block-form components (equivalent to
-        // ev.alpha_auth_bit_shares[i].key.as_block(), but reads only _eval/_gen).
-        let combined_key = Key::from(
-            ev_key_block_under_delta_b(ev.alpha_eval[i], ev.alpha_gen[i], &ev.delta_b)
-        );
-
-        // Recompute MAC freshly under delta_b. Per check_zero doc
-        // (online.rs:30-36): never naive-XOR cross-party MACs.
-        let combined_mac = combined_key.auth(e_a_bit, &ev.delta_b);
-
-        out.push(AuthBitShare {
-            key: combined_key,
-            mac: combined_mac,
-            value: e_a_bit,
-        });
+        gen_blocks.push(gb_v_alpha_eval[i] ^ gb.alpha_eval[i]);
+        eval_blocks.push(ev_v_alpha_eval[i] ^ ev.alpha_eval[i] ^ l_a_correction);
     }
 
-    // e_b checks: symmetric to α loop.
+    // e_b per β-input wire: symmetric.
     for j in 0..m {
         let l_b_correction = if l_beta_pub[j] {
             *ev.delta_b.as_block()
         } else {
             Block::default()
         };
-
-        let gb_e_block = gb_v_beta_eval[j] ^ gb.beta_eval[j];
-        let ev_e_block = ev_v_beta_eval[j]
-                         ^ ev.beta_eval[j]
-                         ^ l_b_correction;
-        let combined_e_block = gb_e_block ^ ev_e_block;
-
-        let e_b_bit = combined_e_block.lsb();
-        let combined_key = Key::from(
-            ev_key_block_under_delta_b(ev.beta_eval[j], ev.beta_gen[j], &ev.delta_b)
-        );
-        let combined_mac = combined_key.auth(e_b_bit, &ev.delta_b);
-
-        out.push(AuthBitShare {
-            key: combined_key,
-            mac: combined_mac,
-            value: e_b_bit,
-        });
+        gen_blocks.push(gb_v_beta_eval[j] ^ gb.beta_eval[j]);
+        eval_blocks.push(ev_v_beta_eval[j] ^ ev.beta_eval[j] ^ l_b_correction);
     }
 
-    out
+    (gen_blocks, eval_blocks)
 }
 
-/// Paper-faithful Protocol 2 input-wire CheckZero assembly under `delta_b`.
+/// Paper-faithful Protocol 2 input-wire CheckZero assembly — alias for the P1
+/// routine.
 ///
-/// Implements the Protocol 2 consistency check from
-/// `references/Authenticated_Garbling_with_Tensor_Gates/CCS2026/6_total.tex`
-/// lines 205–215:
-///
+/// Per `6_total.tex` §215–222, the P2 consistency check builds:
 /// ```text
-///   [c_α D_ev] := [v_α D_ev] XOR [l_α D_ev] XOR L_α · D_ev    (length n)
-///   [c_β D_ev] := [v_β D_ev] XOR [l_β D_ev] XOR L_β · D_ev    (length m)
-///   CheckZero({[c_α D_ev], [c_β D_ev]})
+///   [c_α D_ev] := [v_α D_ev] ⊕ [l_α D_ev] ⊕ L_α · D_ev    (length n)
+///   [c_β D_ev] := [v_β D_ev] ⊕ [l_β D_ev] ⊕ L_β · D_ev    (length m)
 /// ```
-///
-/// Algebraically identical to the Protocol 1 input-wire check
-/// (`5_online.tex` lines 242–246, implemented by
-/// `assemble_e_input_wire_shares_p1`): both protocols' abort check is on
-/// tensor-gate input wires, three-term XOR `[v D_ev] ⊕ [λ D_ev] ⊕ L·D_ev`,
-/// verified under `delta_b`. Variable names differ only because the paper
-/// uses `e_a/e_b` in P1 and `c_α/c_β` in P2. This helper is therefore a
-/// thin alias that delegates to the P1 routine — keeping the paper-mapped
-/// name in P2 call sites while avoiding duplicated code.
-///
-/// Distinct from the (now removed) `c_gamma`-flavored P2 check that operated
-/// over γ output wires: that variant did not match `6_total.tex` line 207–212
-/// — the paper checks input wires α, β, not output γ.
-///
-/// # Inputs (mirror P1)
-/// - `n`, `m`: input vector lengths.
-/// - `gb_v_alpha_eval` / `ev_v_alpha_eval`: `[v_α D_ev]` shares (length n).
-///   Honest input encoding sets these consistent with `alpha_eval` on
-///   each party (gb's equals its `alpha_eval`; ev's equals its share
-///   XOR'd with `L_α · delta_b`).
-/// - `gb_v_beta_eval` / `ev_v_beta_eval`: same for β (length m).
-/// - `l_alpha_pub` / `l_beta_pub`: announced masked-input bits `L_α = v_α ⊕ l_α`
-///   and `L_β = v_β ⊕ l_β`.
-/// - `gb`, `ev`: party state for `_eval_shares` and `_auth_bit_shares` reads.
-///
-/// # Returns
-/// `Vec<AuthBitShare>` of length `n + m`, layout
-/// `[c_α[0..n-1], c_β[0..m-1]]`. Each share verifies under `ev.delta_b`.
+/// Algebraically identical to P1's `e_a / e_b`. The paper uses different
+/// variable names (`c_α/c_β` in P2 vs `e_a/e_b` in P1) to match its narrative;
+/// this thin alias preserves the paper-mapped name at P2 call sites without
+/// duplicating logic.
 #[allow(clippy::too_many_arguments)]
-pub fn assemble_c_alpha_beta_shares_p2(
+pub fn assemble_c_alpha_beta_blocks_p2(
     n: usize,
     m: usize,
     gb_v_alpha_eval: &[Block],
@@ -456,8 +268,8 @@ pub fn assemble_c_alpha_beta_shares_p2(
     l_beta_pub: &[bool],
     gb: &AuthTensorGen,
     ev: &AuthTensorEval,
-) -> Vec<AuthBitShare> {
-    assemble_e_input_wire_shares_p1(
+) -> (Vec<Block>, Vec<Block>) {
+    assemble_e_input_wire_blocks_p1(
         n, m,
         gb_v_alpha_eval,
         ev_v_alpha_eval,
@@ -678,12 +490,12 @@ mod tests {
     use crate::auth_tensor_eval::AuthTensorEval;
     use crate::input_encoding::encode_inputs;
     use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing, UncompressedPreprocessingBackend};
-    use crate::online::check_zero;
+    use crate::online::block_check_zero;
     use crate::sharing::AuthBitShare;
     use super::{
-        assemble_gate_semantics_shares,
-        assemble_e_input_wire_shares_p1,
-        assemble_c_alpha_beta_shares_p2,
+        assemble_gate_semantics_blocks,
+        assemble_e_input_wire_blocks_p1,
+        assemble_c_alpha_beta_blocks_p2,
     };
 
     #[test]
@@ -871,7 +683,7 @@ mod tests {
             })
             .collect();
 
-        let e_shares = assemble_e_input_wire_shares_p1(
+        let (e_gen_blocks, e_eval_blocks) = assemble_e_input_wire_blocks_p1(
             n, m,
             &gb_v_alpha_eval,
             &ev_v_alpha_eval,
@@ -883,11 +695,14 @@ mod tests {
             &ev,
         );
 
-        assert_eq!(e_shares.len(), n + m);
+        assert_eq!(e_gen_blocks.len(), n + m);
+        assert_eq!(e_eval_blocks.len(), n + m);
 
-        // Paper-faithful CheckZero: verify under delta_b (D_ev), per 5_online.tex line 246.
+        // Paper-faithful CheckZero: full-block per-index equality under D_ev,
+        // per 5_online.tex §246. Honest parties' share-blocks satisfy
+        // gen_block[k] == eval_block[k] (their XOR is bit·δ_b with bit=0).
         assert!(
-            check_zero(&e_shares, &ev.delta_b),
+            block_check_zero(&e_gen_blocks, &e_eval_blocks),
             "honest Protocol 1 run must pass paper-faithful CheckZero under D_ev"
         );
     }
@@ -1001,7 +816,7 @@ mod tests {
             })
             .collect();
 
-        let c_shares_p2 = assemble_c_alpha_beta_shares_p2(
+        let (c_gen_blocks_p2, c_eval_blocks_p2) = assemble_c_alpha_beta_blocks_p2(
             n, m,
             &gb_v_alpha_eval,
             &ev_v_alpha_eval,
@@ -1013,12 +828,13 @@ mod tests {
             &ev,
         );
 
-        assert_eq!(c_shares_p2.len(), n + m);
+        assert_eq!(c_gen_blocks_p2.len(), n + m);
+        assert_eq!(c_eval_blocks_p2.len(), n + m);
 
-        // Honest CheckZero under delta_b per 6_total.tex:214.
+        // Honest CheckZero under delta_b per 6_total.tex §222.
         assert!(
-            check_zero(&c_shares_p2, &ev.delta_b),
-            "honest Protocol 2 run must pass check_zero on c_α/c_β under D_ev (delta_b)"
+            block_check_zero(&c_gen_blocks_p2, &c_eval_blocks_p2),
+            "honest Protocol 2 run must pass block_check_zero on c_α/c_β under D_ev (delta_b)"
         );
     }
 
@@ -1080,7 +896,7 @@ mod tests {
         let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
         let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
 
-        let c_gamma_shares_tampered = assemble_gate_semantics_shares(
+        let (c_gamma_gen_tampered, c_gamma_eval_tampered) = assemble_gate_semantics_blocks(
             n, m,
             &l_alpha_pub,
             &l_beta_pub,
@@ -1090,8 +906,8 @@ mod tests {
         );
 
         assert!(
-            !check_zero(&c_gamma_shares_tampered, &gb.delta_a),
-            "tampered lambda_gb must cause gate-semantics check_zero to abort"
+            !block_check_zero(&c_gamma_gen_tampered, &c_gamma_eval_tampered),
+            "tampered lambda_gb must cause gate-semantics block_check_zero to abort"
         );
     }
 
@@ -1161,7 +977,7 @@ mod tests {
             })
             .collect();
 
-        let e_shares_tampered = assemble_e_input_wire_shares_p1(
+        let (e_gen_blocks_tampered, e_eval_blocks_tampered) = assemble_e_input_wire_blocks_p1(
             n, m,
             &gb_v_alpha_eval,
             &ev_v_alpha_eval,
@@ -1175,15 +991,15 @@ mod tests {
 
         // Paper-faithful CheckZero MUST abort for the tampered run.
         assert!(
-            !check_zero(&e_shares_tampered, &ev.delta_b),
-            "tampered gb_v_alpha_eval must cause paper-faithful CheckZero to abort"
+            !block_check_zero(&e_gen_blocks_tampered, &e_eval_blocks_tampered),
+            "tampered gb_v_alpha_eval must cause paper-faithful block_check_zero to abort"
         );
 
-        // Cross-check: the OLD gate-semantics check is insensitive to this tamper
-        // because it doesn't read `*_eval_shares` blocks at all.
+        // Cross-check: the gate-semantics check is insensitive to this tamper
+        // because it doesn't read `*_eval` blocks at all.
         let lambda_gb = gb.compute_lambda_gamma();
         let l_gamma_combined = ev.compute_lambda_gamma(&lambda_gb);
-        let gate_sem_shares = assemble_gate_semantics_shares(
+        let (gate_sem_gen, gate_sem_eval) = assemble_gate_semantics_blocks(
             n, m,
             &l_alpha_pub,
             &l_beta_pub,
@@ -1192,10 +1008,94 @@ mod tests {
             &ev,
         );
         assert!(
-            check_zero(&gate_sem_shares, &gb.delta_a),
+            block_check_zero(&gate_sem_gen, &gate_sem_eval),
             "gate-semantics check should still pass for a D_ev-block tamper \
-             (it doesn't read eval_shares, so the tamper is invisible to it)"
+             (it doesn't read _eval blocks, so the tamper is invisible to it)"
         );
     }
 
+    /// 1.2(i) regression: a tamper whose XOR delta has LSB=0 was UNDETECTED by
+    /// the prior LSB-only `check_zero(&[AuthBitShare], delta)`. The Block-form
+    /// `block_check_zero` does full per-index block equality, so any non-zero
+    /// XOR — including LSB=0 deltas — must be caught.
+    ///
+    /// Concretely: tamper `gb_v_alpha_eval[0]` by XORing `δ_b` (which has
+    /// LSB=0). With the old helper, the combined block's LSB was unchanged,
+    /// `e_a_bit = combined.lsb()` stayed `false`, and `check_zero` would have
+    /// passed silently. With `block_check_zero`, `gen_block[0] != eval_block[0]`
+    /// and the check aborts.
+    #[test]
+    fn test_protocol_1_e_input_wire_block_check_aborts_on_lsb_zero_tamper() {
+        let n = 4;
+        let m = 3;
+
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+
+        let mut prep_rng = rand::rng();
+        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
+
+        let (cl1, ct1) = gb.garble_first_half();
+        ev.evaluate_first_half(cl1, ct1);
+        let (cl2, ct2) = gb.garble_second_half();
+        ev.evaluate_second_half(cl2, ct2);
+        gb.garble_final();
+        ev.evaluate_final();
+
+        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
+        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
+
+        let mut gb_v_alpha_eval: Vec<Block> = gb.alpha_eval.clone();
+        let gb_v_beta_eval: Vec<Block> = gb.beta_eval.clone();
+
+        // TAMPER: XOR δ_b (LSB=0 by `Delta::random_b` invariant) into
+        // gb_v_alpha_eval[0]. The combined block's LSB is unchanged, so the
+        // prior LSB-only check would have missed this.
+        debug_assert_eq!(ev.delta_b.as_block().lsb(), false,
+            "δ_b must have LSB=0 for this test to exercise the missed-by-LSB path");
+        gb_v_alpha_eval[0] ^= *ev.delta_b.as_block();
+
+        let ev_v_alpha_eval: Vec<Block> = (0..n)
+            .map(|i| if l_alpha_pub[i] {
+                ev.alpha_eval[i] ^ *ev.delta_b.as_block()
+            } else {
+                ev.alpha_eval[i]
+            })
+            .collect();
+        let ev_v_beta_eval: Vec<Block> = (0..m)
+            .map(|j| if l_beta_pub[j] {
+                ev.beta_eval[j] ^ *ev.delta_b.as_block()
+            } else {
+                ev.beta_eval[j]
+            })
+            .collect();
+
+        let (e_gen_blocks, e_eval_blocks) = assemble_e_input_wire_blocks_p1(
+            n, m,
+            &gb_v_alpha_eval,
+            &ev_v_alpha_eval,
+            &gb_v_beta_eval,
+            &ev_v_beta_eval,
+            &l_alpha_pub,
+            &l_beta_pub,
+            &gb,
+            &ev,
+        );
+
+        // Sanity: confirm the tamper actually flips the block (combined ≠ 0)
+        // and that LSB extraction would NOT have caught it.
+        let combined_at_0 = e_gen_blocks[0] ^ e_eval_blocks[0];
+        assert_ne!(combined_at_0, Block::default(),
+            "tamper must produce a non-zero combined block");
+        assert_eq!(combined_at_0.lsb(), false,
+            "this tamper must keep LSB=0 (otherwise it would have been caught by the prior check)");
+
+        // Block-form CheckZero MUST detect — full-block equality, not LSB.
+        assert!(
+            !block_check_zero(&e_gen_blocks, &e_eval_blocks),
+            "block_check_zero must detect an LSB=0 tamper that the prior \
+             LSB-only check would have missed"
+        );
+    }
 }

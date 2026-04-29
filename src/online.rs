@@ -1,98 +1,63 @@
 //! Online phase primitives that span both garbler and evaluator views.
 //!
-//! Currently hosts `check_zero()` only. `open()` (ONL-01) and its wrong-delta
-//! negative test (ONL-02) are deferred to a later phase per Phase 8 CONTEXT.md
-//! D-01 — they will live in this module once the message-passing design is
-//! settled.
+//! Hosts `block_check_zero` (per-index full-block equality) and
+//! `block_hash_check_zero` (the paper's `H({V_w})` digest). `open()` and its
+//! wrong-delta negative test are deferred per Phase 8 CONTEXT.md D-01 — they
+//! will live in this module once the message-passing design is settled.
 
 use crate::aes::FIXED_KEY_AES;
 use crate::block::Block;
-use crate::delta::Delta;
-use crate::sharing::AuthBitShare;
 
-/// Verifies that the per-gate consistency-check vector reconstructs to zero
-/// AND that its IT-MAC under `delta_mac` is valid.
+/// Block-form CheckZero — paper-faithful per-index full-block equality.
 ///
-/// `c_gamma_shares` is the caller-assembled vector of D_ev-authenticated
-/// shares of `c_gamma`, where (per Construction 3 in 5_online.tex line 206):
+/// Each party computes its own share-block of a quantity that, for honest
+/// parties, must reconstruct to zero (e.g. `[e_a D_ev]` per `5_online.tex`
+/// §240–246, or `[c_α D_ev]` per `6_total.tex` §215–222). Honest parties'
+/// share-blocks must satisfy `gen_block[i] == eval_block[i]` because their
+/// XOR is `bit · δ` and `bit = 0`.
 ///
-///   c_gamma = (L_alpha XOR l_alpha) ⊗ (L_beta XOR l_beta)
-///                                  XOR (L_gamma XOR l_gamma)
-///           = v_alpha ⊗ v_beta XOR v_gamma   [= 0 for honest parties]
+/// Detection is **full-block** (not LSB-only): any tampering that produces
+/// `gen_block[i] ⊕ eval_block[i] ≠ 0` is caught, regardless of which bit was
+/// flipped. Replaces the prior `check_zero(&[AuthBitShare], delta)` glue
+/// layer, whose detection power was limited to LSB-flipping tampers.
 ///
-/// # Caller contract (per CONTEXT.md D-08)
+/// SIMULATION ONLY in this in-process testbed: takes both parties' block
+/// vectors directly. In a real two-party run, each party hashes its own
+/// blocks via `block_hash_check_zero` and parties exchange digests; matching
+/// digests imply per-index equality by collision-resistance of the hash.
 ///
-/// `check_zero` is a thin primitive — it does NOT know about the protocol
-/// structs or the c_gamma assembly. The caller MUST assemble each `share`
-/// in `c_gamma_shares` with:
-///   - `share.value` = full reconstructed c_gamma bit (gen.value XOR ev.value)
-///   - `share.key`   = XOR of all gen-side B-keys contributing to this gate
-///   - `share.mac`   = `share.key.auth(share.value, delta_mac)`  ← freshly computed
-///
-/// **Do NOT** use the `AuthBitShare::add` (`+`) operator to combine
-/// cross-party shares directly. The two parties' MACs are authenticated
-/// under opposite deltas (gen side vs eval side in the bCOT structure) and
-/// will NOT combine correctly without recomputing the MAC — a naive XOR of
-/// gen.mac and ev.mac does not yield a valid IT-MAC under either party's
-/// delta. Always recompute `mac = key.auth(value, delta_mac)` after
-/// accumulating the full reconstructed bit and the combined key.
-///
-/// See `assemble_e_input_wire_shares_p1` (paper-faithful P1) and
-/// `assemble_c_alpha_beta_shares_p2` (paper-faithful P2) in `src/lib.rs` for
-/// reference implementations of this pattern.
-///
-/// # Returns
-///
-/// - `true`  ("pass" / "do not abort") if every share has `value == false`
-///   AND `mac == key.auth(value, delta_mac)`.
-/// - `false` ("abort") on the first share that fails either check.
-///
-/// `delta_mac` is the global correlation key under which the `c_gamma_shares`
-/// IT-MACs are authenticated (the verifying party's delta for the shares in
-/// question). In this codebase `delta_a` from `AuthTensorGen` is that delta.
-///
-/// Empty slice returns `true` (vacuously zero).
-pub fn check_zero(c_gamma_shares: &[AuthBitShare], delta_mac: &Delta) -> bool {
-    for share in c_gamma_shares {
-        // (1) Reconstructed bit must be 0. The caller pre-XORed the two
-        // parties' shares, so `share.value` IS the reconstructed bit.
-        if share.value {
-            return false;
-        }
-        // (2) IT-MAC invariant under delta_mac.
-        // mac == key XOR (value * delta_mac) === key.auth(value, delta_mac).
-        // When value is false (the only path that reaches here) this
-        // simplifies to `mac == key` (XOR with zero block).
-        let want = share.key.auth(share.value, delta_mac);
-        if share.mac != want {
+/// Returns:
+/// - `true` ("pass") if `gen_blocks.len() == eval_blocks.len()` and every
+///   per-index pair is equal.
+/// - `false` ("abort") on the first mismatch (or length mismatch).
+pub fn block_check_zero(gen_blocks: &[Block], eval_blocks: &[Block]) -> bool {
+    if gen_blocks.len() != eval_blocks.len() {
+        return false;
+    }
+    for (g, e) in gen_blocks.iter().zip(eval_blocks.iter()) {
+        if g != e {
             return false;
         }
     }
     true
 }
 
-/// Hash a vector of consistency-check shares into a single 16-byte digest.
+/// Paper-faithful `H({V_w})` digest of a Block-form CheckZero share vector.
 ///
-/// Models the paper's `H({V_w}_{w ∈ I ∪ W})` (`5_online.tex:226–247`,
-/// `6_total.tex:205–215`): each party hashes its assembled CheckZero shares
-/// locally and exchanges the digest; matching digests imply zero error on every
-/// wire (Lemma `lem:error` in `appendix_security.tex`).
+/// Models `5_online.tex` §226–247 / `6_total.tex` §205–215: each party hashes
+/// its own assembled per-wire share-blocks and exchanges the digest; matching
+/// digests imply per-index `gen_block[i] == eval_block[i]` for every wire,
+/// which (per Lemma `lem:error`) implies zero error.
 ///
-/// Returns the 16-byte digest meant to be sent over the wire — this is **not**
-/// a bool. Use `check_zero` for the local zero-bit + MAC sanity check, and use
-/// this helper for the wire-side digest in benchmarks measuring the full
-/// online round-trip.
-///
-/// Construction: fold `share.mac` blocks through the fixed-key AES correlation-
-/// robust hash (`src/aes.rs:99–108`). The CR construction is the same primitive
-/// the paper assumes for `H_ccrnd`. The fold is `h_0 = 0; h_{i+1} = cr(h_i ⊕ mac_i)`,
-/// giving a one-pass O(n+m) hash whose cost shape matches a real `H` evaluation.
+/// Construction: `h_0 = 0; h_{i+1} = cr(h_i ⊕ block_i)` using the fixed-key
+/// AES correlation-robust hash (`src/aes.rs`). One-pass O(n+m) cost matching
+/// the paper's `H_ccrnd` invocation shape.
 ///
 /// Empty slice returns `Block::default()` (all zeros).
-pub fn hash_check_zero(shares: &[AuthBitShare]) -> Block {
+pub fn block_hash_check_zero(blocks: &[Block]) -> Block {
     let mut h = Block::default();
-    for share in shares {
-        h = FIXED_KEY_AES.cr(h ^ *share.mac.as_block());
+    for block in blocks {
+        h = FIXED_KEY_AES.cr(h ^ *block);
     }
     h
 }
@@ -100,85 +65,67 @@ pub fn hash_check_zero(shares: &[AuthBitShare]) -> Block {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::Block;
-    use crate::keys::Key;
-    use rand_chacha::ChaCha12Rng;
-    use rand::SeedableRng;
 
     #[test]
-    fn test_check_zero_passes_on_zero_bit_with_valid_mac() {
-        let mut rng = ChaCha12Rng::seed_from_u64(1);
-        let delta = Delta::random(&mut rng);
-        let key = Key::new(Block::random(&mut rng));
-        let mac = key.auth(false, &delta);
-        let share = AuthBitShare { key, mac, value: false };
-        assert!(check_zero(&[share], &delta),
-            "honest c_gamma=0 share with valid MAC must pass");
+    fn block_check_zero_passes_on_per_index_equality() {
+        // Honest parties: gen_block[i] == eval_block[i] ⇔ combined XOR = 0.
+        let blocks: Vec<Block> = (0..8).map(|i| Block::from([i as u8; 16])).collect();
+        assert!(block_check_zero(&blocks, &blocks),
+            "identical block vectors must pass (combined = 0 per index)");
     }
 
     #[test]
-    fn test_check_zero_fails_on_nonzero_bit() {
-        let mut rng = ChaCha12Rng::seed_from_u64(2);
-        let delta = Delta::random(&mut rng);
-        let key = Key::new(Block::random(&mut rng));
-        let mac = key.auth(true, &delta);
-        let share = AuthBitShare { key, mac, value: true };
-        assert!(!check_zero(&[share], &delta),
-            "share with value=true must abort regardless of MAC validity");
+    fn block_check_zero_fails_on_any_mismatch() {
+        // Single-block mismatch must abort. Tampering at any non-LSB bit is
+        // detected — full-block comparison, not LSB extraction.
+        let mut a: Vec<Block> = (0..4).map(|i| Block::from([i as u8; 16])).collect();
+        let b = a.clone();
+        // Flip a non-LSB bit at index 2 — would have been undetected by the
+        // prior LSB-only check_zero.
+        let mut bytes: [u8; 16] = a[2].to_bytes();
+        bytes[8] ^= 0x01; // flip a middle byte
+        a[2] = Block::from(bytes);
+        assert!(!block_check_zero(&a, &b),
+            "non-LSB-bit mismatch must be detected (full-block comparison)");
     }
 
     #[test]
-    fn test_check_zero_fails_on_invalid_mac() {
-        // When value == false, key.auth(false, delta) = key.0 XOR Block::ZERO = key.0,
-        // which is independent of delta. So "wrong delta" only produces a distinguishable
-        // MAC when value == true: key.auth(true, wrong_delta) = key.0 XOR wrong_delta.0,
-        // which differs from key.auth(true, delta) = key.0 XOR delta.0 (with high probability).
-        //
-        // Construct a share with value=false but whose mac was produced as
-        // key.auth(true, delta) — i.e., mac = key.0 XOR delta.0, which does NOT equal
-        // key.auth(false, delta) = key.0. This exercises the MAC-mismatch branch
-        // in check_zero() for a zero-value share with a corrupted MAC.
-        let mut rng = ChaCha12Rng::seed_from_u64(3);
-        let delta = Delta::random(&mut rng);
-        let key = Key::new(Block::random(&mut rng));
-        // Deliberately build mac as if bit were true — this corrupts the IT-MAC invariant
-        // for a value=false share, because mac should equal key.0 but instead equals
-        // key.0 XOR delta.0 (nonzero with overwhelming probability).
-        let corrupted_mac = key.auth(true, &delta);
-        let share = AuthBitShare { key, mac: corrupted_mac, value: false };
-        assert!(!check_zero(&[share], &delta),
-            "share with corrupted mac (wrong bit in auth) must abort even when value=false");
+    fn block_check_zero_fails_on_length_mismatch() {
+        let a: Vec<Block> = (0..4).map(|i| Block::from([i as u8; 16])).collect();
+        let b: Vec<Block> = (0..3).map(|i| Block::from([i as u8; 16])).collect();
+        assert!(!block_check_zero(&a, &b),
+            "length mismatch must abort");
     }
 
     #[test]
-    fn test_check_zero_passes_on_empty_slice() {
-        let mut rng = ChaCha12Rng::seed_from_u64(4);
-        let delta = Delta::random(&mut rng);
-        assert!(check_zero(&[], &delta),
-            "empty c_gamma slice is vacuously zero — must pass");
+    fn block_check_zero_passes_on_empty_slices() {
+        assert!(block_check_zero(&[], &[]),
+            "empty vector pair is vacuously equal — must pass");
     }
 
     #[test]
-    fn test_check_zero_short_circuits_on_mixed_slice() {
-        let mut rng = ChaCha12Rng::seed_from_u64(5);
-        let delta = Delta::random(&mut rng);
+    fn block_hash_check_zero_matches_on_equal_inputs() {
+        let blocks: Vec<Block> = (0..16).map(|i| Block::from([i as u8; 16])).collect();
+        let h_a = block_hash_check_zero(&blocks);
+        let h_b = block_hash_check_zero(&blocks);
+        assert_eq!(h_a, h_b,
+            "block_hash_check_zero is deterministic; equal inputs → equal digests");
+    }
 
-        let make_zero = |rng: &mut ChaCha12Rng| {
-            let key = Key::new(Block::random(rng));
-            let mac = key.auth(false, &delta);
-            AuthBitShare { key, mac, value: false }
-        };
-        let make_bad_bit = |rng: &mut ChaCha12Rng| {
-            let key = Key::new(Block::random(rng));
-            let mac = key.auth(true, &delta);
-            AuthBitShare { key, mac, value: true }
-        };
+    #[test]
+    fn block_hash_check_zero_differs_on_unequal_inputs() {
+        let a: Vec<Block> = (0..4).map(|i| Block::from([i as u8; 16])).collect();
+        let mut b = a.clone();
+        let mut bytes: [u8; 16] = b[1].to_bytes();
+        bytes[5] ^= 0x80; // flip a non-LSB bit
+        b[1] = Block::from(bytes);
+        assert_ne!(block_hash_check_zero(&a), block_hash_check_zero(&b),
+            "different block vectors must produce different digests w.h.p.");
+    }
 
-        let s0 = make_zero(&mut rng);
-        let s1 = make_bad_bit(&mut rng);
-        let s2 = make_zero(&mut rng);
-
-        assert!(!check_zero(&[s0, s1, s2], &delta),
-            "any failing share in the slice must cause check_zero to abort");
+    #[test]
+    fn block_hash_check_zero_empty_returns_zero_block() {
+        assert_eq!(block_hash_check_zero(&[]), Block::default(),
+            "empty slice yields zero block per the H_0 = 0 convention");
     }
 }

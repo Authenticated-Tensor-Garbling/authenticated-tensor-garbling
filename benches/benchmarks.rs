@@ -14,10 +14,10 @@ use authenticated_tensor_garbling::{
     auth_tensor_gen::AuthTensorGen,
     block::Block,
     input_encoding::encode_inputs,
-    online::hash_check_zero,
+    online::block_hash_check_zero,
     preprocessing::run_preprocessing,
-    assemble_e_input_wire_shares_p1,
-    assemble_c_alpha_beta_shares_p2,
+    assemble_e_input_wire_blocks_p1,
+    assemble_c_alpha_beta_blocks_p2,
     CSP, SSP,
 };
 use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
@@ -330,7 +330,7 @@ fn bench_online_p1(c: &mut Criterion) {
                             let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
                             let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
 
-                            let e_shares = assemble_e_input_wire_shares_p1(
+                            let (e_gen_blocks, e_eval_blocks) = assemble_e_input_wire_blocks_p1(
                                 n, m,
                                 &gb_v_alpha_eval,
                                 &ev_v_alpha_eval,
@@ -342,24 +342,21 @@ fn bench_online_p1(c: &mut Criterion) {
                                 &evaluator,
                             );
 
-                            // SIMULATION SHORTCUT: in a real protocol gb hashes
-                            // its share-view and ev hashes its own; here both
-                            // calls hash the same assembled shares (gb's view
-                            // ⊕ ev's view). The comparison is therefore
-                            // tautological — `_h_simulated_match` is always
-                            // true. We keep two hash calls so the timing
-                            // captures both parties' per-call CheckZero cost,
-                            // which is the only thing this bench measures.
-                            // Correctness of the check (that mismatched shares
-                            // produce mismatched digests) is exercised by
-                            // src/online.rs unit tests, not here.
-                            let h_gb = hash_check_zero(&e_shares);
-                            let h_ev = hash_check_zero(&e_shares);
+                            // Each party hashes its own block vector; in a real
+                            // protocol they exchange digests over the network. For
+                            // honest parties the digests must match (since per-index
+                            // gen_block == eval_block). Both hashes are computed here
+                            // so the timing captures each party's CheckZero cost.
+                            // Correctness of mismatch detection is exercised by
+                            // tampering tests in src/lib.rs, not here.
+                            let h_gb = block_hash_check_zero(&e_gen_blocks);
+                            let h_ev = block_hash_check_zero(&e_eval_blocks);
                             let _h_simulated_match = h_gb == h_ev;
 
                             total += start.elapsed() + transit_per_iter;
 
-                            let _ = black_box(e_shares);
+                            let _ = black_box(e_gen_blocks);
+                            let _ = black_box(e_eval_blocks);
                             let _ = black_box(_h_simulated_match);
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
@@ -447,7 +444,7 @@ fn bench_online_p2(c: &mut Criterion) {
                             let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
                             let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
 
-                            let c_shares = assemble_c_alpha_beta_shares_p2(
+                            let (c_gen_blocks, c_eval_blocks) = assemble_c_alpha_beta_blocks_p2(
                                 n, m,
                                 &gb_v_alpha_eval,
                                 &ev_v_alpha_eval,
@@ -459,19 +456,20 @@ fn bench_online_p2(c: &mut Criterion) {
                                 &evaluator,
                             );
 
-                            // SIMULATION SHORTCUT: see bench_online_p1 for
-                            // rationale — both calls hash the same assembled
-                            // c-shares, the comparison is tautological, two
-                            // calls are kept to capture both parties' hashing
-                            // cost. Correctness of the digest-mismatch path
+                            // Each party hashes its own block vector; honest
+                            // parties' digests match per the paper's H({V_w})
+                            // semantics (5_online.tex §246, 6_total.tex §222).
+                            // Both hashes are computed to capture each party's
+                            // CheckZero cost; correctness of mismatch detection
                             // belongs in unit tests, not this timing bench.
-                            let h_gb = hash_check_zero(&c_shares);
-                            let h_ev = hash_check_zero(&c_shares);
+                            let h_gb = block_hash_check_zero(&c_gen_blocks);
+                            let h_ev = block_hash_check_zero(&c_eval_blocks);
                             let _h_simulated_match = h_gb == h_ev;
 
                             total += start.elapsed() + transit_per_iter;
 
-                            let _ = black_box(c_shares);
+                            let _ = black_box(c_gen_blocks);
+                            let _ = black_box(c_eval_blocks);
                             let _ = black_box(_h_simulated_match);
                             let _ = black_box(&generator);
                             let _ = black_box(&evaluator);
