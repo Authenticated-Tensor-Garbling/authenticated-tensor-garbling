@@ -227,7 +227,7 @@ fn bench_preprocessing(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// "online" criterion group — Protocol 1 and Protocol 2
+// "online_p1" / "online_p2" criterion groups — Protocol 1 and Protocol 2
 //
 // Sync iter_custom + std::time::Instant benchmarks for the online phase
 // (garble + GC transfer + evaluate + consistency check) under a 100 Mbps
@@ -258,7 +258,7 @@ fn bench_preprocessing(c: &mut Criterion) {
 ///
 /// Reports ms-per-op, ns-per-AND, and KB-per-op per (n, m, tile_size).
 fn bench_online_p1(c: &mut Criterion) {
-    let mut group = c.benchmark_group("online");
+    let mut group = c.benchmark_group("online_p1");
     group.warm_up_time(std::time::Duration::from_secs(3));
     group.measurement_time(std::time::Duration::from_secs(20));
 
@@ -387,7 +387,7 @@ fn bench_online_p1(c: &mut Criterion) {
 ///
 /// Reports ms-per-op, ns-per-AND, and KB-per-op per (n, m, tile_size).
 fn bench_online_p2(c: &mut Criterion) {
-    let mut group = c.benchmark_group("online");
+    let mut group = c.benchmark_group("online_p2");
     group.warm_up_time(std::time::Duration::from_secs(3));
     group.measurement_time(std::time::Duration::from_secs(20));
 
@@ -489,7 +489,7 @@ fn bench_online_p2(c: &mut Criterion) {
 //
 // These preserve the 100 Mbps async network simulation matching the paper's
 // experimental setup (appendix_experiments.tex §Methodology). They are kept
-// separately from the "online" sync group so paper-comparison numbers remain
+// separately from the "online_p1" / "online_p2" sync groups so paper-comparison numbers remain
 // reproducible.
 //
 // The seven near-identical per-size functions are replaced by a single

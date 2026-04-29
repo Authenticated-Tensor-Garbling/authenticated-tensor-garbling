@@ -57,7 +57,7 @@ KB_LINE = re.compile(
 )
 
 CRITERION_PATH = re.compile(
-    r"online/p(?P<proto>[12])_garble_eval_check_(?P<n>\d+)x(?P<m>\d+)/(?P<tile>\d+)/new/estimates\.json$"
+    r"online_p(?P<proto>[12])/p[12]_garble_eval_check_(?P<n>\d+)x(?P<m>\d+)/(?P<tile>\d+)/new/estimates\.json$"
 )
 
 PAPER_SIZES_DEFAULT = [64, 128, 256]
