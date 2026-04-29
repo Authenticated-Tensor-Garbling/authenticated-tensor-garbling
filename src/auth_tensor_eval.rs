@@ -71,40 +71,6 @@ pub struct AuthTensorEval {
 }
 
 impl AuthTensorEval {
-    pub fn new(n: usize, m: usize, chunking_factor: usize) -> Self {
-        Self {
-            cipher: &(*FIXED_KEY_AES),
-            chunking_factor,
-            n,
-            m,
-            // δ_b must have LSB=0 — required by the bit-recovery formula
-            // `LSB(δ_a XOR δ_b) = 1` and by `derive_sharing_blocks`'s LSB
-            // accounting. Using `Delta::random` (LSB=1) here silently breaks
-            // bit-recovery for any consumer of the resulting struct; same class
-            // as 67af1e6 (TensorFpre::new).
-            delta_b: Delta::random_b(&mut rand::rng()),
-            alpha_eval: Vec::new(),
-            alpha_gen: Vec::new(),
-            beta_eval: Vec::new(),
-            beta_gen: Vec::new(),
-            correlated_eval: Vec::new(),
-            correlated_gen: Vec::new(),
-            gamma_eval: Vec::new(),
-            gamma_gen: Vec::new(),
-            x_gen: Vec::new(),
-            y_gen: Vec::new(),
-            masked_x_gen: Vec::new(),
-            masked_y_gen: Vec::new(),
-            masked_x_bits: Vec::new(),
-            masked_y_bits: Vec::new(),
-            first_half_out: BlockMatrix::new(n, m),
-            second_half_out: BlockMatrix::new(m, n),
-            first_half_out_ev: BlockMatrix::new(n, m),
-            second_half_out_ev: BlockMatrix::new(m, n),
-            final_computed: false,
-        }
-    }
-
     pub fn new_from_fpre_eval(fpre_eval: TensorFpreEval) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),

@@ -71,35 +71,6 @@ pub struct AuthTensorGen {
 }
 
 impl AuthTensorGen {
-    pub fn new(n: usize, m: usize, chunking_factor: usize) -> Self {
-        Self {
-            cipher: &(*FIXED_KEY_AES),
-            n,
-            m,
-            chunking_factor,
-            delta_a: Delta::random(&mut rand::rng()),
-            alpha_eval: Vec::new(),
-            alpha_gen: Vec::new(),
-            beta_eval: Vec::new(),
-            beta_gen: Vec::new(),
-            correlated_eval: Vec::new(),
-            correlated_gen: Vec::new(),
-            gamma_eval: Vec::new(),
-            gamma_gen: Vec::new(),
-            x_gen: Vec::new(),
-            y_gen: Vec::new(),
-            masked_x_gen: Vec::new(),
-            masked_y_gen: Vec::new(),
-            masked_x_bits: Vec::new(),
-            masked_y_bits: Vec::new(),
-            first_half_out: BlockMatrix::new(n, m),
-            second_half_out: BlockMatrix::new(m, n),
-            first_half_out_ev: BlockMatrix::new(n, m),
-            second_half_out_ev: BlockMatrix::new(m, n),
-            final_computed: false,
-        }
-    }
-
     pub fn new_from_fpre_gen(fpre_gen: TensorFpreGen) -> Self {
         Self {
             cipher: &(*FIXED_KEY_AES),
