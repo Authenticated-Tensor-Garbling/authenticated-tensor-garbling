@@ -428,7 +428,7 @@ mod tests {
         let alpha = input_x ^ masked_x;
         let beta = input_y ^ masked_y;
 
-        //check the inputs to the first half outer product: masked_x (x) beta
+        // check the inputs to the first half outer product: masked_x (x) beta
         let (gen_x, gen_y) = gb.get_first_inputs();
         let (eval_x, eval_y) = ev.get_first_inputs();
 
@@ -436,7 +436,7 @@ mod tests {
             verify_column_matrix_sharing(masked_x, &gen_x, &eval_x, &delta_a, n)
         );
         assert!(
-            verify_column_matrix_sharing(input_y, &gen_y, &eval_y, &delta_a, m)
+            verify_column_matrix_sharing(beta, &gen_y, &eval_y, &delta_a, m)
         );
 
 
@@ -444,13 +444,13 @@ mod tests {
         ev.evaluate_first_half(gen_chunk_levels, gen_chunk_cts);
 
         // check that first_out has the correct value
-        // first_out should be masked_x (tensor) input_y
+        // first_out should be masked_x (tensor) beta  (paper: (a⊕λ_a) ⊗ λ_b)
         assert!(
-            verify_tensor_output(masked_x, input_y, n, m, &gb.first_half_out, &ev.first_half_out, &delta_a)
+            verify_tensor_output(masked_x, beta, n, m, &gb.first_half_out, &ev.first_half_out, &delta_a)
         );
 
 
-        //check the inputs to the second half outer product: masked_y (x) alpha
+        // check the inputs to the second half outer product: masked_y (x) input_x
         let (gen_x, gen_y) = gb.get_second_inputs();
         let (eval_x, eval_y) = ev.get_second_inputs();
 
@@ -458,7 +458,7 @@ mod tests {
             verify_column_matrix_sharing(masked_y, &gen_x, &eval_x, &delta_a, m)
         );
         assert!(
-            verify_column_matrix_sharing(alpha, &gen_y, &eval_y, &delta_a, n)
+            verify_column_matrix_sharing(input_x, &gen_y, &eval_y, &delta_a, n)
         );
 
 
@@ -466,9 +466,9 @@ mod tests {
         ev.evaluate_second_half(gen_chunk_levels, gen_chunk_cts);
 
         // check that second_out has the correct value
-        // second_out should be masked_y (tensor) alpha
+        // second_out should be masked_y (tensor) input_x  (paper: (b⊕λ_b) ⊗ a)
         assert!(
-            verify_tensor_output(masked_y, alpha, m, n, &gb.second_half_out, &ev.second_half_out, &delta_a)
+            verify_tensor_output(masked_y, input_x, m, n, &gb.second_half_out, &ev.second_half_out, &delta_a)
         );
 
         // check that final_out has the correct value

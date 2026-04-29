@@ -246,20 +246,18 @@ impl AuthTensorGen {
 
     /// returns: the garbler's x and y inputs to the first tensor half gate.
     ///
-    /// Under the auth-bit-style construction (BUG-02 / Phase 1.2):
-    /// - `x[i] = masked_x_gen[i]` — gen's half of the wire-label sharing
-    ///   `(x XOR α) · δ_a` (= input-mac XOR (key_g_α XOR a · δ_a)).
-    /// - `y[i] = y_gen[i]` — gen's half of the input sharing of y under
-    ///   δ_a (= input-mac for y). The β-share cancellation is implicit:
-    ///   `masked_y_gen XOR (key_g_β XOR a_β · δ_a) = y_gen`.
+    /// Paper-aligned (`5_online.tex` §157, `6_total.tex` §137):
+    /// the first half is `tensorgb(n, m, D_gb, [(a ⊕ λ_a) D_gb], [λ_b D_gb])`.
+    /// In codebase naming with `a = x` and `λ_b = β`:
+    /// - `x[i] = masked_x_gen[i]` — gen's share `[(x ⊕ α) D_a]^gb` from input encoding.
+    /// - `y[j] = beta_gen[j]`     — gen's share `[β D_a]^gb` from preprocessing.
     ///
-    /// MUST be called after `prepare_input_labels` has populated
-    /// `masked_x_gen` and `y_gen`.
+    /// MUST be called after `encode_inputs` has populated `masked_x_gen`.
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_x_gen.len(), self.n,
-            "get_first_inputs: masked_x_gen not populated; call prepare_input_labels first");
-        assert_eq!(self.y_gen.len(), self.m,
-            "get_first_inputs: y_gen not populated; call prepare_input_labels first");
+            "get_first_inputs: masked_x_gen not populated; call encode_inputs first");
+        assert_eq!(self.beta_gen.len(), self.m,
+            "get_first_inputs: beta_gen not populated by preprocessing");
 
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
@@ -268,7 +266,7 @@ impl AuthTensorGen {
 
         let mut y = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            y[j] = self.y_gen[j];
+            y[j] = self.beta_gen[j];
         }
 
         (x, y)
@@ -276,18 +274,18 @@ impl AuthTensorGen {
 
     /// returns: the garbler's x and y inputs to the second tensor half gate.
     ///
-    /// Paper-aligned (`5_online.tex` §155–158, `6_total.tex` §136–141):
+    /// Paper-aligned (`5_online.tex` §158, `6_total.tex` §138):
     /// the second half is `tensorgb(m, n, D_gb, [(b ⊕ λ_b) D_gb], [a D_gb])`.
     /// In codebase naming with `a = x` and `b = y`:
     /// - `x[j] = masked_y_gen[j]` — gen's share `[(y ⊕ β) D_a]^gb` from input encoding.
-    /// - `y[i] = alpha_gen[i]`    — gen's share `[α D_a]^gb` from preprocessing.
+    /// - `y[i] = x_gen[i]`        — gen's share `[x D_a]^gb` from input encoding.
     ///
-    /// MUST be called after `encode_inputs` has populated `masked_y_gen`.
+    /// MUST be called after `encode_inputs` has populated `masked_y_gen` / `x_gen`.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_y_gen.len(), self.m,
             "get_second_inputs: masked_y_gen not populated; call encode_inputs first");
-        assert_eq!(self.alpha_gen.len(), self.n,
-            "get_second_inputs: alpha_gen not populated by preprocessing");
+        assert_eq!(self.x_gen.len(), self.n,
+            "get_second_inputs: x_gen not populated; call encode_inputs first");
 
         let mut x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
@@ -296,7 +294,7 @@ impl AuthTensorGen {
 
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y[i] = self.alpha_gen[i];
+            y[i] = self.x_gen[i];
         }
 
         (x, y)
@@ -338,15 +336,13 @@ impl AuthTensorGen {
         self.final_computed = true;
     }
 
-    /// Phase 9 P2-02 — y inputs (D_ev half) for `garble_first_half_p2`.
+    /// y inputs (D_ev half) for `garble_first_half_p2`.
     ///
-    /// The garbler does NOT hold `delta_b`. Per the IT-MAC layout in
-    /// `auth_tensor_fpre.rs::gen_auth_bit` (lines 66-86), the garbler's
-    /// `beta_eval[i].mac` is built as `a_share.mac = key_a.auth(a, delta_b)
-    /// = key_a XOR a*delta_b`, where `key_a` is held by the evaluator. Emitting
-    /// `mac.as_block()` directly is the correct public-bit encoding under
-    /// `delta_b` for the garbler's contribution — no XOR needed. The eval side
-    /// XORs in its key view to recover the IT-MAC pair under `delta_b`.
+    /// Paper-aligned with `get_first_inputs`'s D_a side: the first-half y
+    /// operand is `β` (paper's `λ_b`). This emits gen's share of `[β D_ev]`
+    /// from preprocessing — i.e. `beta_eval[i]`. Combined with the D_a track
+    /// (`beta_gen[i]` via `get_first_inputs`), the wide GGM expansion produces
+    /// `(x ⊕ α) ⊗ β` under both deltas.
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
@@ -355,6 +351,13 @@ impl AuthTensorGen {
         y_ev
     }
 
+    /// y inputs (D_ev half) for `garble_second_half_p2`.
+    ///
+    /// Paper-aligned with `get_second_inputs`'s D_a side: the second-half y
+    /// operand is `x` (paper's `a`). Per `5_online.tex` §211, gb sets
+    /// `[v_a D_ev]^gb := [λ_a D_ev]^gb`, so gen's share of `[x D_ev]` equals
+    /// its share of `[α D_ev]` — i.e. `alpha_eval[i]`. The eval side XORs in
+    /// `L_a · D_ev` (see `AuthTensorEval::get_second_inputs_p2_y_d_ev`).
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {

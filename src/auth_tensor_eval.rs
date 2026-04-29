@@ -292,19 +292,16 @@ impl AuthTensorEval {
 
     /// Eval-side counterpart of `AuthTensorGen::get_first_inputs`.
     ///
-    /// Under the auth-bit-style construction (BUG-02 / Phase 1.2):
-    /// - `x[i] = masked_x_gen[i]` — eval's half of the wire-label
-    ///   sharing `(x XOR α) · δ_a` (= `input_eval_key XOR mac_e_α`).
-    /// - `y[i] = y_gen[i]` — eval's half of the input sharing of y
-    ///   under δ_a (= `input_eval_key` for y; LSB=0). The β-share
-    ///   cancellation: `masked_y_gen XOR mac_e_β = y_gen`.
-    ///
-    /// MUST be called after `install_input_labels`.
+    /// Paper-aligned (`5_online.tex` §178, `6_total.tex` §157):
+    /// the first half is `tensorev(n, m, ..., [(a ⊕ λ_a) D_gb]^ev, [λ_b D_gb]^ev)`.
+    /// In codebase naming with `a = x` and `λ_b = β`:
+    /// - `x[i] = masked_x_gen[i]` — eval's share `[(x ⊕ α) D_a]^ev` from input encoding.
+    /// - `y[j] = beta_gen[j]`     — eval's share `[β D_a]^ev` from preprocessing.
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_x_gen.len(), self.n,
-            "get_first_inputs: masked_x_gen not populated; call install_input_labels first");
-        assert_eq!(self.y_gen.len(), self.m,
-            "get_first_inputs: y_gen not populated; call install_input_labels first");
+            "get_first_inputs: masked_x_gen not populated; call encode_inputs first");
+        assert_eq!(self.beta_gen.len(), self.m,
+            "get_first_inputs: beta_gen not populated by preprocessing");
 
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
@@ -313,7 +310,7 @@ impl AuthTensorEval {
 
         let mut y = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            y[j] = self.y_gen[j];
+            y[j] = self.beta_gen[j];
         }
 
         (x, y)
@@ -321,16 +318,16 @@ impl AuthTensorEval {
 
     /// Eval-side counterpart of `AuthTensorGen::get_second_inputs`.
     ///
-    /// Paper-aligned (`5_online.tex` §178–180): the eval side calls
-    /// `tensorev(m, n, ..., [(b ⊕ λ_b) D_gb]^ev, [a D_gb]^ev)`. With `a = x`,
-    /// `b = y`:
+    /// Paper-aligned (`5_online.tex` §179, `6_total.tex` §158):
+    /// the eval side calls `tensorev(m, n, ..., [(b ⊕ λ_b) D_gb]^ev, [a D_gb]^ev)`.
+    /// With `a = x`, `b = y`:
     /// - `x[j] = masked_y_gen[j]` — eval's share `[(y ⊕ β) D_a]^ev` from input encoding.
-    /// - `y[i] = alpha_gen[i]`    — eval's share `[α D_a]^ev` from preprocessing.
+    /// - `y[i] = x_gen[i]`        — eval's share `[x D_a]^ev` from input encoding.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_y_gen.len(), self.m,
             "get_second_inputs: masked_y_gen not populated; call encode_inputs first");
-        assert_eq!(self.alpha_gen.len(), self.n,
-            "get_second_inputs: alpha_gen not populated by preprocessing");
+        assert_eq!(self.x_gen.len(), self.n,
+            "get_second_inputs: x_gen not populated; call encode_inputs first");
 
         let mut x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
@@ -339,22 +336,19 @@ impl AuthTensorEval {
 
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y[i] = self.alpha_gen[i];
+            y[i] = self.x_gen[i];
         }
 
         (x, y)
     }
 
-    /// Phase 9 P2-03 — y inputs (D_ev half) for `evaluate_first_half_p2`.
+    /// Eval-side counterpart of `AuthTensorGen::get_first_inputs_p2_y_d_ev`.
     ///
-    /// The eval-side counterpart of the garbler's
-    /// `get_first_inputs_p2_y_d_ev`. Mirrors `get_first_inputs` (D_gb path
-    /// with `y_labels` XOR + `beta_auth_bit_shares.mac`) but for the D_ev
-    /// rho-half: the rho-half does NOT carry wire labels, so there is no
-    /// `y_labels` XOR. The eval emits `beta_eval[i].mac.as_block()`
-    /// directly — symmetric to the garbler-side encoding (mac is committed
-    /// under the opposite party's delta per `gen_auth_bit`'s symmetric
-    /// IT-MAC layout).
+    /// Paper-aligned with `get_first_inputs`'s D_a side: the first-half y
+    /// operand is `β`. This emits eval's share of `[β D_ev]` from
+    /// preprocessing — i.e. `beta_eval[i]`. Combined with the D_a track
+    /// (`beta_gen[i]` via `get_first_inputs`), the wide GGM expansion
+    /// reconstructs `(x ⊕ α) ⊗ β` under both deltas.
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
@@ -363,10 +357,23 @@ impl AuthTensorEval {
         y_ev
     }
 
+    /// Eval-side counterpart of `AuthTensorGen::get_second_inputs_p2_y_d_ev`.
+    ///
+    /// Paper-aligned with `get_second_inputs`'s D_a side: the second-half y
+    /// operand is `x`. Per `5_online.tex` §211 the ev side sets
+    /// `[v_a D_ev]^ev := [λ_a D_ev]^ev XOR L_a · D_ev` — so eval's share of
+    /// `[x D_ev]` is `alpha_eval[i] XOR (masked_x_bits[i] · δ_b)`. Combined
+    /// with gen's `alpha_eval[i]` (= `[x D_ev]^gb` per the same §211),
+    /// the XOR-share reconstructs to `x_i · δ_b`.
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
+        let delta_b_block = *self.delta_b.as_block();
         for i in 0..self.n {
-            y_ev[i] = self.alpha_eval[i];
+            y_ev[i] = if self.masked_x_bits[i] {
+                self.alpha_eval[i] ^ delta_b_block
+            } else {
+                self.alpha_eval[i]
+            };
         }
         y_ev
     }
