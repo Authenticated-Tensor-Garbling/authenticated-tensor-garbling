@@ -369,7 +369,6 @@ mod tests {
             for j in 0..m {
                 let y_bit = ((input_y >> j) & 1) != 0;
                 let expected_val = x_bit & y_bit;
-                print!("{} ", expected_val);
 
                 let gb_val = gb.gb_first_half_out_dgb()[(i, j)];
                 let ev_val = ev.ev_first_half_out_dgb()[(i, j)];
