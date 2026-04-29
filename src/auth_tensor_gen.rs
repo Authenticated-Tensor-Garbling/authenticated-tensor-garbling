@@ -497,18 +497,18 @@ impl AuthTensorGen {
 
     /// returns: the garbler's x and y inputs to the second tensor half gate.
     ///
-    /// Under the auth-bit-style construction:
-    /// - `x[i] = masked_y_gen[i]` — gen's half of the wire-label sharing
-    ///   `(y XOR β) · δ_a`.
-    /// - `y[i]` = gen's half of the α-sharing under δ_a
-    ///   (`key_g_α XOR a_α · δ_a`). Same as before — α-sharing handling
-    ///   is unchanged in Phase 1.2 since α stays a preprocessing artifact.
+    /// Paper-aligned (`5_online.tex` §155–158, `6_total.tex` §136–141):
+    /// the second half is `tensorgb(m, n, D_gb, [(b ⊕ λ_b) D_gb], [a D_gb])`.
+    /// In codebase naming with `a = x` and `b = y`:
+    /// - `x[j] = masked_y_gen[j]` — gen's share `[(y ⊕ β) D_a]^gb` from input encoding.
+    /// - `y[i] = alpha_gen[i]`    — gen's share `[α D_a]^gb` from preprocessing.
     ///
-    /// MUST be called after `prepare_input_labels` has populated
-    /// `masked_y_gen`.
+    /// MUST be called after `encode_inputs` has populated `masked_y_gen`.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_y_gen.len(), self.m,
-            "get_second_inputs: masked_y_gen not populated; call prepare_input_labels first");
+            "get_second_inputs: masked_y_gen not populated; call encode_inputs first");
+        assert_eq!(self.alpha_gen.len(), self.n,
+            "get_second_inputs: alpha_gen not populated by preprocessing");
 
         let mut x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
@@ -517,14 +517,7 @@ impl AuthTensorGen {
 
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            let alpha_share =
-                if self.alpha_auth_bit_shares[i].bit()
-                {
-                    self.delta_a.as_block() ^ self.alpha_auth_bit_shares[i].key.as_block()
-                } else {
-                    *self.alpha_auth_bit_shares[i].key.as_block()
-                };
-            y[i] = alpha_share;
+            y[i] = self.alpha_gen[i];
         }
 
         (x, y)
@@ -545,24 +538,22 @@ impl AuthTensorGen {
     }
 
     /// Combines both half-outer-product outputs with the correlated preprocessing
-    /// share to produce the garbled tensor gate output.
+    /// share to produce the garbled tensor gate output. Per `5_online.tex` §160:
+    /// `[c D_gb] := Z_{c,0} ⊕ Z_{c,1}^T ⊕ [(λ_a ⊗ λ_b) D_gb]`. The third term
+    /// is gen's preprocessing share `correlated_gen[idx]`.
     pub fn garble_final(&mut self) {
         assert!(
             !self.final_computed,
             "garble_final called twice on the same instance — \
              first_half_out would be double-XOR'd; create a new instance per gate"
         );
+        assert_eq!(self.correlated_gen.len(), self.n * self.m,
+            "garble_final: correlated_gen not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share = if self.correlated_auth_bit_shares[j * self.n + i].bit() {
-                    self.delta_a.as_block() ^ self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
-                } else {
-                    *self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
-                };
-
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
-                    correlated_share;
+                    self.correlated_gen[j * self.n + i];
             }
         }
         self.final_computed = true;
@@ -648,17 +639,16 @@ impl AuthTensorGen {
             "garble_final_p2 called twice on the same instance — \
              first_half_out would be double-XOR'd; create a new instance per gate"
         );
-        // D_gb path: identical to existing `garble_final`.
+        // D_gb path: identical to existing `garble_final` — per `6_total.tex` §140,
+        // `[c D_gb] := Z_{c,0} ⊕ Z_{c,1}^T ⊕ [(λ_a ⊗ λ_b) D_gb]`, where the third
+        // term is gen's preprocessing share `correlated_gen[idx]`.
+        assert_eq!(self.correlated_gen.len(), self.n * self.m,
+            "garble_final_p2: correlated_gen not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share_gb = if self.correlated_auth_bit_shares[j * self.n + i].bit() {
-                    self.delta_a.as_block() ^ self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
-                } else {
-                    *self.correlated_auth_bit_shares[j * self.n + i].key.as_block()
-                };
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
-                    correlated_share_gb;
+                    self.correlated_gen[j * self.n + i];
             }
         }
 

@@ -770,13 +770,8 @@ mod tests {
         for i in 0..n {
             for j in 0..m {
                 let expected_val = (((alpha>>i)&1) & ((beta>>j)&1)) != 0;
-                let gb_share =
-                    if gb.correlated_auth_bit_shares[j * n + i].bit() {
-                        gb.delta_a.as_block() ^ gb.correlated_auth_bit_shares[j * n + i].key.as_block()
-                    } else {
-                        *gb.correlated_auth_bit_shares[j * n + i].key.as_block()
-                    };
-                let ev_share = *ev.correlated_auth_bit_shares[j * n + i].mac.as_block();
+                let gb_share = gb.correlated_gen[j * n + i];
+                let ev_share = ev.correlated_gen[j * n + i];
 
                 if expected_val {
                     assert_eq!(gb_share, ev_share ^ delta_a.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
@@ -835,11 +830,7 @@ mod tests {
         // input = (0, 0). The doc above explicitly notes "v_alpha = v_beta = 0
         // because masked_x = alpha and masked_y = beta with x = y = 0".
         let mut prep_rng = rand::rng();
-        let labels = gb.prepare_input_labels(
-            &mut prep_rng, 0, 0,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
 
         // Standard Protocol 1 garble + evaluate sequence.
         let (cl1, ct1) = gb.garble_first_half();
@@ -852,12 +843,13 @@ mod tests {
         // Reconstruct masked input values (paper L_a, L_b) from joint state. In the
         // single-gate test the gate inputs are circuit inputs, so L_a = l_a and
         // L_b = l_b (since v=0 with x=y=0 input).
-        let l_alpha_pub: Vec<bool> = (0..n)
-            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
-            .collect();
-        let l_beta_pub: Vec<bool> = (0..m)
-            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
-            .collect();
+        // L_α / L_β are the cleartext masked input vectors `vec a ⊕ vec λ_a` /
+        // `vec b ⊕ vec λ_b` (paper `5_online.tex` §242, `6_total.tex` §218).
+        // After encode_inputs(x, y), `ev.masked_x_bits[i] = x_i ⊕ α_i` (and
+        // gen-side is the 0-vec by the asymmetric sharing); with x = y = 0 in
+        // these tests this equals λ_α / λ_β exactly.
+        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
+        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
 
         // Honest input-encoding (paper line 214):
         //   gb sets [v_a D_ev]^gb := [l_a D_ev]^gb
@@ -932,11 +924,7 @@ mod tests {
 
         // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
         let mut prep_rng = rand::rng();
-        let labels = gb.prepare_input_labels(
-            &mut prep_rng, 0, 0,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
 
         // Protocol 2 garble + evaluate sequence (wide ciphertexts).
         let (cl1, ct1) = gb.garble_first_half_p2();
@@ -985,12 +973,13 @@ mod tests {
         // (6_total.tex:207–214) are algebraically identical — three-term XOR
         // [v D_ev] ⊕ [λ D_ev] ⊕ L·D_ev on tensor-gate input wires.
         // ===========================================================================
-        let l_alpha_pub: Vec<bool> = (0..n)
-            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
-            .collect();
-        let l_beta_pub: Vec<bool> = (0..m)
-            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
-            .collect();
+        // L_α / L_β are the cleartext masked input vectors `vec a ⊕ vec λ_a` /
+        // `vec b ⊕ vec λ_b` (paper `5_online.tex` §242, `6_total.tex` §218).
+        // After encode_inputs(x, y), `ev.masked_x_bits[i] = x_i ⊕ α_i` (and
+        // gen-side is the 0-vec by the asymmetric sharing); with x = y = 0 in
+        // these tests this equals λ_α / λ_β exactly.
+        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
+        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
 
         // Honest input encoding (6_total.tex:191–198):
         //   gb sets [v D_ev]^gb := [l D_ev]^gb
@@ -1063,11 +1052,7 @@ mod tests {
 
         // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
         let mut prep_rng = rand::rng();
-        let labels = gb.prepare_input_labels(
-            &mut prep_rng, 0, 0,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
 
         let (cl1, ct1) = gb.garble_first_half();
         ev.evaluate_first_half(cl1, ct1);
@@ -1087,12 +1072,13 @@ mod tests {
         let l_gamma_combined_tampered = ev.compute_lambda_gamma(&tampered_lambda_gb);
         assert_eq!(l_gamma_combined_tampered.len(), n * m);
 
-        let l_alpha_pub: Vec<bool> = (0..n)
-            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
-            .collect();
-        let l_beta_pub: Vec<bool> = (0..m)
-            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
-            .collect();
+        // L_α / L_β are the cleartext masked input vectors `vec a ⊕ vec λ_a` /
+        // `vec b ⊕ vec λ_b` (paper `5_online.tex` §242, `6_total.tex` §218).
+        // After encode_inputs(x, y), `ev.masked_x_bits[i] = x_i ⊕ α_i` (and
+        // gen-side is the 0-vec by the asymmetric sharing); with x = y = 0 in
+        // these tests this equals λ_α / λ_β exactly.
+        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
+        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
 
         let c_gamma_shares_tampered = assemble_gate_semantics_shares(
             n, m,
@@ -1133,11 +1119,7 @@ mod tests {
 
         // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
         let mut prep_rng = rand::rng();
-        let labels = gb.prepare_input_labels(
-            &mut prep_rng, 0, 0,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
 
         let (cl1, ct1) = gb.garble_first_half();
         ev.evaluate_first_half(cl1, ct1);
@@ -1146,12 +1128,13 @@ mod tests {
         gb.garble_final();
         ev.evaluate_final();
 
-        let l_alpha_pub: Vec<bool> = (0..n)
-            .map(|i| gb.alpha_auth_bit_shares[i].value ^ ev.alpha_auth_bit_shares[i].value)
-            .collect();
-        let l_beta_pub: Vec<bool> = (0..m)
-            .map(|j| gb.beta_auth_bit_shares[j].value ^ ev.beta_auth_bit_shares[j].value)
-            .collect();
+        // L_α / L_β are the cleartext masked input vectors `vec a ⊕ vec λ_a` /
+        // `vec b ⊕ vec λ_b` (paper `5_online.tex` §242, `6_total.tex` §218).
+        // After encode_inputs(x, y), `ev.masked_x_bits[i] = x_i ⊕ α_i` (and
+        // gen-side is the 0-vec by the asymmetric sharing); with x = y = 0 in
+        // these tests this equals λ_α / λ_β exactly.
+        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
+        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
 
         // Honest [v_a D_ev]^gb / [v_b D_ev]^gb starting points.
         let mut gb_v_alpha_eval: Vec<Block> = gb.alpha_eval.clone();

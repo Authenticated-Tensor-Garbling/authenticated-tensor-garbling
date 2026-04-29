@@ -402,13 +402,16 @@ impl AuthTensorEval {
 
     /// Eval-side counterpart of `AuthTensorGen::get_second_inputs`.
     ///
-    /// Under the auth-bit-style construction:
-    /// - `x[i] = masked_y_gen[i]` — eval's half of `(y XOR β) · δ_a`.
-    /// - `y[i] = mac_e_α` — eval's half of α-sharing under δ_a
-    ///   (auth-bit `mac` held by eval). Unchanged from before.
+    /// Paper-aligned (`5_online.tex` §178–180): the eval side calls
+    /// `tensorev(m, n, ..., [(b ⊕ λ_b) D_gb]^ev, [a D_gb]^ev)`. With `a = x`,
+    /// `b = y`:
+    /// - `x[j] = masked_y_gen[j]` — eval's share `[(y ⊕ β) D_a]^ev` from input encoding.
+    /// - `y[i] = alpha_gen[i]`    — eval's share `[α D_a]^ev` from preprocessing.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
         assert_eq!(self.masked_y_gen.len(), self.m,
-            "get_second_inputs: masked_y_gen not populated; call install_input_labels first");
+            "get_second_inputs: masked_y_gen not populated; call encode_inputs first");
+        assert_eq!(self.alpha_gen.len(), self.n,
+            "get_second_inputs: alpha_gen not populated by preprocessing");
 
         let mut x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
@@ -417,7 +420,7 @@ impl AuthTensorEval {
 
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y[i] = *self.alpha_auth_bit_shares[i].mac.as_block();
+            y[i] = self.alpha_gen[i];
         }
 
         (x, y)
@@ -463,18 +466,22 @@ impl AuthTensorEval {
     }
 
     /// Combines both half-outer-product outputs with the correlated preprocessing
-    /// MAC to produce the evaluator's share of the garbled tensor gate output.
+    /// share to produce the evaluator's share of the garbled tensor gate output.
+    /// Per `5_online.tex` §180: `[c D_gb]^ev := Z_{c,0}^ev ⊕ (Z_{c,1}^ev)^T ⊕ [(λ_a ⊗ λ_b) D_gb]^ev`,
+    /// where the third term is eval's preprocessing share `correlated_gen[idx]`.
     pub fn evaluate_final(&mut self) {
         assert!(
             !self.final_computed,
             "evaluate_final called twice on the same instance — \
              first_half_out would be double-XOR'd; create a new instance per gate"
         );
+        assert_eq!(self.correlated_gen.len(), self.n * self.m,
+            "evaluate_final: correlated_gen not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
-                    self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
+                    self.correlated_gen[j * self.n + i];
             }
         }
         self.final_computed = true;
@@ -550,12 +557,16 @@ impl AuthTensorEval {
             "evaluate_final_p2 called twice on the same instance — \
              first_half_out would be double-XOR'd; create a new instance per gate"
         );
-        // D_gb path: identical to existing `evaluate_final`.
+        // D_gb path: identical to existing `evaluate_final` — per `6_total.tex` §168,
+        // `[c D_gb]^ev := Z_{c,0}^ev ⊕ (Z_{c,1}^ev)^T ⊕ [(λ_a ⊗ λ_b) D_gb]^ev`,
+        // where the third term is eval's preprocessing share `correlated_gen[idx]`.
+        assert_eq!(self.correlated_gen.len(), self.n * self.m,
+            "evaluate_final_p2: correlated_gen not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
                 self.first_half_out[(i, j)] ^=
                     self.second_half_out[(j, i)] ^
-                    self.correlated_auth_bit_shares[j * self.n + i].mac.as_block();
+                    self.correlated_gen[j * self.n + i];
             }
         }
 
