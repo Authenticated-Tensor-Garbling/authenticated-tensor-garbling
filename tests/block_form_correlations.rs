@@ -51,38 +51,54 @@ fn check_one(
     }
 }
 
-fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval) {
+/// Truth-source `*_auth_bit_shares` slices for each preprocessing category.
+/// Read from `TensorFpreGen` / `TensorFpreEval` before they are consumed by
+/// `AuthTensorGen::new_from_fpre_gen` / `AuthTensorEval::new_from_fpre_eval`,
+/// since those structs no longer carry alpha / beta / correlated auth_bit_shares
+/// (gamma stays per the deferred `compute_lambda_gamma`).
+struct AuthBitTruth {
+    gen_alpha: Vec<AuthBitShare>,
+    gen_beta:  Vec<AuthBitShare>,
+    gen_corr:  Vec<AuthBitShare>,
+    gen_gamma: Vec<AuthBitShare>,
+    eval_alpha: Vec<AuthBitShare>,
+    eval_beta:  Vec<AuthBitShare>,
+    eval_corr:  Vec<AuthBitShare>,
+    eval_gamma: Vec<AuthBitShare>,
+}
+
+fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &AuthBitTruth) {
     let delta_a = gen_out.delta_a;
     let delta_b = eval_out.delta_b;
 
     // alpha (length n) — both forms
     check_one("alpha _eval",
         &gen_out.alpha_eval, &eval_out.alpha_eval,
-        &gen_out.alpha_auth_bit_shares, &eval_out.alpha_auth_bit_shares,
+        &t.gen_alpha, &t.eval_alpha,
         &delta_b);
     check_one("alpha _gen",
         &gen_out.alpha_gen, &eval_out.alpha_gen,
-        &gen_out.alpha_auth_bit_shares, &eval_out.alpha_auth_bit_shares,
+        &t.gen_alpha, &t.eval_alpha,
         &delta_a);
 
     // beta (length m) — both forms
     check_one("beta _eval",
         &gen_out.beta_eval, &eval_out.beta_eval,
-        &gen_out.beta_auth_bit_shares, &eval_out.beta_auth_bit_shares,
+        &t.gen_beta, &t.eval_beta,
         &delta_b);
     check_one("beta _gen",
         &gen_out.beta_gen, &eval_out.beta_gen,
-        &gen_out.beta_auth_bit_shares, &eval_out.beta_auth_bit_shares,
+        &t.gen_beta, &t.eval_beta,
         &delta_a);
 
     // correlated `l_gamma*` (length n*m, column-major) — both forms
     check_one("correlated _eval",
         &gen_out.correlated_eval, &eval_out.correlated_eval,
-        &gen_out.correlated_auth_bit_shares, &eval_out.correlated_auth_bit_shares,
+        &t.gen_corr, &t.eval_corr,
         &delta_b);
     check_one("correlated _gen",
         &gen_out.correlated_gen, &eval_out.correlated_gen,
-        &gen_out.correlated_auth_bit_shares, &eval_out.correlated_auth_bit_shares,
+        &t.gen_corr, &t.eval_corr,
         &delta_a);
 
     // gamma `l_gamma` output mask (length n*m, column-major) — both forms
@@ -100,7 +116,7 @@ fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval) {
 /// the bit value is recoverable as `LSB(party._eval XOR party._gen)` for both
 /// parties on every authenticated bit. If this passes, removing
 /// `*_auth_bit_shares` from the structs loses no information.
-fn check_bit_recovery(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval) {
+fn check_bit_recovery(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &AuthBitTruth) {
     fn check_recovery(
         label: &str,
         gen_eval_blocks: &[Block],
@@ -124,45 +140,61 @@ fn check_bit_recovery(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval) {
     check_recovery("alpha",
         &gen_out.alpha_eval, &gen_out.alpha_gen,
         &eval_out.alpha_eval, &eval_out.alpha_gen,
-        &gen_out.alpha_auth_bit_shares, &eval_out.alpha_auth_bit_shares);
+        &t.gen_alpha, &t.eval_alpha);
     check_recovery("beta",
         &gen_out.beta_eval, &gen_out.beta_gen,
         &eval_out.beta_eval, &eval_out.beta_gen,
-        &gen_out.beta_auth_bit_shares, &eval_out.beta_auth_bit_shares);
+        &t.gen_beta, &t.eval_beta);
     check_recovery("correlated",
         &gen_out.correlated_eval, &gen_out.correlated_gen,
         &eval_out.correlated_eval, &eval_out.correlated_gen,
-        &gen_out.correlated_auth_bit_shares, &eval_out.correlated_auth_bit_shares);
+        &t.gen_corr, &t.eval_corr);
     check_recovery("gamma",
         &gen_out.gamma_eval, &gen_out.gamma_gen,
         &eval_out.gamma_eval, &eval_out.gamma_gen,
-        &gen_out.gamma_auth_bit_shares, &eval_out.gamma_auth_bit_shares);
+        &t.gen_gamma, &t.eval_gamma);
+}
+
+/// Extract the auth-bit truth slices from `fpre_*` before constructing the
+/// AuthTensor* (which consumes them and no longer carries alpha / beta /
+/// correlated auth_bit_shares).
+fn run_backend(backend: &dyn TensorPreprocessing, n: usize, m: usize)
+    -> (AuthTensorGen, AuthTensorEval, AuthBitTruth)
+{
+    let (fpre_gen, fpre_eval) = backend.run(n, m, 1, 1);
+    let truth = AuthBitTruth {
+        gen_alpha: fpre_gen.alpha_auth_bit_shares.clone(),
+        gen_beta:  fpre_gen.beta_auth_bit_shares.clone(),
+        gen_corr:  fpre_gen.correlated_auth_bit_shares.clone(),
+        gen_gamma: fpre_gen.gamma_auth_bit_shares.clone(),
+        eval_alpha: fpre_eval.alpha_auth_bit_shares.clone(),
+        eval_beta:  fpre_eval.beta_auth_bit_shares.clone(),
+        eval_corr:  fpre_eval.correlated_auth_bit_shares.clone(),
+        eval_gamma: fpre_eval.gamma_auth_bit_shares.clone(),
+    };
+    let gen_out = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+    let eval_out = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+    (gen_out, eval_out, truth)
 }
 
 #[test]
 fn ideal_backend_block_form_correlations() {
-    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(4, 4, 1, 1);
-    let gen_out = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-    let eval_out = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-    check_all(&gen_out, &eval_out);
-    check_bit_recovery(&gen_out, &eval_out);
+    let (gen_out, eval_out, truth) = run_backend(&IdealPreprocessingBackend, 4, 4);
+    check_all(&gen_out, &eval_out, &truth);
+    check_bit_recovery(&gen_out, &eval_out, &truth);
 }
 
 #[test]
 fn uncompressed_backend_block_form_correlations() {
-    let (fpre_gen, fpre_eval) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
-    let gen_out = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-    let eval_out = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-    check_all(&gen_out, &eval_out);
-    check_bit_recovery(&gen_out, &eval_out);
+    let (gen_out, eval_out, truth) = run_backend(&UncompressedPreprocessingBackend, 4, 4);
+    check_all(&gen_out, &eval_out, &truth);
+    check_bit_recovery(&gen_out, &eval_out, &truth);
 }
 
 #[test]
 fn ideal_backend_block_form_correlations_asymmetric_dims() {
     // n != m to catch any column-major / row-major confusion in correlated/gamma.
-    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(3, 5, 1, 1);
-    let gen_out = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-    let eval_out = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-    check_all(&gen_out, &eval_out);
-    check_bit_recovery(&gen_out, &eval_out);
+    let (gen_out, eval_out, truth) = run_backend(&IdealPreprocessingBackend, 3, 5);
+    check_all(&gen_out, &eval_out, &truth);
+    check_bit_recovery(&gen_out, &eval_out, &truth);
 }

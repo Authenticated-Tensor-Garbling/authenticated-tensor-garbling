@@ -25,17 +25,16 @@ pub struct AuthTensorGen {
 
     pub delta_a: Delta,
 
-    /// Underlying auth-bit triples + lowered Block-form sharings; see
-    /// `TensorFpreGen` field doc for semantics. The `_eval` and `_gen` Block
-    /// fields are local-only lowerings, populated by preprocessing and
-    /// consumed by online code without further interaction.
-    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    /// Block-form sharings under δ_a (`_gen`) and δ_b (`_eval`); see
+    /// `TensorFpreGen` field doc for semantics. The Online layer operates
+    /// purely on these XOR-share Blocks (paper `5_online.tex` §155–180,
+    /// `6_total.tex` §136–180), no MAC/Key recovery required.
+    /// `gamma_auth_bit_shares` retained pending `compute_lambda_gamma`
+    /// migration (deferred 1.2(i)).
     pub alpha_eval: Vec<Block>,
     pub alpha_gen:  Vec<Block>,
-    pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_eval: Vec<Block>,
     pub beta_gen:  Vec<Block>,
-    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_eval: Vec<Block>,
     pub correlated_gen:  Vec<Block>,
     pub gamma_auth_bit_shares: Vec<AuthBitShare>,
@@ -84,13 +83,10 @@ impl AuthTensorGen {
             m,
             chunking_factor,
             delta_a: Delta::random(&mut rand::rng()),
-            alpha_auth_bit_shares: Vec::new(),
             alpha_eval: Vec::new(),
             alpha_gen: Vec::new(),
-            beta_auth_bit_shares: Vec::new(),
             beta_eval: Vec::new(),
             beta_gen: Vec::new(),
-            correlated_auth_bit_shares: Vec::new(),
             correlated_eval: Vec::new(),
             correlated_gen: Vec::new(),
             gamma_auth_bit_shares: Vec::new(),
@@ -117,13 +113,10 @@ impl AuthTensorGen {
             m: fpre_gen.m,
             chunking_factor: fpre_gen.chunking_factor,
             delta_a: fpre_gen.delta_a,
-            alpha_auth_bit_shares: fpre_gen.alpha_auth_bit_shares,
             alpha_eval: fpre_gen.alpha_eval,
             alpha_gen: fpre_gen.alpha_gen,
-            beta_auth_bit_shares: fpre_gen.beta_auth_bit_shares,
             beta_eval: fpre_gen.beta_eval,
             beta_gen: fpre_gen.beta_gen,
-            correlated_auth_bit_shares: fpre_gen.correlated_auth_bit_shares,
             correlated_eval: fpre_gen.correlated_eval,
             correlated_gen: fpre_gen.correlated_gen,
             gamma_auth_bit_shares: fpre_gen.gamma_auth_bit_shares,
@@ -564,9 +557,13 @@ mod tests {
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        assert_eq!(gar.alpha_auth_bit_shares.len(), n);
-        assert_eq!(gar.beta_auth_bit_shares.len(), m);
-        assert_eq!(gar.correlated_auth_bit_shares.len(), n * m);
+        // Block-form sharings populated from preprocessing.
+        assert_eq!(gar.alpha_eval.len(), n);
+        assert_eq!(gar.alpha_gen.len(),  n);
+        assert_eq!(gar.beta_eval.len(),  m);
+        assert_eq!(gar.beta_gen.len(),   m);
+        assert_eq!(gar.correlated_eval.len(), n * m);
+        assert_eq!(gar.correlated_gen.len(),  n * m);
 
         install_test_input_labels(&mut gar, &mut ev, 0b1101, 0b110);
 

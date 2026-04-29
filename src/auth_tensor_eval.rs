@@ -14,15 +14,15 @@ pub struct AuthTensorEval {
 
     pub delta_b: Delta,
 
-    /// Underlying auth-bit triples + lowered Block-form sharings; see
-    /// `TensorFpreEval` field doc for semantics.
-    pub alpha_auth_bit_shares: Vec<AuthBitShare>,
+    /// Block-form sharings under δ_a (`_gen`) and δ_b (`_eval`); see
+    /// `TensorFpreEval` field doc for semantics. Online layer operates
+    /// purely on these XOR-share Blocks per the paper's tensor macros.
+    /// `gamma_auth_bit_shares` retained pending `compute_lambda_gamma`
+    /// migration (deferred 1.2(i)).
     pub alpha_eval: Vec<Block>,
     pub alpha_gen:  Vec<Block>,
-    pub beta_auth_bit_shares: Vec<AuthBitShare>,
     pub beta_eval: Vec<Block>,
     pub beta_gen:  Vec<Block>,
-    pub correlated_auth_bit_shares: Vec<AuthBitShare>,
     pub correlated_eval: Vec<Block>,
     pub correlated_gen:  Vec<Block>,
     pub gamma_auth_bit_shares: Vec<AuthBitShare>,
@@ -82,13 +82,10 @@ impl AuthTensorEval {
             n,
             m,
             delta_b: Delta::random(&mut rand::rng()),
-            alpha_auth_bit_shares: Vec::new(),
             alpha_eval: Vec::new(),
             alpha_gen: Vec::new(),
-            beta_auth_bit_shares: Vec::new(),
             beta_eval: Vec::new(),
             beta_gen: Vec::new(),
-            correlated_auth_bit_shares: Vec::new(),
             correlated_eval: Vec::new(),
             correlated_gen: Vec::new(),
             gamma_auth_bit_shares: Vec::new(),
@@ -115,13 +112,10 @@ impl AuthTensorEval {
             n: fpre_eval.n,
             m: fpre_eval.m,
             delta_b: fpre_eval.delta_b,
-            alpha_auth_bit_shares: fpre_eval.alpha_auth_bit_shares,
             alpha_eval: fpre_eval.alpha_eval,
             alpha_gen: fpre_eval.alpha_gen,
-            beta_auth_bit_shares: fpre_eval.beta_auth_bit_shares,
             beta_eval: fpre_eval.beta_eval,
             beta_gen: fpre_eval.beta_gen,
-            correlated_auth_bit_shares: fpre_eval.correlated_auth_bit_shares,
             correlated_eval: fpre_eval.correlated_eval,
             correlated_gen: fpre_eval.correlated_gen,
             gamma_auth_bit_shares: fpre_eval.gamma_auth_bit_shares,
