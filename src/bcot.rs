@@ -54,23 +54,22 @@ impl IdealBCot {
         Self { delta_a, delta_b, rng }
     }
 
-    /// Party A is the sender; Party B is the receiver with choice bits.
+    /// Body of a single bCOT batch transfer, parameterized by the sender's
+    /// global correlation key.
     ///
-    /// Same-delta convention: A's correlation key is delta_a (A's own global key).
-    /// For each choice bit b:
-    ///   - A generates K[0] (LSB cleared to 0)
-    ///   - B receives mac = K[0] XOR b*delta_a  (i.e., K[0].auth(b, delta_a))
-    ///
-    /// Paper §F Construction 2 convention: each sender uses their own delta.
-    /// This gives mac.lsb() = b when delta_a.lsb() = 1, enabling GGM tree
-    /// navigation in Macro 1 (A garbles under delta_a, B evaluates).
-    pub fn transfer_a_to_b(&mut self, choices: &[bool]) -> BcotOutput {
+    /// Per paper §F Construction 2's "same-delta" convention, each sender uses
+    /// their own delta. The two role-tagged entry points (`transfer_a_to_b` and
+    /// `transfer_b_to_a`) are thin wrappers that select between
+    /// `self.delta_a` and `self.delta_b` — bodies are otherwise identical.
+    /// This helper captures the single underlying operation so the entry-point
+    /// pair stays as documentation/grep targets without duplicating logic.
+    fn transfer_with_delta(&mut self, sender_delta: Delta, choices: &[bool]) -> BcotOutput {
         let mut sender_keys = Vec::with_capacity(choices.len());
         let mut receiver_macs = Vec::with_capacity(choices.len());
 
         for &b in choices {
             let k0 = Key::new(Block::random(&mut self.rng));
-            let mac = k0.auth(b, &self.delta_a);
+            let mac = k0.auth(b, &sender_delta);
             sender_keys.push(k0);
             receiver_macs.push(mac);
         }
@@ -82,32 +81,30 @@ impl IdealBCot {
         }
     }
 
+    /// Party A is the sender; Party B is the receiver with choice bits.
+    ///
+    /// Same-delta convention: A's correlation key is `delta_a` (A's own global
+    /// key). For each choice bit b: A generates K[0] (LSB cleared to 0); B
+    /// receives `mac = K[0] XOR b·delta_a` (i.e., `K[0].auth(b, delta_a)`).
+    ///
+    /// Paper §F Construction 2 convention: each sender uses their own delta.
+    /// This gives `mac.lsb() = b` when `delta_a.lsb() = 1`, enabling GGM tree
+    /// navigation in Macro 1 (A garbles under `delta_a`, B evaluates).
+    pub fn transfer_a_to_b(&mut self, choices: &[bool]) -> BcotOutput {
+        self.transfer_with_delta(self.delta_a, choices)
+    }
+
     /// Party B is the sender; Party A is the receiver with choice bits.
     ///
-    /// Same-delta convention: B's correlation key is delta_b (B's own global key).
-    /// For each choice bit b:
-    ///   - B generates K[0] (LSB cleared to 0)
-    ///   - A receives mac = K[0] XOR b*delta_b  (i.e., K[0].auth(b, delta_b))
+    /// Same-delta convention: B's correlation key is `delta_b` (B's own global
+    /// key). For each choice bit b: B generates K[0] (LSB cleared to 0); A
+    /// receives `mac = K[0] XOR b·delta_b` (i.e., `K[0].auth(b, delta_b)`).
     ///
-    /// Since delta_b.lsb() = 0, mac.lsb() != b for choice bit b=1. Downstream
-    /// callers that need choice bits for GGM tree navigation must use explicit
-    /// bit vectors rather than inferring from mac.lsb().
+    /// Since `delta_b.lsb() = 0`, `mac.lsb() != b` for choice bit b=1.
+    /// Downstream callers that need choice bits for GGM tree navigation must
+    /// use explicit bit vectors rather than inferring from `mac.lsb()`.
     pub fn transfer_b_to_a(&mut self, choices: &[bool]) -> BcotOutput {
-        let mut sender_keys = Vec::with_capacity(choices.len());
-        let mut receiver_macs = Vec::with_capacity(choices.len());
-
-        for &b in choices {
-            let k0 = Key::new(Block::random(&mut self.rng));
-            let mac = k0.auth(b, &self.delta_b);
-            sender_keys.push(k0);
-            receiver_macs.push(mac);
-        }
-
-        BcotOutput {
-            sender_keys,
-            receiver_macs,
-            choices: choices.to_vec(),
-        }
+        self.transfer_with_delta(self.delta_b, choices)
     }
 
     /// Converts a BcotOutput to Vec<AuthBitShare> from the perspective where the SENDER holds the key.
