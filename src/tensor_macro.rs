@@ -41,6 +41,24 @@ use crate::{
     },
 };
 
+/// Ciphertext bundle for the chunked variant of the tensor macro.
+///
+/// Mirrors [`TensorMacroCiphertexts`] but groups outputs by chunk: the
+/// chunked primitive runs `⌈n / cf⌉` independent `2^cf`-leaf GGM trees, one
+/// per `cf`-row block of `Z`. Final-chunk dimension is `n - (⌈n/cf⌉ - 1)·cf`
+/// (i.e., `n % cf` if non-zero, else `cf`).
+///
+/// `chunk_level_cts[t]` and `chunk_leaf_cts[t]` carry the level and leaf
+/// ciphertexts for chunk `t` — same paper-faithful shape as
+/// `TensorMacroCiphertexts` (single Block per level, single Block per leaf).
+pub(crate) struct ChunkedTensorMacroCiphertexts {
+    /// Length `⌈n / cf⌉`. Each entry has length `slice_size_t - 1` where
+    /// `slice_size_t` is the chunk's per-tree leaf-bit count.
+    pub chunk_level_cts: Vec<Vec<Block>>,
+    /// Length `⌈n / cf⌉`. Each entry has length `m`.
+    pub chunk_leaf_cts: Vec<Vec<Block>>,
+}
+
 /// Ciphertexts emitted by [`tensor_garbler`] and consumed by [`tensor_evaluator`].
 ///
 /// Maps to paper Construction 4 / `5_online.tex:43-72` under the improved
@@ -181,6 +199,123 @@ pub(crate) fn tensor_evaluator(
             missing,
             &g.leaf_cts,
         );
+    }
+
+    z_eval
+}
+
+/// Chunked variant of [`tensor_garbler`]. Sub-tiles the n-dimension into
+/// `⌈n / cf⌉` independent `2^cf`-leaf GGM trees (the last chunk has
+/// `n - (⌈n/cf⌉ - 1)·cf` leaves). Mirrors P1's
+/// `gen_chunked_half_outer_product` (`auth_tensor_gen.rs`) but at the
+/// generic macro layer — used by `LeakyTensorPre::generate` to avoid the
+/// `O(2^n)` GGM-leaf allocation that would OOM for any production-sized n.
+///
+/// Output `Z` is the same `n × m` matrix the non-chunked
+/// `tensor_garbler` produces — chunking partitions only the work, not the
+/// shape. Each chunk `t` writes its `slice_size_t` rows into the row-band
+/// `[t·cf, t·cf + slice_size_t)` of `Z`.
+///
+/// Preconditions (enforced via `assert!`):
+/// - `n > 0`, `cf > 0`
+/// - `a_keys.len() == n`
+/// - `t_gen.rows() == m` and `t_gen.cols() == 1`
+pub(crate) fn chunked_tensor_garbler(
+    n: usize,
+    m: usize,
+    cf: usize,
+    delta: Delta,
+    a_keys: &[Key],
+    t_gen: &BlockMatrix,
+) -> (BlockMatrix, ChunkedTensorMacroCiphertexts) {
+    assert!(n > 0, "n must be at least 1 (degenerate n=0 is not supported)");
+    assert!(cf > 0, "cf must be at least 1");
+    assert_eq!(a_keys.len(), n, "a_keys length must equal n");
+    assert_eq!(t_gen.rows(), m, "t_gen must be a length-m column vector");
+    assert_eq!(t_gen.cols(), 1, "t_gen must be a column vector (cols == 1)");
+
+    let cipher: &FixedKeyAes = &FIXED_KEY_AES;
+    let a_blocks: &[Block] = Key::as_blocks(a_keys);
+    let num_chunks = (n + cf - 1) / cf;
+
+    let mut z_gen = BlockMatrix::new(n, m);
+    let mut chunk_level_cts: Vec<Vec<Block>> = Vec::with_capacity(num_chunks);
+    let mut chunk_leaf_cts: Vec<Vec<Block>> = Vec::with_capacity(num_chunks);
+
+    for s in 0..num_chunks {
+        let slice_size = if cf * (s + 1) > n { n - cf * s } else { cf };
+        let slice = &a_blocks[s * cf .. s * cf + slice_size];
+
+        let t_view = t_gen.as_view();
+        z_gen.as_view_mut().with_subrows(cf * s, slice_size, |part| {
+            let (gen_seeds, levels) = gen_populate_seeds_mem_optimized(slice, cipher, delta);
+            let leaf_cts = gen_unary_outer_product(&gen_seeds, &t_view, part, cipher);
+            chunk_level_cts.push(levels);
+            chunk_leaf_cts.push(leaf_cts);
+        });
+    }
+
+    (
+        z_gen,
+        ChunkedTensorMacroCiphertexts { chunk_level_cts, chunk_leaf_cts },
+    )
+}
+
+/// Chunked variant of [`tensor_evaluator`]. Counterpart to
+/// [`chunked_tensor_garbler`] — reconstructs the `⌈n / cf⌉` GGM trees from
+/// the per-chunk level ciphertexts and recovers `Z_eval` of shape `n × m`.
+///
+/// Preconditions (enforced via `assert!`):
+/// - `n > 0`, `cf > 0`
+/// - `a_macs.len() == n`, `a_bits.len() == n`
+/// - `t_eval.rows() == m` and `t_eval.cols() == 1`
+/// - `g.chunk_level_cts.len() == g.chunk_leaf_cts.len() == ⌈n / cf⌉`
+pub(crate) fn chunked_tensor_evaluator(
+    n: usize,
+    m: usize,
+    cf: usize,
+    g: &ChunkedTensorMacroCiphertexts,
+    a_macs: &[Mac],
+    a_bits: &[bool],
+    t_eval: &BlockMatrix,
+) -> BlockMatrix {
+    assert!(n > 0, "n must be at least 1 (degenerate n=0 is not supported)");
+    assert!(cf > 0, "cf must be at least 1");
+    assert_eq!(a_macs.len(), n, "a_macs length must equal n");
+    assert_eq!(a_bits.len(), n, "a_bits length must equal n");
+    assert_eq!(t_eval.rows(), m, "t_eval must be a length-m column vector");
+    assert_eq!(t_eval.cols(), 1, "t_eval must be a column vector (cols == 1)");
+    let num_chunks = (n + cf - 1) / cf;
+    assert_eq!(g.chunk_level_cts.len(), num_chunks, "chunk_level_cts has wrong number of chunks");
+    assert_eq!(g.chunk_leaf_cts.len(), num_chunks, "chunk_leaf_cts has wrong number of chunks");
+
+    let cipher: &FixedKeyAes = &FIXED_KEY_AES;
+    let a_blocks: &[Block] = Mac::as_blocks(a_macs);
+
+    let mut z_eval = BlockMatrix::new(n, m);
+
+    for s in 0..num_chunks {
+        let slice_size = if cf * (s + 1) > n { n - cf * s } else { cf };
+        let slice_macs = &a_blocks[s * cf .. s * cf + slice_size];
+        let slice_bits = &a_bits[s * cf .. s * cf + slice_size];
+
+        let t_view = t_eval.as_view();
+        z_eval.as_view_mut().with_subrows(cf * s, slice_size, |part| {
+            let (leaf_seeds, missing) = eval_populate_seeds_mem_optimized(
+                slice_macs,
+                slice_bits,
+                &g.chunk_level_cts[s],
+                cipher,
+            );
+            let _ = eval_unary_outer_product(
+                &leaf_seeds,
+                &t_view,
+                part,
+                cipher,
+                missing,
+                &g.chunk_leaf_cts[s],
+            );
+        });
     }
 
     z_eval

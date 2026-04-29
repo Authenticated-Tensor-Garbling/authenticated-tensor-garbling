@@ -576,8 +576,10 @@ criterion_group!(
     bench_128x128_runtime_with_networking,
     bench_256x256_runtime_with_networking,
 );
-// Only the new paper-faithful online group is wired into criterion_main. The
-// `preprocessing_benches` and `network_benches` groups are still defined above
-// so they can be reactivated with a one-line change, but they're skipped under
-// `cargo bench` while the focus is on regenerating the paper's ms+KB figures.
-criterion_main!(online_benches);
+// AUDIT-2.2 D2: `preprocessing_benches` is re-registered now that
+// `LeakyTensorPre::generate` chunks via the `chunking_factor` parameter
+// (closes the OOM blocker that previously made any production-sized
+// preprocessing bench infeasible). `network_benches` remains dormant —
+// `bench_online_p1`/`bench_online_p2` already include their own network
+// simulator paths.
+criterion_main!(preprocessing_benches, online_benches);

@@ -246,7 +246,7 @@ pub fn run_preprocessing(
     for t in 0..bucket_size {
         // Each LeakyTensorPre borrows &mut bcot — shares delta_a and delta_b.
         // Per-instance seed `t+2` ensures independent key randomness across triples.
-        let mut ltp = LeakyTensorPre::new((t + 2) as u64, n, m, &mut bcot);
+        let mut ltp = LeakyTensorPre::new((t + 2) as u64, n, m, chunking_factor, &mut bcot);
         triples.push(ltp.generate());
     }
 
@@ -314,6 +314,12 @@ pub fn run_preprocessing(
     eval_out.gamma_auth_bit_shares = eval_gamma;
     eval_out.gamma_eval = gamma_eval_e;
     eval_out.gamma_gen  = gamma_gen_e;
+
+    // AUDIT-2.3 D7: cross-party `chunking_factor` parity invariant. Trivially
+    // true here since both outputs were derived from the single `chunking_factor`
+    // argument — but this is the canonical enforcement site for the simulation,
+    // and breaks loudly if `combine_leaky_triples` ever gets a divergence bug.
+    crate::auth_tensor_pre::verify_chunking_factor_cross_party(&gen_out, &eval_out);
 
     (gen_out, eval_out)
 }

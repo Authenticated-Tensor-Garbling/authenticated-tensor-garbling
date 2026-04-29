@@ -12,7 +12,7 @@ use crate::{
     macs::Mac,
     matrix::BlockMatrix,
     sharing::AuthBitShare,
-    tensor_macro::{tensor_garbler, tensor_evaluator},
+    tensor_macro::{chunked_tensor_garbler, chunked_tensor_evaluator},
     feq,
 };
 use rand::{Rng, SeedableRng};
@@ -57,18 +57,30 @@ pub struct LeakyTriple {
 /// Borrows `&mut IdealBCot` so every triple produced by a single
 /// `run_preprocessing` call shares the same Δ_A and Δ_B (required for
 /// Phase 5 XOR combining to preserve the MAC invariant).
+///
+/// `chunking_factor` controls the GGM-tree sub-tiling inside the two
+/// `chunked_tensor_garbler` calls in `generate()` — required so
+/// preprocessing's GGM expansion stays within memory at production-sized
+/// `n` (paper Construction 4 / AUDIT-2.2 B2 / AUDIT-2.3 D7). Must equal
+/// the `chunking_factor` that downstream `AuthTensor{Gen, Eval}` consume
+/// from `TensorFpre*`; the cross-party parity assertion at AuthTensor
+/// construction enforces this once preprocessing's chunked output flows
+/// through.
 pub struct LeakyTensorPre<'a> {
     pub n: usize,
     pub m: usize,
+    pub chunking_factor: usize,
     pub(crate) bcot: &'a mut IdealBCot,
     pub(crate) rng: ChaCha12Rng,
 }
 
 impl<'a> LeakyTensorPre<'a> {
-    pub fn new(seed: u64, n: usize, m: usize, bcot: &'a mut IdealBCot) -> Self {
+    pub fn new(seed: u64, n: usize, m: usize, chunking_factor: usize, bcot: &'a mut IdealBCot) -> Self {
+        assert!(chunking_factor > 0, "chunking_factor must be at least 1");
         Self {
             n,
             m,
+            chunking_factor,
             bcot,
             rng: ChaCha12Rng::seed_from_u64(seed),
         }
@@ -202,13 +214,15 @@ impl<'a> LeakyTensorPre<'a> {
         //   Keys: cot_x_a_to_b.sender_keys (A's keys; LSB=0 by Key invariant).
         //   MACs: cot_x_a_to_b.receiver_macs (B's MACs = K[0] XOR x_B * Δ_A; lsb=x_b since Δ_A.lsb()=1).
         //   Explicit bits x_b_bits passed to evaluator for GGM tree navigation.
-        let (z_gb1, g_1) = tensor_garbler(
-            self.n, self.m, self.bcot.delta_a,
+        // Chunked variant: sub-tile the n-dimension into ⌈n / cf⌉ trees
+        // (AUDIT-2.2 B2). Output Z shape unchanged.
+        let (z_gb1, g_1) = chunked_tensor_garbler(
+            self.n, self.m, self.chunking_factor, self.bcot.delta_a,
             &cot_x_a_to_b.sender_keys,
             &t_a,
         );
-        let e_1 = tensor_evaluator(
-            self.n, self.m, &g_1,
+        let e_1 = chunked_tensor_evaluator(
+            self.n, self.m, self.chunking_factor, &g_1,
             &cot_x_a_to_b.receiver_macs,
             &x_b_bits,
             &t_b,
@@ -218,13 +232,13 @@ impl<'a> LeakyTensorPre<'a> {
         //   Keys: cot_x_b_to_a.sender_keys (B's keys; LSB=0 by Key invariant).
         //   MACs: cot_x_b_to_a.receiver_macs (A's MACs = K[0] XOR x_A * Δ_B; lsb != x_a since Δ_B.lsb()=0).
         //   Explicit bits x_a_bits passed to evaluator — mandatory since MAC LSB is unreliable.
-        let (z_gb2, g_2) = tensor_garbler(
-            self.n, self.m, self.bcot.delta_b,
+        let (z_gb2, g_2) = chunked_tensor_garbler(
+            self.n, self.m, self.chunking_factor, self.bcot.delta_b,
             &cot_x_b_to_a.sender_keys,
             &t_b,
         );
-        let e_2 = tensor_evaluator(
-            self.n, self.m, &g_2,
+        let e_2 = chunked_tensor_evaluator(
+            self.n, self.m, self.chunking_factor, &g_2,
             &cot_x_b_to_a.receiver_macs,
             &x_a_bits,
             &t_a,
@@ -369,7 +383,7 @@ mod tests {
 
         // Plan 3 extension (PROTO-09): real generate() output respects the same shape.
         let mut bcot2 = IdealBCot::new(42, 99);
-        let real = LeakyTensorPre::new(7, 2, 3, &mut bcot2).generate();
+        let real = LeakyTensorPre::new(7, 2, 3, 2, &mut bcot2).generate();
         assert_eq!(real.n, 2);
         assert_eq!(real.m, 3);
         assert_eq!(real.gen_x_shares.len(), 2);
@@ -386,7 +400,7 @@ mod tests {
     fn test_correlated_randomness_dimensions() {
         for (seed, n, m) in [(0u64, 1, 1), (1, 4, 4), (2, 8, 3)] {
             let mut bcot = IdealBCot::new(42, 99);
-            let triple = LeakyTensorPre::new(seed, n, m, &mut bcot).generate();
+            let triple = LeakyTensorPre::new(seed, n, m, 2, &mut bcot).generate();
             assert_eq!(triple.n, n, "triple.n mismatch at seed={}", seed);
             assert_eq!(triple.m, m, "triple.m mismatch at seed={}", seed);
             assert_eq!(triple.gen_x_shares.len(), n,
@@ -421,7 +435,7 @@ mod tests {
         let (n, m) = (4, 4);
         let mut bcot = IdealBCot::new(42, 99);
         let delta_xor_block: Block = *bcot.delta_a.as_block() ^ *bcot.delta_b.as_block();
-        let triple = LeakyTensorPre::new(5, n, m, &mut bcot).generate();
+        let triple = LeakyTensorPre::new(5, n, m, 2, &mut bcot).generate();
 
         for j in 0..m {
             let y_full = triple.gen_y_shares[j].value ^ triple.eval_y_shares[j].value;
@@ -442,7 +456,7 @@ mod tests {
     fn test_key_lsb_zero_all_shares() {
         let (n, m) = (4, 4);
         let mut bcot = IdealBCot::new(42, 99);
-        let triple = LeakyTensorPre::new(9, n, m, &mut bcot).generate();
+        let triple = LeakyTensorPre::new(9, n, m, 2, &mut bcot).generate();
         let all: [(&str, &Vec<AuthBitShare>); 6] = [
             ("gen_x",  &triple.gen_x_shares),
             ("eval_x", &triple.eval_x_shares),
@@ -473,7 +487,7 @@ mod tests {
         // convention for itmac{D}{Delta} needs to be swapped (see Plan 2 Step 5 doc).
         let (n, m) = (4, 4);
         let mut bcot = IdealBCot::new(42, 99);
-        let triple = LeakyTensorPre::new(17, n, m, &mut bcot).generate();
+        let triple = LeakyTensorPre::new(17, n, m, 2, &mut bcot).generate();
         for i in 0..n {
             verify_cross_party(
                 &triple.gen_x_shares[i],
@@ -508,7 +522,7 @@ mod tests {
         // whole phase exists to make this test pass.
         for (seed, n, m) in [(21u64, 1, 1), (22, 2, 3), (23, 4, 4)] {
             let mut bcot = IdealBCot::new(42, 99);
-            let triple = LeakyTensorPre::new(seed, n, m, &mut bcot).generate();
+            let triple = LeakyTensorPre::new(seed, n, m, 2, &mut bcot).generate();
             let x_full: Vec<bool> = (0..n)
                 .map(|i| triple.gen_x_shares[i].value ^ triple.eval_x_shares[i].value)
                 .collect();
@@ -539,9 +553,9 @@ mod tests {
         // regression rather than a silent protocol-level anomaly.
         let (n, m) = (4, 4);
         let mut b1 = IdealBCot::new(42, 99);
-        let t1 = LeakyTensorPre::new(31, n, m, &mut b1).generate();
+        let t1 = LeakyTensorPre::new(31, n, m, 2, &mut b1).generate();
         let mut b2 = IdealBCot::new(42, 99);
-        let t2 = LeakyTensorPre::new(31, n, m, &mut b2).generate();
+        let t2 = LeakyTensorPre::new(31, n, m, 2, &mut b2).generate();
         for k in 0..(n * m) {
             assert_eq!(
                 t1.gen_z_shares[k].value, t2.gen_z_shares[k].value,
@@ -571,7 +585,7 @@ mod tests {
         // traceability to PROTO-07 in the validation map.)
         let (n, m) = (2, 2);
         let mut bcot = IdealBCot::new(42, 99);
-        let triple = LeakyTensorPre::new(41, n, m, &mut bcot).generate();
+        let triple = LeakyTensorPre::new(41, n, m, 2, &mut bcot).generate();
         for k in 0..(n * m) {
             verify_cross_party(
                 &triple.gen_z_shares[k],
@@ -588,8 +602,48 @@ mod tests {
         // and does NOT panic. Any panic here signals a transcript inconsistency
         // (either in macro wiring, C_A/C_B construction, or L_1/L_2 assembly).
         let mut bcot = IdealBCot::new(42, 99);
-        let _ = LeakyTensorPre::new(53, 3, 5, &mut bcot).generate();
+        let _ = LeakyTensorPre::new(53, 3, 5, 2, &mut bcot).generate();
         // no panic = success
+    }
+
+    #[test]
+    fn test_chunking_factor_varied_invariant() {
+        // AUDIT-2.2 B2 / Phase 2.6.1: vary `chunking_factor` over values that
+        // trigger 1, 2, 4, and ⌈n/cf⌉=non-power-of-2 chunks. The product
+        // invariant z_full = x_full ⊗ y_full must hold regardless of cf.
+        // This catches: (a) cf-vs-non-cf path divergence, (b) non-uniform
+        // last-chunk size (n=8, cf=3 → chunks of 3, 3, 2), (c) cf > n
+        // (n=4, cf=8 → single chunk smaller than cf).
+        for (seed, n, m, cf) in [
+            (101u64, 4, 4, 1),  // cf=1: maximal chunking, n chunks of 1 leaf
+            (102,    8, 3, 2),  // cf=2: 4 chunks of 2 leaves
+            (103,    8, 3, 4),  // cf=4: 2 chunks of 4 leaves
+            (104,    8, 3, 3),  // non-divisor: chunks of 3, 3, 2
+            (105,    4, 8, 8),  // cf > n: single chunk of n leaves
+        ] {
+            let mut bcot = IdealBCot::new(42, 99);
+            let triple = LeakyTensorPre::new(seed, n, m, cf, &mut bcot).generate();
+
+            let x_full: Vec<bool> = (0..n)
+                .map(|i| triple.gen_x_shares[i].value ^ triple.eval_x_shares[i].value)
+                .collect();
+            let y_full: Vec<bool> = (0..m)
+                .map(|j| triple.gen_y_shares[j].value ^ triple.eval_y_shares[j].value)
+                .collect();
+
+            for j in 0..m {
+                for i in 0..n {
+                    let k = j * n + i;
+                    let z_full = triple.gen_z_shares[k].value ^ triple.eval_z_shares[k].value;
+                    let expected = x_full[i] & y_full[j];
+                    assert_eq!(
+                        z_full, expected,
+                        "chunked LeakyTensor product invariant violated at (i={}, j={}) for n={}, m={}, cf={}, seed={}",
+                        i, j, n, m, cf, seed,
+                    );
+                }
+            }
+        }
     }
 
     #[test]

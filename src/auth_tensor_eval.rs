@@ -72,6 +72,11 @@ pub struct AuthTensorEval {
 
 impl AuthTensorEval {
     pub fn new_from_fpre_eval(fpre_eval: TensorFpreEval) -> Self {
+        // AUDIT-2.3 D7: see `AuthTensorGen::new_from_fpre_gen` for rationale.
+        assert!(
+            fpre_eval.chunking_factor > 0,
+            "fpre_eval.chunking_factor must be at least 1 (AUDIT-2.3 D7)"
+        );
         Self {
             cipher: &(*FIXED_KEY_AES),
             chunking_factor: fpre_eval.chunking_factor,

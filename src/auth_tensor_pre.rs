@@ -144,6 +144,25 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     1 + (SSP + log2_p - 1) / log2_p
 }
 
+/// AUDIT-2.3 D7: in-process simulation substitute for the paper's cross-party
+/// `chunking_factor` agreement step. In a real two-party deployment, parties
+/// would publicly reveal (or commit-and-open hash) their chunking factors and
+/// abort on mismatch — paper Construction 4's "shared randomness" implies the
+/// chunking parameter is part of the public protocol transcript.
+///
+/// Mismatched factors silently break tile alignment between preprocessing and
+/// `AuthTensor{Gen,Eval}` consumers (paper-cited "Chunking-size matching
+/// invariant" / AUDIT-2.2 B2). This helper panics on disagreement, matching
+/// the simulation envelope of `verify_cross_party` and `feq::check`.
+pub fn verify_chunking_factor_cross_party(fpre_gen: &TensorFpreGen, fpre_eval: &TensorFpreEval) {
+    assert_eq!(
+        fpre_gen.chunking_factor, fpre_eval.chunking_factor,
+        "chunking_factor mismatch: gen = {}, eval = {} \
+         (AUDIT-2.3 D7 cross-party invariant violated)",
+        fpre_gen.chunking_factor, fpre_eval.chunking_factor,
+    );
+}
+
 /// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor', Construction 4).
 ///
 /// Implements the paper's two-to-one combining (references/appendix_krrw_pre.tex §3.1
@@ -329,8 +348,13 @@ mod tests {
         // Single shared IdealBCot — ALL triples get the same delta_a and delta_b.
         let mut bcot = IdealBCot::new(42, 99);
         let mut triples = Vec::new();
+        // Use cf=1 (single chunk) for these structural unit tests — they
+        // verify combine semantics, not chunking. The chunked path is
+        // exercised end-to-end via `run_preprocessing` and the LeakyTensorPre
+        // chunking-invariant test.
+        let cf = 1;
         for seed in 0..count {
-            let mut ltp = LeakyTensorPre::new(seed as u64, n, m, &mut bcot);
+            let mut ltp = LeakyTensorPre::new(seed as u64, n, m, cf, &mut bcot);
             triples.push(ltp.generate());
         }
         triples
@@ -708,5 +732,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "AUDIT-2.3 D7 cross-party invariant violated")]
+    fn test_chunking_factor_parity_mismatch_panics() {
+        // AUDIT-2.3 D7: parity helper must abort on mismatch (paper's
+        // "publicly reveal then check" step in simulation form).
+        use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
+        let (gen_out, mut eval_out) = IdealPreprocessingBackend.run(4, 3, 2);
+        // Tamper: change one side's chunking_factor after preprocessing.
+        eval_out.chunking_factor = 4;
+        verify_chunking_factor_cross_party(&gen_out, &eval_out);
     }
 }

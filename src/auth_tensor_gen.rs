@@ -72,6 +72,17 @@ pub struct AuthTensorGen {
 
 impl AuthTensorGen {
     pub fn new_from_fpre_gen(fpre_gen: TensorFpreGen) -> Self {
+        // AUDIT-2.3 D7: paper's chunking-size matching invariant requires the
+        // GGM-tree tile boundaries used by P1 to match those baked into
+        // preprocessing. A zero chunking_factor (no tiles) silently breaks tile
+        // alignment downstream and breaks `gen_chunked_half_outer_product`'s
+        // chunk-iteration arithmetic. Per-party defense-in-depth check; the
+        // cross-party `gb.chunking_factor == ev.chunking_factor` invariant is
+        // verified by `verify_chunking_factor_cross_party` at preprocessing exit.
+        assert!(
+            fpre_gen.chunking_factor > 0,
+            "fpre_gen.chunking_factor must be at least 1 (AUDIT-2.3 D7)"
+        );
         Self {
             cipher: &(*FIXED_KEY_AES),
             n: fpre_gen.n,
