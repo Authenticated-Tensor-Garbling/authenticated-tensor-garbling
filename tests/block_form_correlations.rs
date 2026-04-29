@@ -101,14 +101,18 @@ fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &AuthBitTrut
         &t.gen_corr, &t.eval_corr,
         &delta_a);
 
-    // gamma `l_gamma` output mask (length n*m, column-major) — both forms
+    // gamma `l_gamma` output mask (length n*m, column-major) — both forms.
+    // Truth slices come from `t.gen_gamma` / `t.eval_gamma` extracted from
+    // fpre_* before construction; AuthTensorGen/Eval no longer carry
+    // gamma_auth_bit_shares (Option B for compute_lambda_gamma retired
+    // it along with the gate-semantics check).
     check_one("gamma _eval",
         &gen_out.gamma_eval, &eval_out.gamma_eval,
-        &gen_out.gamma_auth_bit_shares, &eval_out.gamma_auth_bit_shares,
+        &t.gen_gamma, &t.eval_gamma,
         &delta_b);
     check_one("gamma _gen",
         &gen_out.gamma_gen, &eval_out.gamma_gen,
-        &gen_out.gamma_auth_bit_shares, &eval_out.gamma_auth_bit_shares,
+        &t.gen_gamma, &t.eval_gamma,
         &delta_a);
 }
 

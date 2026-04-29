@@ -38,111 +38,6 @@ pub const CSP: usize = 128;
 /// simulator's transit time track the paper's κ + ρ leaf-ciphertext width.
 pub const SSP: usize = 40;
 
-/// Gate-semantics sanity check — verifies that an honestly garbled tensor gate
-/// produces `v_γ = v_α · v_β` at every output position.
-///
-/// **NOT the paper's Protocol 1 consistency check.** For the paper-faithful
-/// P1 / P2 abort check (per `5_online.tex` §240–246 / `6_total.tex` §215–222),
-/// see `assemble_e_input_wire_blocks_p1` / `assemble_c_alpha_beta_blocks_p2`.
-/// This helper is a sim-only regression check on AND-truth-table garbling
-/// correctness, exercised by `test_gate_semantics_check_aborts_on_tampered_lambda`.
-///
-/// For each (i, j) output position, the gate-semantics quantity is:
-/// ```text
-///   c_gamma[(i,j)] = (L_α[i] AND L_β[j])    [public]
-///                  ⊕ L_α[i] · l_β[j]         [shared, conditional]
-///                  ⊕ L_β[j] · l_α[i]         [shared, conditional]
-///                  ⊕ l_γ*[(i,j)]             [shared, always]
-///                  ⊕ L_γ[(i,j)]              [public]
-///                  ⊕ l_γ[(i,j)]              [shared, always]
-/// ```
-/// which simplifies algebraically to `v_α · v_β ⊕ v_γ` and is zero iff the
-/// AND truth table was honestly garbled.
-///
-/// Each party computes its share-block of `c_gamma[(i,j)] · δ_a` using its own
-/// `_gen` Block-form components (which encode its share of `λ · δ_a`). For
-/// honest gates the per-index pair satisfies `gen_block[idx] == eval_block[idx]`
-/// (their XOR equals `0 · δ_a = 0`). Public bits are absorbed into the gen-side
-/// share by convention (could equally go on the eval side; the choice doesn't
-/// affect the equality).
-///
-/// SIMULATION ONLY in this in-process testbed.
-///
-/// Returns `(gen_blocks, eval_blocks)` — each length `n * m` in column-major
-/// order (`j * n + i`). Pass to `block_check_zero` for full-block equality.
-#[allow(clippy::too_many_arguments)]
-pub fn assemble_gate_semantics_blocks(
-    n: usize,
-    m: usize,
-    l_alpha_pub: &[bool],          // length n — public masked alpha bits
-    l_beta_pub: &[bool],           // length m — public masked beta bits
-    l_gamma_pub: &[bool],          // length n*m — public masked gamma bits (column-major)
-    gb: &AuthTensorGen,
-    ev: &AuthTensorEval,
-) -> (Vec<Block>, Vec<Block>) {
-    assert_eq!(l_alpha_pub.len(), n);
-    assert_eq!(l_beta_pub.len(),  m);
-    assert_eq!(l_gamma_pub.len(), n * m);
-    assert_eq!(gb.alpha_gen.len(),       n);
-    assert_eq!(gb.beta_gen.len(),        m);
-    assert_eq!(gb.correlated_gen.len(),  n * m);
-    assert_eq!(gb.gamma_gen.len(),       n * m);
-    assert_eq!(ev.alpha_gen.len(),       n);
-    assert_eq!(ev.beta_gen.len(),        m);
-    assert_eq!(ev.correlated_gen.len(),  n * m);
-    assert_eq!(ev.gamma_gen.len(),       n * m);
-
-    let delta_a_block = *gb.delta_a.as_block();
-
-    let mut gen_blocks: Vec<Block> = Vec::with_capacity(n * m);
-    let mut eval_blocks: Vec<Block> = Vec::with_capacity(n * m);
-
-    for j in 0..m {
-        for i in 0..n {
-            let idx = j * n + i;
-
-            // Each party's share-block of `c_gamma[(i,j)] · δ_a`, built from
-            // its own _gen Block fields (= `[λ · δ_a]^party` per category).
-            let mut gb_block = Block::ZERO;
-            let mut ev_block = Block::ZERO;
-
-            // Term: L_α[i] · l_β[j]   (include iff L_α[i] is true)
-            if l_alpha_pub[i] {
-                gb_block ^= gb.beta_gen[j];
-                ev_block ^= ev.beta_gen[j];
-            }
-
-            // Term: L_β[j] · l_α[i]   (include iff L_β[j] is true)
-            if l_beta_pub[j] {
-                gb_block ^= gb.alpha_gen[i];
-                ev_block ^= ev.alpha_gen[i];
-            }
-
-            // Term: l_γ*[(i,j)]   (always)
-            gb_block ^= gb.correlated_gen[idx];
-            ev_block ^= ev.correlated_gen[idx];
-
-            // Term: l_γ[(i,j)]   (always)
-            gb_block ^= gb.gamma_gen[idx];
-            ev_block ^= ev.gamma_gen[idx];
-
-            // Public bit: `(L_α[i] AND L_β[j]) ⊕ L_γ[(i,j)]`. Lifted to a
-            // δ_a Block contribution and absorbed into gb's side (convention;
-            // ev's side could equally hold it — the equality check is
-            // unaffected since public bits are known to both parties).
-            let public_bit = (l_alpha_pub[i] & l_beta_pub[j]) ^ l_gamma_pub[idx];
-            if public_bit {
-                gb_block ^= delta_a_block;
-            }
-
-            gen_blocks.push(gb_block);
-            eval_blocks.push(ev_block);
-        }
-    }
-
-    (gen_blocks, eval_blocks)
-}
-
 /// Paper-faithful Protocol 1 input-wire CheckZero assembly under `delta_b`.
 ///
 /// Implements the Protocol 1 consistency check per `5_online.tex` §240–246
@@ -493,7 +388,6 @@ mod tests {
     use crate::online::block_check_zero;
     use crate::sharing::AuthBitShare;
     use super::{
-        assemble_gate_semantics_blocks,
         assemble_e_input_wire_blocks_p1,
         assemble_c_alpha_beta_blocks_p2,
     };
@@ -869,82 +763,14 @@ mod tests {
     }
 
     #[test]
-    fn test_gate_semantics_check_aborts_on_tampered_lambda() {
-        // Regression for `assemble_gate_semantics_shares` (renamed from
-        // `assemble_c_gamma_shares`). Tampering with lambda_gb (the garbler-emitted
-        // [L_gamma]^gb) corrupts the gate-semantics identity v_α · v_β ⊕ v_γ at
-        // index 0, so check_zero under delta_a must abort.
-        //
-        // NOTE: This is a test of the gate-semantics sanity check, NOT the paper's
-        // P1 consistency check. The paper-faithful P1 abort is tested by
-        // `test_protocol_1_e_input_wire_check_aborts_on_garbler_d_ev_tamper`.
-
-        let n = 4;
-        let m = 3;
-
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
-        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
-        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-
-        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
-        let mut prep_rng = rand::rng();
-        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
-
-        let (cl1, ct1) = gb.garble_first_half();
-        ev.evaluate_first_half(cl1, ct1);
-        let (cl2, ct2) = gb.garble_second_half();
-        ev.evaluate_second_half(cl2, ct2);
-        gb.garble_final();
-        ev.evaluate_final();
-
-        let lambda_gb = gb.compute_lambda_gamma();
-
-        // Tamper: flip ONE bit at index 0 of the garbler-emitted lambda vec.
-        let mut tampered_lambda_gb = lambda_gb.clone();
-        tampered_lambda_gb[0] ^= true;
-        assert_ne!(tampered_lambda_gb, lambda_gb,
-            "tampered vec must differ from honest vec");
-
-        let l_gamma_combined_tampered = ev.compute_lambda_gamma(&tampered_lambda_gb);
-        assert_eq!(l_gamma_combined_tampered.len(), n * m);
-
-        // L_α / L_β are the cleartext masked input vectors `vec a ⊕ vec λ_a` /
-        // `vec b ⊕ vec λ_b` (paper `5_online.tex` §242, `6_total.tex` §218).
-        // After encode_inputs(x, y), `ev.masked_x_bits[i] = x_i ⊕ α_i` (and
-        // gen-side is the 0-vec by the asymmetric sharing); with x = y = 0 in
-        // these tests this equals λ_α / λ_β exactly.
-        let l_alpha_pub: Vec<bool> = ev.masked_x_bits.clone();
-        let l_beta_pub:  Vec<bool> = ev.masked_y_bits.clone();
-
-        let (c_gamma_gen_tampered, c_gamma_eval_tampered) = assemble_gate_semantics_blocks(
-            n, m,
-            &l_alpha_pub,
-            &l_beta_pub,
-            &l_gamma_combined_tampered,
-            &gb,
-            &ev,
-        );
-
-        assert!(
-            !block_check_zero(&c_gamma_gen_tampered, &c_gamma_eval_tampered),
-            "tampered lambda_gb must cause gate-semantics block_check_zero to abort"
-        );
-    }
-
-    #[test]
     fn test_protocol_1_e_input_wire_check_aborts_on_garbler_d_ev_tamper() {
         // Paper-faithful P1 CheckZero must abort when the garbler lies about its
-        // [v_a D_ev]^gb during input encoding (5_online.tex line 214). We model this
+        // [v_a D_ev]^gb during input encoding (5_online.tex §214). We model this
         // by passing a tampered `gb_v_alpha_eval[0]` to the helper.
         //
         // The XOR is `gb.delta_a.as_block()`, whose LSB is 1 — so the tamper leaks
         // into `combined_e_block.lsb()` and breaks the e_a_bit = 0 invariant,
-        // causing `check_zero` under delta_b to return false.
-        //
-        // We additionally verify that the gate-semantics check (renamed
-        // `assemble_gate_semantics_shares` under delta_a) is NOT sensitive to this
-        // class of tamper — concretely demonstrating that the new helper catches a
-        // tamper the old check misses.
+        // causing `block_check_zero` under δ_b to return false.
 
         let n = 4;
         let m = 3;
@@ -1013,24 +839,6 @@ mod tests {
         assert!(
             !block_check_zero(&e_gen_blocks_tampered, &e_eval_blocks_tampered),
             "tampered gb_v_alpha_eval must cause paper-faithful block_check_zero to abort"
-        );
-
-        // Cross-check: the gate-semantics check is insensitive to this tamper
-        // because it doesn't read `*_eval` blocks at all.
-        let lambda_gb = gb.compute_lambda_gamma();
-        let l_gamma_combined = ev.compute_lambda_gamma(&lambda_gb);
-        let (gate_sem_gen, gate_sem_eval) = assemble_gate_semantics_blocks(
-            n, m,
-            &l_alpha_pub,
-            &l_beta_pub,
-            &l_gamma_combined,
-            &gb,
-            &ev,
-        );
-        assert!(
-            block_check_zero(&gate_sem_gen, &gate_sem_eval),
-            "gate-semantics check should still pass for a D_ev-block tamper \
-             (it doesn't read _eval blocks, so the tamper is invisible to it)"
         );
     }
 
