@@ -11,9 +11,11 @@ use network_simulator::SimpleNetworkSimulator;
 use authenticated_tensor_garbling::{
     auth_tensor_eval::AuthTensorEval,
     auth_tensor_gen::AuthTensorGen,
-    auth_tensor_pre::bucket_size_for,
+    auth_tensor_pre::{bucket_size_for, combine_leaky_triples_with_bytes},
+    bcot::IdealBCot,
     block::Block,
     input_encoding::encode_inputs,
+    leaky_tensor_pre::LeakyTensorPre,
     online::block_hash_check_zero,
     preprocessing::run_preprocessing,
     bench_internals::{assemble_c_alpha_beta_blocks_p2, assemble_e_input_wire_blocks_p1},
@@ -155,28 +157,56 @@ fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
 // (`appendix_experiments.tex:14-15, 31-32`).
 // ---------------------------------------------------------------------------
 
-/// Total on-wire byte count for one uncompressed preprocessing run, per the
-/// paper's Construction 4 communication theorem (`appendix_krrw_pre.tex:495-499`):
+/// Total on-wire byte count for one uncompressed preprocessing run, measured by
+/// instrumenting the actual emission sites of our chunked `Π_LeakyTensor` +
+/// bucketing implementation rather than evaluating a closed-form formula.
 ///
-/// ```text
-///   prep_bits(n, m, B) = B · [2(n + m − 1)·κ + 2·n·m] + (B − 1)·m
-/// ```
+/// Mirrors `run_preprocessing(n, m, cf)`'s pipeline structure (`B` leaky
+/// triples, then `B − 1` two-to-one combines) but routes through the
+/// `_with_bytes` helpers so the per-emission `Vec<Vec<Block>>` lengths fall out
+/// of the actual call shapes — chunking-aware by construction.
 ///
-/// Where `B = bucket_size_for(n, 1)` (matches `run_preprocessing`'s ℓ=1 call).
-/// Independent of `chunking_factor` — tiling is an application-layer organization
-/// (`appendix_applications.tex`), not a wire-level change in Construction 4.
+/// **What is counted** (matches the paper's `Π_LeakyTensor` + bucketing
+/// envelope at `appendix_krrw_pre.tex:495-499`, but with our impl's actual
+/// struct sizes):
+///   * `B · (g_1 + g_2)` chunked tensor-macro ciphertexts (level cts + leaf
+///     cts, full κ-bit Blocks).
+///   * `B · 2·⌈n·m / 8⌉` bytes for `lsb(S_1)` + `lsb(S_2)` D-extraction
+///     reveal across the bucket.
+///   * `(B − 1) · ⌈m / 8⌉` bytes for the d-reveal across the two-to-one
+///     combines.
 ///
-/// The three terms decompose as:
-///   * `B · 2(n + m − 1)·κ` — per-bucket leaky-triple GGM-tree ciphertext bytes.
-///   * `B · 2·n·m`         — per-bucket AND-correlated bit transfers.
-///   * `(B − 1)·m`         — bucketing-combiner reveals across `B−1` two-to-one
-///     combine steps.
+/// **What is NOT counted** (ideal subprotocols, exactly as in the paper
+/// formula):
+///   * `IdealBCot::transfer_*` (F_COT realization).
+///   * `feq::check` (F_eq).
+///   * `verify_cross_party` MAC checks inside `two_to_one_combine` (F_check).
 ///
-/// Result is rounded up to the next whole byte.
-fn prep_bytes(n: usize, m: usize) -> usize {
-    let b = bucket_size_for(n, 1);
-    let prep_bits = b * (2 * (n + m - 1) * CSP + 2 * n * m) + (b - 1) * m;
-    (prep_bits + 7) / 8
+/// **Divergence from the paper formula** `B · [2(n + m − 1)·κ + 2nm] +
+/// (B − 1)·m`: the paper analyses a non-chunked `Π_LeakyTensor` whose leaf
+/// ciphertexts compress to one bit per cell, giving the `2nm`-bits-per-bucket
+/// term; our `chunked_tensor_garbler` (AUDIT-2.2 B2) emits full κ-bit `Block`s
+/// per leaf for cache-locality and amortization, so the leaf-ct contribution
+/// is `~κ×` larger and varies with `chunking_factor` (the level-ct count
+/// scales with `⌈log₂(cf)⌉ · num_chunks` rather than `n − 1`).
+fn prep_bytes(n: usize, m: usize, cf: usize) -> usize {
+    let bucket = bucket_size_for(n, 1);
+    // Seed values are arbitrary — the byte count is RNG-independent (it's
+    // determined entirely by the Vec shapes inside `chunked_tensor_garbler`,
+    // which depend only on (n, m, cf)).
+    let mut bcot = IdealBCot::new(0, 1);
+    let mut triples = Vec::with_capacity(bucket);
+    let mut total: usize = 0;
+    for t in 0..bucket {
+        let mut ltp = LeakyTensorPre::new(t as u64, n, m, cf, &mut bcot);
+        let (triple, ltp_bytes) = ltp.generate_with_bytes();
+        total += ltp_bytes;
+        triples.push(triple);
+    }
+    let (_out, combine_bytes) =
+        combine_leaky_triples_with_bytes(triples, bucket, n, m, cf, 0);
+    total += combine_bytes;
+    total
 }
 
 /// Benchmarks uncompressed preprocessing (Construction 4) under a 100 Mbps
@@ -197,10 +227,13 @@ fn prep_bytes(n: usize, m: usize) -> usize {
 ///   - Criterion's AND-gates/s via `Throughput::Elements(n * m)`  (literature style)
 ///
 /// Per-cell, prints one `KB,prep,N=…,M=…,tile=…,kappa=…,rho=…,B=…,kb=…` line
-/// on first invocation (deduped via `OnceCell`). KB is identical across tiles
-/// for a fixed `(n, m)` (chunking-invariant per paper formula); the tile field
-/// is recorded for parser-uniformity with the P1/P2 schema. `B` is retained
-/// as informational sanity-check (= `bucket_size_for(n, 1)`).
+/// on first invocation (deduped via `OnceCell`). With the Phase 3.7
+/// instrumentation `KB` now varies across tiles for a fixed `(n, m)` —
+/// chunking changes the `chunked_tensor_garbler` ciphertext shape (number of
+/// chunks × `⌈log₂(cf)⌉` level cts plus per-chunk leaf cts), so the per-tile
+/// emit reflects real wire-level traffic rather than the paper-formula flat
+/// estimate. `B` is retained as informational sanity-check
+/// (= `bucket_size_for(n, 1)`).
 fn bench_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("preprocessing");
     group.warm_up_time(std::time::Duration::from_secs(5));
@@ -216,12 +249,13 @@ fn bench_preprocessing(c: &mut Criterion) {
             group.sample_size(10);
         }
 
-        // Construction 4 communication is paper-invariant to chunking_factor
-        // (`appendix_krrw_pre.tex:495-499`); compute bytes once per (n, m).
-        let bytes = prep_bytes(n, m);
         let bucket = bucket_size_for(n, 1);
 
         for chunking_factor in 1usize..=8 {
+            // Phase 3.7 instrumentation: byte count varies per tile because the
+            // `chunked_tensor_garbler` ciphertext shape depends on `cf`.
+            let bytes = prep_bytes(n, m, chunking_factor);
+
             // OnceCell-deduped KB emit per (n, m, tile) cell — Criterion calls
             // the closure once per sample so we'd otherwise spam the log.
             let kb_cache: OnceCell<()> = OnceCell::new();
