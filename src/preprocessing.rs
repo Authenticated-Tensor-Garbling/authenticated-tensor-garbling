@@ -21,6 +21,44 @@ use crate::auth_tensor_fpre::TensorFpre;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 
+/// Default master seed used by the unparameterized preprocessing entry points
+/// (`run_preprocessing`, `<Backend as TensorPreprocessing>::run`). Tests and
+/// benchmarks that want to vary fixture data should reach for the
+/// `*_with_seed` variants instead. SEC-05.
+pub const DEFAULT_PREP_SEED: u64 = 0;
+
+/// Per-call deterministic sub-seeds derived from a single master seed. Each
+/// sub-seed feeds a distinct internal RNG so that varying the master cleanly
+/// shifts the entire preprocessing fixture without callers needing to know
+/// the internal pipeline shape. SEC-05.
+///
+/// Offset choice: each field uses a distinct large power-of-16 offset, so the
+/// per-triple seeds `triple_base + t` (which loop up to `bucket_size`, ~21
+/// for the headline parameters in `references/.../appendix_F.tex`) cannot
+/// collide with `shuffle` or `gamma` for any bucket size below `0x10_000`.
+/// `wrapping_add` keeps the derivation total over the full `u64` range.
+struct PrepSubseeds {
+    fpre: u64,
+    bcot_gb: u64,
+    bcot_ev: u64,
+    triple_base: u64,
+    shuffle: u64,
+    gamma: u64,
+}
+
+impl PrepSubseeds {
+    const fn from_master(master: u64) -> Self {
+        Self {
+            fpre:        master,
+            bcot_gb:     master.wrapping_add(0x1),
+            bcot_ev:     master.wrapping_add(0x2),
+            triple_base: master.wrapping_add(0x100),
+            shuffle:     master.wrapping_add(0x10_000),
+            gamma:       master.wrapping_add(0x100_0000),
+        }
+    }
+}
+
 /// Preprocessing exit boundary -- garbler's view.
 ///
 /// Each authenticated bit category (alpha, beta, correlated `l_gamma*`,
@@ -141,6 +179,20 @@ pub trait TensorPreprocessing {
 /// instead of calling `run_preprocessing` directly. See CONTEXT.md D-02.
 pub struct UncompressedPreprocessingBackend;
 
+impl UncompressedPreprocessingBackend {
+    /// Seed-parameterized uncompressed preprocessing. Delegates to
+    /// `run_preprocessing_with_seed`. Tests and benches that want varied
+    /// fixtures call this directly. SEC-05.
+    pub fn run_with_seed(
+        seed: u64,
+        n: usize,
+        m: usize,
+        chunking_factor: usize,
+    ) -> (TensorFpreGen, TensorFpreEval) {
+        run_preprocessing_with_seed(seed, n, m, chunking_factor)
+    }
+}
+
 impl TensorPreprocessing for UncompressedPreprocessingBackend {
     fn run(
         &self,
@@ -163,28 +215,27 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
 /// See RESEARCH.md Pitfall 2 and Pattern 3.
 pub struct IdealPreprocessingBackend;
 
-impl TensorPreprocessing for IdealPreprocessingBackend {
-    fn run(
-        &self,
+impl IdealPreprocessingBackend {
+    /// Seed-parameterized ideal preprocessing. The trait `run` implementation
+    /// is a thin wrapper that passes `DEFAULT_PREP_SEED`. Tests and benches
+    /// that want varied fixtures call this directly. SEC-05.
+    pub fn run_with_seed(
+        seed: u64,
         n: usize,
         m: usize,
         chunking_factor: usize,
     ) -> (TensorFpreGen, TensorFpreEval) {
-        let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
+        let sub = PrepSubseeds::from_master(seed);
+        let mut fpre = TensorFpre::new(sub.fpre, n, m, chunking_factor);
         fpre.generate_ideal();
 
         // CRITICAL ORDERING: into_gen_eval(self) consumes fpre by value.
         // All gen_auth_bit() calls must happen BEFORE into_gen_eval() is called.
-        //
-        // Phase 9 D-06: generate all four D_ev field pairs using fpre.gen_auth_bit().
-        // Use distinct ChaCha12Rng seeds (42, 43, 44, 45) so the four fields are
-        // independently random — same pattern as the existing gamma_auth_bit_shares
-        // generation (seed 42).
         // alpha/beta/correlated D_ev labels are derived from the D_gb auth bits inside
         // into_gen_eval() — no gen_auth_bit calls needed here.
 
         // gamma generation: D_ev-authenticated l_gamma shares (column-major n*m).
-        let mut rng_gamma = ChaCha12Rng::seed_from_u64(42);
+        let mut rng_gamma = ChaCha12Rng::seed_from_u64(sub.gamma);
         let mut gamma_d_ev_bits: Vec<crate::sharing::AuthBit> = Vec::with_capacity(n * m);
         for _ in 0..(n * m) {
             let l_gamma: bool = rng_gamma.random_bool(0.5);
@@ -219,6 +270,17 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
     }
 }
 
+impl TensorPreprocessing for IdealPreprocessingBackend {
+    fn run(
+        &self,
+        n: usize,
+        m: usize,
+        chunking_factor: usize,
+    ) -> (TensorFpreGen, TensorFpreEval) {
+        Self::run_with_seed(DEFAULT_PREP_SEED, n, m, chunking_factor)
+    }
+}
+
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor', Construction 4).
 ///
 /// Generates one authenticated tensor triple using:
@@ -244,23 +306,43 @@ pub fn run_preprocessing(
     m: usize,
     chunking_factor: usize,
 ) -> (TensorFpreGen, TensorFpreEval) {
+    run_preprocessing_with_seed(DEFAULT_PREP_SEED, n, m, chunking_factor)
+}
+
+/// Seed-parameterized variant of `run_preprocessing`. SEC-05.
+///
+/// Routes `seed` through `PrepSubseeds::from_master` to derive the six
+/// internal RNG seeds (fpre, bCOT delta_gb, bCOT delta_ev, per-triple base,
+/// shuffle, gamma). Tests and benches that want varied fixtures call this
+/// directly; the unparameterized `run_preprocessing` is a thin wrapper that
+/// passes `DEFAULT_PREP_SEED`.
+pub fn run_preprocessing_with_seed(
+    seed: u64,
+    n: usize,
+    m: usize,
+    chunking_factor: usize,
+) -> (TensorFpreGen, TensorFpreEval) {
+    let sub = PrepSubseeds::from_master(seed);
     let bucket_size = bucket_size_for(n, 1);
 
     // ONE shared IdealBCot for all triples — ensures all share the same delta_gb and delta_ev.
-    // Seed choice: 0 for delta_gb, 1 for delta_ev. The internal rng seed is 0^1=1 (trivial),
-    // but key generation inside each LeakyTensorPre uses its own per-instance rng.
-    let mut bcot = IdealBCot::new(0, 1);
+    // The internal rng seed is `bcot_seed_gb ^ bcot_seed_ev`; key generation inside each
+    // LeakyTensorPre uses its own per-instance rng seeded from `triple_base + t`.
+    let mut bcot = IdealBCot::new(sub.bcot_gb, sub.bcot_ev);
 
     let mut triples = Vec::with_capacity(bucket_size);
     for t in 0..bucket_size {
         // Each LeakyTensorPre borrows &mut bcot — shares delta_gb and delta_ev.
-        // Per-instance seed `t+2` ensures independent key randomness across triples.
-        let mut ltp = LeakyTensorPre::new((t + 2) as u64, n, m, chunking_factor, &mut bcot);
+        // Per-instance seed `triple_base + t` ensures independent key randomness across triples.
+        let mut ltp = LeakyTensorPre::new(
+            sub.triple_base.wrapping_add(t as u64),
+            n, m, chunking_factor, &mut bcot,
+        );
         triples.push(ltp.generate());
     }
 
     let (mut gen_out, mut eval_out) =
-        combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, 42);
+        combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, sub.shuffle);
 
     // BUG-02 / Phase 1.2(c): the post-bucketing input-label populator was
     // removed here. Input wire labels are no longer a preprocessing artifact —
@@ -293,9 +375,9 @@ pub fn run_preprocessing(
         &eval_out.correlated_auth_bit_shares, &gen_out.correlated_auth_bit_shares, &delta_gb);
 
     // Gamma: fresh n*m IT-MAC AuthBit pairs sampled from a dedicated ChaCha12Rng,
-    // then lowered to Block form via the same helper. Distinct seed (43) from the
-    // bucketing permutation seed (42).
-    let mut rng_gamma = ChaCha12Rng::seed_from_u64(43);
+    // then lowered to Block form via the same helper. The gamma sub-seed is
+    // distinct from the shuffle sub-seed via `PrepSubseeds::from_master` offsets.
+    let mut rng_gamma = ChaCha12Rng::seed_from_u64(sub.gamma);
     let mut gen_gamma = Vec::with_capacity(n * m);
     let mut eval_gamma = Vec::with_capacity(n * m);
     for _ in 0..(n * m) {
