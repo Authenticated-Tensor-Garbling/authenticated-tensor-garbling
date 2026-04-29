@@ -81,7 +81,12 @@ impl AuthTensorEval {
             chunking_factor,
             n,
             m,
-            delta_b: Delta::random(&mut rand::rng()),
+            // δ_b must have LSB=0 — required by the bit-recovery formula
+            // `LSB(δ_a XOR δ_b) = 1` and by `derive_sharing_blocks`'s LSB
+            // accounting. Using `Delta::random` (LSB=1) here silently breaks
+            // bit-recovery for any consumer of the resulting struct; same class
+            // as 67af1e6 (TensorFpre::new).
+            delta_b: Delta::random_b(&mut rand::rng()),
             alpha_eval: Vec::new(),
             alpha_gen: Vec::new(),
             beta_eval: Vec::new(),
