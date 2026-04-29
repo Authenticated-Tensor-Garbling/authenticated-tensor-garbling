@@ -180,24 +180,31 @@ fn prep_bytes(n: usize, m: usize) -> usize {
 }
 
 /// Benchmarks uncompressed preprocessing (Construction 4) under a 100 Mbps
-/// network model: each iteration's measured wall-clock includes both the local
+/// network model. Each iteration's measured wall-clock includes both the local
 /// compute time (`run_preprocessing`) and the deterministic transit time
-/// (`transit_ns(prep_bytes(n, m))`). Mirrors `bench_online_with_networking_for_size`.
+/// (`transit_ns(prep_bytes(n, m))`).
+///
+/// Sweeps `BENCHMARK_PARAMS × chunking_factor 1..=8` to mirror the
+/// `bench_online_p{1|2}` structure — preprocessing wall-clock varies with the
+/// chunking factor (GGM-tree tile size affects local cache / per-chunk
+/// overhead) even though wire-level communication does not (paper formula at
+/// `appendix_krrw_pre.tex:495-499` is chunking-invariant). Tile-matched data
+/// lets the per-N plots stack a third "Prep" bar alongside P1/P2 in the same
+/// tile cluster.
 ///
 /// Throughput is reported in two complementary units:
 ///   - ms per tensor op  — elapsed_ns / iterations / 1_000_000  (paper style)
 ///   - Criterion's AND-gates/s via `Throughput::Elements(n * m)`  (literature style)
 ///
-/// Per-cell, prints one `KB,prep,N=…,M=…,B=…,kb=…` line on first invocation
-/// (deduped via `OnceCell`) so the same plotting script that joins the online
-/// `KB,p1/p2,…` lines with Criterion's `estimates.json` can pick up the
-/// preprocessing communication numbers too.
+/// Per-cell, prints one `KB,prep,N=…,M=…,tile=…,kappa=…,rho=…,B=…,kb=…` line
+/// on first invocation (deduped via `OnceCell`). KB is identical across tiles
+/// for a fixed `(n, m)` (chunking-invariant per paper formula); the tile field
+/// is recorded for parser-uniformity with the P1/P2 schema. `B` is retained
+/// as informational sanity-check (= `bucket_size_for(n, 1)`).
 fn bench_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("preprocessing");
     group.warm_up_time(std::time::Duration::from_secs(5));
     group.measurement_time(std::time::Duration::from_secs(20));
-
-    let chunking_factor = 1;
 
     for &(n, m) in BENCHMARK_PARAMS {
         // Throughput: total authenticated bits produced per preprocessing call.
@@ -209,37 +216,47 @@ fn bench_preprocessing(c: &mut Criterion) {
             group.sample_size(10);
         }
 
-        // Construction 4 communication, per paper formula (constant per (n, m)).
+        // Construction 4 communication is paper-invariant to chunking_factor
+        // (`appendix_krrw_pre.tex:495-499`); compute bytes once per (n, m).
         let bytes = prep_bytes(n, m);
         let bucket = bucket_size_for(n, 1);
-        let kb_cache: OnceCell<()> = OnceCell::new();
 
-        group.bench_with_input(
-            BenchmarkId::new("real_preprocessing", format!("{}x{}", n, m)),
-            &(n, m),
-            |b, &(n, m)| {
-                kb_cache.get_or_init(|| {
-                    println!(
-                        "KB,prep,N={},M={},B={},kb={:.3}",
-                        n, m, bucket,
-                        bytes as f64 / 1024.0,
-                    );
-                });
-                let transit = std::time::Duration::from_nanos(transit_ns(bytes));
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
-                    for _ in 0..iters {
-                        let start = Instant::now();
-                        let (fpre_gen, fpre_eval) = run_preprocessing(n, m, chunking_factor);
-                        total += start.elapsed() + transit;
-                        // black_box prevents dead-code elimination of the preprocessing output.
-                        black_box(fpre_gen);
-                        black_box(fpre_eval);
-                    }
-                    total
-                });
-            },
-        );
+        for chunking_factor in 1usize..=8 {
+            // OnceCell-deduped KB emit per (n, m, tile) cell — Criterion calls
+            // the closure once per sample so we'd otherwise spam the log.
+            let kb_cache: OnceCell<()> = OnceCell::new();
+
+            group.bench_with_input(
+                BenchmarkId::new(
+                    format!("real_preprocessing_{}x{}", n, m),
+                    chunking_factor,
+                ),
+                &chunking_factor,
+                |b, &chunking_factor| {
+                    kb_cache.get_or_init(|| {
+                        println!(
+                            "KB,prep,N={},M={},tile={},kappa={},rho={},B={},kb={:.4}",
+                            n, m, chunking_factor, CSP, SSP, bucket,
+                            bytes as f64 / 1024.0,
+                        );
+                    });
+                    let transit = Duration::from_nanos(transit_ns(bytes));
+                    b.iter_custom(|iters| {
+                        let mut total = std::time::Duration::ZERO;
+                        for _ in 0..iters {
+                            let start = Instant::now();
+                            let (fpre_gen, fpre_eval) =
+                                run_preprocessing(n, m, chunking_factor);
+                            total += start.elapsed() + transit;
+                            // black_box prevents dead-code elimination of the preprocessing output.
+                            black_box(fpre_gen);
+                            black_box(fpre_eval);
+                        }
+                        total
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
