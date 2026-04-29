@@ -4,7 +4,6 @@ use crate::{
         FIXED_KEY_AES
     },
     delta::Delta,
-    sharing::AuthBitShare,
     preprocessing::TensorFpreGen,
     block::Block,
     matrix::{BlockMatrix, MatrixViewRef},
@@ -14,7 +13,6 @@ use crate::{
         gen_unary_outer_product_wide,
     },
 };
-use rand::{CryptoRng, Rng};
 
 pub struct AuthTensorGen {
     cipher: &'static FixedKeyAes,

@@ -386,7 +386,6 @@ mod tests {
     use crate::input_encoding::encode_inputs;
     use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing, UncompressedPreprocessingBackend};
     use crate::online::block_check_zero;
-    use crate::sharing::AuthBitShare;
     use super::{
         assemble_e_input_wire_blocks_p1,
         assemble_c_alpha_beta_blocks_p2,

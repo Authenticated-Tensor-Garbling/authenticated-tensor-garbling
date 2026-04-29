@@ -1,5 +1,4 @@
 use crate::{aes::FixedKeyAes, block::Block, delta::Delta, matrix::BlockMatrix};
-use crate::sharing::AuthBitShare;
 use crate::aes::FIXED_KEY_AES;
 use crate::preprocessing::TensorFpreEval;
 use crate::matrix::MatrixViewRef;
@@ -534,15 +533,6 @@ mod tests {
         let mut rng = ChaCha12Rng::seed_from_u64(0xDEAD_BEEF);
         crate::input_encoding::encode_inputs(&mut gb, &mut ev, 0, 0, &mut rng);
         (gb, ev)
-    }
-
-    fn run_full_garble_eval(gb: &mut AuthTensorGen, ev: &mut AuthTensorEval) {
-        let (cl1, ct1) = gb.garble_first_half();
-        ev.evaluate_first_half(cl1, ct1);
-        let (cl2, ct2) = gb.garble_second_half();
-        ev.evaluate_second_half(cl2, ct2);
-        gb.garble_final();
-        ev.evaluate_final();
     }
 
     #[test]
