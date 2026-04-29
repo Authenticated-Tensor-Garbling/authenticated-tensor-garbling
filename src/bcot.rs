@@ -202,14 +202,14 @@ mod tests {
         let shares_a = IdealBCot::output_to_auth_bit_shares_a_holds_key(&out_a);
         for (i, share) in shares_a.iter().enumerate() {
             share.verify(&bcot.delta_gb);
-            assert_eq!(share.value, choices_a[i], "Test 4a: bit mismatch at position {}", i);
+            assert_eq!(share.bit(), choices_a[i], "Test 4a: bit mismatch at position {}", i);
         }
 
         // B holds key, A holds mac = key.auth(bit, delta_ev) — verify against delta_ev
         let shares_b = IdealBCot::output_to_auth_bit_shares_a_holds_key(&out_b);
         for (i, share) in shares_b.iter().enumerate() {
             share.verify(&bcot.delta_ev);
-            assert_eq!(share.value, choices_b[i], "Test 4b: bit mismatch at position {}", i);
+            assert_eq!(share.bit(), choices_b[i], "Test 4b: bit mismatch at position {}", i);
         }
     }
 

@@ -41,19 +41,49 @@ impl InputSharing {
 /// checks this equation.
 #[derive(Debug, Clone, Default, Copy)]
 pub struct AuthBitShare {
-    /// Key
-    pub key: Key,
-    /// MAC
-    pub mac: Mac,
-    /// Value
-    pub value: bool,
+    /// bCOT sender key for this position. `Key::new` enforces `lsb() == 0`.
+    /// Crate-internal callers (e.g. `verify_cross_party`, `AuthBit::verify`)
+    /// reach this directly to assemble swapped shares for cross-party MAC
+    /// checks; external callers go through `key()`.
+    pub(crate) key: Key,
+    /// bCOT receiver MAC authenticating `value` under the **verifying party's**
+    /// delta. Holds the IT-MAC invariant `mac == key.auth(value, verifier_delta)`
+    /// only on standalone shares — cross-party reconstructions intentionally
+    /// pair `key` and `mac` from different bCOT directions.
+    pub(crate) mac: Mac,
+    /// Committed bit this share claims. Read via `bit()`; mutate via
+    /// `with_bit(bit, delta)` (recomputes the MAC under the same `key`).
+    pub(crate) value: bool,
 }
 
 impl AuthBitShare {
-    /// Retrieves the embedded bit from the LSB of `mac`.
+    /// Returns the committed bit `value`.
     #[inline]
     pub fn bit(&self) -> bool {
         self.value
+    }
+
+    /// Returns a reference to the bCOT sender key (`lsb() == 0` invariant).
+    #[inline]
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    /// Returns a reference to the bCOT receiver MAC.
+    #[inline]
+    pub fn mac(&self) -> &Mac {
+        &self.mac
+    }
+
+    /// Returns a new share with `bit` as its committed value, recomputing the
+    /// MAC under the same `key` so the IT-MAC invariant
+    /// `new.mac == new.key.auth(bit, delta)` holds. `delta` must be the
+    /// **verifying party's** global correlation key — the same delta used
+    /// when `self` was originally built.
+    #[inline]
+    pub fn with_bit(self, bit: bool, delta: &Delta) -> Self {
+        let mac = self.key.auth(bit, delta);
+        Self { key: self.key, mac, value: bit }
     }
 
     /// Checks that `share.mac == share.key.auth(share.bit, delta)`.
