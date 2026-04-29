@@ -325,11 +325,11 @@ where T: BitXorAssign + Copy {
 impl<T: MatrixElement> Display for TypedMatrix<T>
 where T: Display {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for j in 0..self.cols {
-            let base = j * self.rows;
-            for i in 0..self.rows {
-                let idx = base + i;
-                write!(f, "{} ", self.elements[idx])?;
+        // Storage is column-major (`elements[j * rows + i] == matrix[i, j]`),
+        // but the visual format is row-major: each printed line is one row.
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                write!(f, "{} ", self.elements[j * self.rows + i])?;
             }
             writeln!(f)?;
         }
@@ -672,6 +672,23 @@ mod tests {
         assert!(display_str.contains("ef"));
         assert!(display_str.contains("21"));
         assert!(display_str.lines().count() == 2);
+    }
+
+    #[test]
+    fn test_display_row_oriented_not_transposed() {
+        // Regression: pre-fix, Display iterated cols outer / rows inner, so
+        // each printed line was a *column* of the matrix. Distinct last-byte
+        // keys at each cell of a 2x3 matrix detect transposition cleanly.
+        let mut matrix = KeyMatrix::new(2, 3);
+        let key = |last: u8| Key::from(Block::new([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,last]));
+        matrix[(0, 0)] = key(0x10); matrix[(0, 1)] = key(0x20); matrix[(0, 2)] = key(0x30);
+        matrix[(1, 0)] = key(0x11); matrix[(1, 1)] = key(0x21); matrix[(1, 2)] = key(0x31);
+
+        let s = format!("{}", matrix);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2, "row-oriented Display should print one line per row");
+        assert_eq!(lines[0], "10 20 30 ");
+        assert_eq!(lines[1], "11 21 31 ");
     }
 
     #[test]
