@@ -630,7 +630,7 @@ mod tests {
     ///
     /// With both backends' internal input = (0, 0), masked_x = alpha and
     /// masked_y = beta — i.e. v_alpha = v_beta = 0.
-    fn run_full_protocol_1(backend: &dyn TensorPreprocessing) {
+    fn run_full_protocol_1(backend: &dyn TensorPreprocessing, x: usize, y: usize) {
         let n = 4;
         let m = 3;
 
@@ -638,11 +638,8 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // Phase 1.2 / BUG-02: install garble-time input labels with cleartext
-        // input = (0, 0). The doc above explicitly notes "v_alpha = v_beta = 0
-        // because masked_x = alpha and masked_y = beta with x = y = 0".
         let mut prep_rng = rand::rng();
-        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
+        encode_inputs(&mut gb, &mut ev, x, y, &mut prep_rng);
 
         // Standard Protocol 1 garble + evaluate sequence.
         let (cl1, ct1) = gb.garble_first_half();
@@ -651,6 +648,14 @@ mod tests {
         ev.evaluate_second_half(cl2, ct2);
         gb.garble_final();
         ev.evaluate_final();
+
+        // Verify cleartext tensor-product output: post-garble_final
+        // first_half_out per (i, j) must reconstruct to `(x_i AND y_j) · δ_a`.
+        // This is the end-to-end correctness check on the gate output.
+        assert!(
+            verify_tensor_output(x, y, n, m, &gb.first_half_out, &ev.first_half_out, &gb.delta_a),
+            "P1 garble_final must produce shares that reconstruct to x⊗y · δ_a"
+        );
 
         // Reconstruct masked input values (paper L_a, L_b) from joint state. In the
         // single-gate test the gate inputs are circuit inputs, so L_a = l_a and
@@ -709,12 +714,33 @@ mod tests {
 
     #[test]
     fn test_auth_tensor_product_full_protocol_1_ideal() {
-        run_full_protocol_1(&IdealPreprocessingBackend);
+        run_full_protocol_1(&IdealPreprocessingBackend, 0, 0);
     }
 
     #[test]
     fn test_auth_tensor_product_full_protocol_1_uncompressed() {
-        run_full_protocol_1(&UncompressedPreprocessingBackend);
+        run_full_protocol_1(&UncompressedPreprocessingBackend, 0, 0);
+    }
+
+    /// End-to-end Protocol 1 with NON-ZERO inputs:
+    ///   - encode_inputs(gb, ev, x=0b1011, y=0b101)
+    ///   - full garble + evaluate sequence
+    ///   - verify_tensor_output asserts post-garble_final shares reconstruct to (x⊗y)·δ_a
+    ///   - paper-faithful CheckZero on input wires under D_ev
+    ///
+    /// Closes the coverage gap surfaced by the 1.2(h) audit: prior
+    /// `run_full_protocol_*` only exercised x=y=0 (where masked_x = α, masked_y = β
+    /// trivially). This stresses the input-encoding path, the garble decomposition,
+    /// and CheckZero with non-trivial values where v_α, v_β, v_γ are not identically
+    /// zero. Backend-parameterized so both Ideal and Uncompressed are exercised.
+    #[test]
+    fn test_full_protocol_1_nonzero_inputs_ideal() {
+        run_full_protocol_1(&IdealPreprocessingBackend, 0b1011, 0b101);
+    }
+
+    #[test]
+    fn test_full_protocol_1_nonzero_inputs_uncompressed() {
+        run_full_protocol_1(&UncompressedPreprocessingBackend, 0b1011, 0b101);
     }
 
     /// Body of the Protocol 2 honest-run test, parameterized by preprocessing
@@ -729,7 +755,7 @@ mod tests {
     /// `garble_final_p2`'s return type — `(Vec<Block>, Vec<Block>)` with no
     /// `bool` / `Vec<bool>` — statically enforces that the garbler never sends
     /// a masked wire value.
-    fn run_full_protocol_2(backend: &dyn TensorPreprocessing) {
+    fn run_full_protocol_2(backend: &dyn TensorPreprocessing, x: usize, y: usize) {
         let n = 4;
         let m = 3;
 
@@ -737,9 +763,8 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
         let mut prep_rng = rand::rng();
-        encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
+        encode_inputs(&mut gb, &mut ev, x, y, &mut prep_rng);
 
         // Protocol 2 garble + evaluate sequence (wide ciphertexts).
         let (cl1, ct1) = gb.garble_first_half_p2();
@@ -753,33 +778,14 @@ mod tests {
         assert_eq!(gb_d_ev_out.len(), n * m);
         assert_eq!(ev_d_ev_out.len(), n * m);
 
-        // ===========================================================================
-        // PART A: D_gb correctness — same property the existing P1 test verifies but
-        // applied to the `_p2` path. With `IdealPreprocessingBackend` the trusted
-        // dealer is invoked with input=(0, 0), so masked_x = alpha and masked_y =
-        // beta — therefore v_alpha = v_beta = 0 and v_gamma = 0. For honest
-        // parties the combined D_gb output share for each (i, j) is the zero
-        // block (key XOR mac == 0 means bit value 0).
-        //
-        // `evaluate_final_p2` writes the D_gb half into `ev.first_half_out`
-        // (mirroring `evaluate_final` per the post-Plan-03 doc comment) and
-        // `gb_d_gb_out[j * n + i]` equals `gb.first_half_out[(i, j)]`. So the
-        // combined share is `gb_d_gb_out[idx] XOR ev.first_half_out[(i, j)]`.
-        // Same correctness check approach as P1 (lines 487-503) with
-        // expected_val=false everywhere.
-        // ===========================================================================
-        for j in 0..m {
-            for i in 0..n {
-                let idx = j * n + i;
-                let combined = gb_d_gb_out[idx] ^ ev.first_half_out[(i, j)];
-                assert_eq!(
-                    combined,
-                    Block::default(),
-                    "P2-05: at ({},{}) expected v_gamma=0 (input=0 ideal preprocessing), got non-zero combined D_gb share",
-                    i, j
-                );
-            }
-        }
+        // PART A: D_gb correctness via verify_tensor_output. Post-garble_final_p2,
+        // gb_d_gb_out[j*n+i] equals gb.first_half_out[(i, j)] (column-major layout)
+        // and ev.first_half_out[(i, j)] holds eval's matching share. Combined under
+        // δ_a, they reconstruct to (x ⊗ y) · δ_a per position.
+        assert!(
+            verify_tensor_output(x, y, n, m, &gb.first_half_out, &ev.first_half_out, &gb.delta_a),
+            "P2 garble_final_p2 must produce shares that reconstruct to x⊗y · δ_a"
+        );
 
         // ===========================================================================
         // PART B: P2 consistency check — c_α / c_β assembled under delta_b
@@ -840,12 +846,26 @@ mod tests {
 
     #[test]
     fn test_auth_tensor_product_full_protocol_2_ideal() {
-        run_full_protocol_2(&IdealPreprocessingBackend);
+        run_full_protocol_2(&IdealPreprocessingBackend, 0, 0);
     }
 
     #[test]
     fn test_auth_tensor_product_full_protocol_2_uncompressed() {
-        run_full_protocol_2(&UncompressedPreprocessingBackend);
+        run_full_protocol_2(&UncompressedPreprocessingBackend, 0, 0);
+    }
+
+    /// End-to-end Protocol 2 with NON-ZERO inputs. Mirrors
+    /// `test_full_protocol_1_nonzero_inputs_*` but exercises the wide-ciphertext
+    /// `_p2` garble path. Closes the same coverage gap surfaced by the 1.2(h)
+    /// audit.
+    #[test]
+    fn test_full_protocol_2_nonzero_inputs_ideal() {
+        run_full_protocol_2(&IdealPreprocessingBackend, 0b1011, 0b101);
+    }
+
+    #[test]
+    fn test_full_protocol_2_nonzero_inputs_uncompressed() {
+        run_full_protocol_2(&UncompressedPreprocessingBackend, 0b1011, 0b101);
     }
 
     #[test]
