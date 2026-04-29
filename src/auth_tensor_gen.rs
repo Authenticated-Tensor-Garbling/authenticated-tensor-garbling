@@ -406,8 +406,12 @@ impl AuthTensorGen {
     /// time.
     ///
     /// D_ev encoding rule (garbler side): the garbler does NOT hold `delta_b`,
-    /// so its public-bit encoding of `correlated_eval[idx]` is simply
-    /// `mac.as_block()` — no `delta_b` XOR. See
+    /// so its share of `[(λ_a ⊗ λ_b) D_ev]^gb` is the Block-form value
+    /// `correlated_eval[idx]` (paper-side `mac` of the auth-bit, lowered to a
+    /// raw `Block` by `derive_sharing_blocks` during `run_preprocessing`).
+    /// Folded into `first_half_out_ev` directly with no `delta_b` XOR. The
+    /// eval-side mirror in `evaluate_final_p2` adds its own `delta_b`-bearing
+    /// term to reconstruct the IT-MAC pair under `delta_b`. See
     /// `get_first_inputs_p2_y_d_ev` doc for derivation.
     pub fn garble_final_p2(&mut self) -> (Vec<Block>, Vec<Block>) {
         assert!(
@@ -429,10 +433,12 @@ impl AuthTensorGen {
         }
 
         // D_ev path: mirror of D_gb but using `correlated_eval`. The
-        // garbler emits `mac.as_block()` directly (no `delta_b` XOR — gb does
-        // not hold `delta_b`). The eval-side mirror in `evaluate_final_p2`
-        // applies its own `delta_b` to the eval-side `key` view to reconstruct
-        // the IT-MAC pair under `delta_b`.
+        // garbler folds `correlated_eval[idx]` (a Block already lowered from the
+        // paper-side `mac` by `derive_sharing_blocks` at preprocessing) directly
+        // into `first_half_out_ev` — no `delta_b` XOR, since gb does not hold
+        // `delta_b`. The eval-side mirror in `evaluate_final_p2` applies its
+        // own `delta_b`-bearing term to reconstruct the IT-MAC pair under
+        // `delta_b`.
         for i in 0..self.n {
             for j in 0..self.m {
                 let correlated_share_ev = self.correlated_eval[j * self.n + i];

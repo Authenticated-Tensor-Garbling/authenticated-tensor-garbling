@@ -3,6 +3,15 @@
 //! This module holds the output structs (`TensorFpreGen`, `TensorFpreEval`) that the
 //! real two-party preprocessing protocol produces, together with the `run_preprocessing`
 //! entry point. The ideal trusted-dealer functionality stays in `auth_tensor_fpre`.
+//!
+//! AUDIT-2.4 C2 — F_cpre / F_pre coupling note: the paper distinguishes
+//! `F_pre` (uncompressed preprocessing, paper Construction 4 / `appendix_krrw_pre.tex`)
+//! from `F_cpre` (compressed preprocessing, paper Section 4). The current
+//! implementation realizes only the uncompressed `F_pre` flavour; the same
+//! `TensorFpreGen` / `TensorFpreEval` structs are consumed by both Protocol 1
+//! and Protocol 2 callers without a type-system marker for which flavour is
+//! intended. When `F_cpre` lands (deferred to v3 — see master plan / PRE-05),
+//! introduce marker types to prevent silent cross-flavour mixing at call sites.
 
 use crate::{block::Block, delta::Delta, sharing::{AuthBitShare, build_share}};
 use crate::bcot::IdealBCot;

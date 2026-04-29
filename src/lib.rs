@@ -151,6 +151,14 @@ pub fn assemble_e_input_wire_blocks_p1(
 /// variable names (`c_α/c_β` in P2 vs `e_a/e_b` in P1) to match its narrative;
 /// this thin alias preserves the paper-mapped name at P2 call sites without
 /// duplicating logic.
+///
+/// AUDIT-2.3 C2 — alias coupling note: the P1/P2 algebraic equivalence holds
+/// only because both protocols assemble the same three-term XOR over the same
+/// `[v D_ev]` / `[l D_ev]` / `L · D_ev` shares. If P2's input-encoding spec
+/// ever diverges from P1's (e.g., different L-vector semantics, additional
+/// per-wire correction term), this alias must be split — silent breakage is
+/// the failure mode since the static signatures stay identical. Keep this
+/// note adjacent to any future P2 input-encoding edit.
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_c_alpha_beta_blocks_p2(
     n: usize,
@@ -678,6 +686,20 @@ mod tests {
         assert!(
             verify_tensor_output(x, y, n, m, &gb.first_half_out, &ev.first_half_out, &gb.delta_a),
             "P2 garble_final_p2 must produce shares that reconstruct to x⊗y · δ_a"
+        );
+
+        // AUDIT-2.4 D2: symmetric D_ev correctness. The wide-leaf `_ev`
+        // accumulators (`first_half_out_ev` / `second_half_out_ev`) are folded
+        // into `first_half_out_ev` by `garble_final_p2` (paired-with-`evaluate_final_p2`
+        // on eval's side). Combined under δ_b, they must reconstruct to
+        // (x ⊗ y) · δ_b — the headline P2 invariant on the D_ev path that
+        // distinguishes Protocol 2 from Protocol 1. Closes the SCAFFOLDING-
+        // flagged D_ev output coverage gap. (`gb` has no `delta_b` field;
+        // `ev.delta_b` is the simulation reach into eval's state — same
+        // pattern used at lines 695-708 below for `c_α` / `c_β` assembly.)
+        assert!(
+            verify_tensor_output(x, y, n, m, &gb.first_half_out_ev, &ev.first_half_out_ev, &ev.delta_b),
+            "P2 garble_final_p2 must produce D_ev shares that reconstruct to x⊗y · δ_b"
         );
 
         // ===========================================================================

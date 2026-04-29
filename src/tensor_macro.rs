@@ -96,7 +96,12 @@ pub(crate) struct TensorMacroCiphertexts {
 /// Preconditions (enforced via `assert_eq!`):
 /// - `a_keys.len() == n`
 /// - `t_gen.rows() == m` and `t_gen.cols() == 1`
-/// - Every `a_keys[i].lsb() == 0` (enforced by `Key::new()` — re-asserted here as defence in depth)
+///
+/// Caller responsibility (NOT re-asserted in this function — see AUDIT-2.1 C1):
+/// - Every `a_keys[i].lsb() == 0`. Established by `Key::new()`'s LSB-clear
+///   invariant; relied on by the level-0 init's "0-key" / "1-key" branch
+///   placement. A future caller passing raw `Block`s in place of `Key`s
+///   would silently flip the level-0 layout — pass `Key`s, not `Block`s.
 ///
 /// Panics if preconditions are violated.
 pub(crate) fn tensor_garbler(
