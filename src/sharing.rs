@@ -127,6 +127,40 @@ pub fn build_share<R: Rng + CryptoRng>(rng: &mut R, bit: bool, delta: &Delta) ->
     AuthBitShare { key, mac, value: bit }
 }
 
+/// Cross-party `AuthBitShare` MAC verification — the in-process substitute for the
+/// paper's "publicly reveal with appropriate MACs".
+///
+/// `gen_share.key` is A's sender key; `gen_share.mac` is A's sender MAC (committed
+/// under δ_b). `eval_share.key` is B's sender key; `eval_share.mac` is B's sender
+/// MAC (committed under δ_a). The two `.verify` calls below reassemble properly
+/// aligned IT-MAC pairs so that each side checks `mac == key XOR bit*delta` under
+/// the correct verifier's delta. Panics with "MAC mismatch in share" on tampered
+/// shares.
+///
+/// NOTE: do NOT call `share.verify(&delta)` directly on a raw cross-party
+/// `AuthBitShare` — it will panic even on correctly-formed shares because the key
+/// and MAC fields come from different bCOT directions and commit under different
+/// deltas.
+pub(crate) fn verify_cross_party(
+    gen_share: &AuthBitShare,
+    eval_share: &AuthBitShare,
+    delta_a: &Delta,
+    delta_b: &Delta,
+) {
+    AuthBitShare {
+        key: eval_share.key,
+        mac: gen_share.mac,
+        value: gen_share.value,
+    }
+    .verify(delta_b);
+    AuthBitShare {
+        key: gen_share.key,
+        mac: eval_share.mac,
+        value: eval_share.value,
+    }
+    .verify(delta_a);
+}
+
 /// Both parties' views of an authenticated bit, paired together.
 ///
 /// `AuthBit` holds an `AuthBitShare` for each party (gen and eval) and is

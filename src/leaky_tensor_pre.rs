@@ -327,34 +327,7 @@ impl<'a> LeakyTensorPre<'a> {
 mod tests {
     use super::*;
     use crate::bcot::IdealBCot;
-    use crate::delta::Delta;
-
-    /// Cross-party MAC verification helper — PRESERVE VERBATIM.
-    ///
-    /// Direct `share.verify(delta)` panics on cross-party shares because
-    /// `gen.key` and `gen.mac` come from different bCOT directions. This
-    /// helper reconstructs the properly-aligned pair and verifies under
-    /// the correct delta.
-    #[allow(dead_code)]
-    pub(crate) fn verify_cross_party(
-        pa_share: &AuthBitShare,
-        pb_share: &AuthBitShare,
-        delta_a: &Delta,
-        delta_b: &Delta,
-    ) {
-        AuthBitShare {
-            key: pb_share.key,
-            mac: pa_share.mac,
-            value: pa_share.value,
-        }
-        .verify(delta_b);
-        AuthBitShare {
-            key: pa_share.key,
-            mac: pb_share.mac,
-            value: pb_share.value,
-        }
-        .verify(delta_a);
-    }
+    use crate::sharing::verify_cross_party;
 
     #[allow(dead_code)]
     fn make_bcot() -> IdealBCot {

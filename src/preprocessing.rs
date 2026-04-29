@@ -358,7 +358,7 @@ pub(crate) fn derive_sharing_blocks(
 mod tests {
     use crate::auth_tensor_gen::AuthTensorGen;
     use crate::auth_tensor_eval::AuthTensorEval;
-    use crate::auth_tensor_pre::verify_cross_party;
+    use crate::sharing::verify_cross_party;
     use crate::block::Block;
     use super::{TensorPreprocessing, UncompressedPreprocessingBackend, IdealPreprocessingBackend};
 
