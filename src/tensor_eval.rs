@@ -46,7 +46,7 @@ impl TensorProductEval {
         &mut self,
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
         first_half: bool,
     ) {
@@ -123,7 +123,7 @@ impl TensorProductEval {
 
     pub fn evaluate_first_half_outer_product(
         &mut self,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
     ) {
         let (eval_x, eval_y) = self.get_first_inputs();
@@ -132,7 +132,7 @@ impl TensorProductEval {
 
     pub fn evaluate_second_half_outer_product(
         &mut self,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
     ) {
         let (eval_x, eval_y) = self.get_second_inputs();

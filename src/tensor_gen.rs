@@ -54,9 +54,9 @@ impl TensorProductGen {
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
         first_half: bool,
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) { // awful return type
-    
-        let mut chunk_levels: Vec<Vec<(Block, Block)>> = Vec::new();
+    ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
+
+        let mut chunk_levels: Vec<Vec<Block>> = Vec::new();
         let mut chunk_cts: Vec<Vec<Block>> = Vec::new();
     
         for s in 0..((x.rows() + self.chunking_factor-1)/self.chunking_factor) {
@@ -116,7 +116,7 @@ impl TensorProductGen {
 
     pub fn garble_first_half_outer_product(
         &mut self
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
+    ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
 
         let (gen_x, gen_y) = self.get_first_inputs();
         let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&gen_x.as_view(), &gen_y.as_view(), true);
@@ -126,7 +126,7 @@ impl TensorProductGen {
 
     pub fn garble_second_half_outer_product(
         &mut self
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
+    ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
 
         let (gen_x, gen_y) = self.get_second_inputs();
         let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&gen_x.as_view(), &gen_y.as_view(), false);

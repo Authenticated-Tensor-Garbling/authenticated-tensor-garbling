@@ -113,7 +113,7 @@ impl AuthTensorEval {
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
         choice_bits: &[bool],
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
         first_half: bool,
     ) {
@@ -172,9 +172,12 @@ impl AuthTensorEval {
     }
 
     /// Phase 9 P2-03. Wide-leaf variant of `eval_chunked_half_outer_product`.
-    /// Consumes wide ciphertexts `Vec<Vec<(Block, Block)>>` and writes BOTH the
-    /// D_gb output (`first_half_out` / `second_half_out`) AND the D_ev output
-    /// (`first_half_out_ev` / `second_half_out_ev`) in a single pass.
+    /// Consumes paper-faithful single-Block-per-level tree cts
+    /// `chunk_levels: Vec<Vec<Block>>` (Construction 4) plus wide leaf cts
+    /// `chunk_cts: Vec<Vec<(Block, Block)>>` (κ-half AND ρ-half), and writes
+    /// BOTH the D_gb output (`first_half_out` / `second_half_out`) AND the
+    /// D_ev output (`first_half_out_ev` / `second_half_out_ev`) in a single
+    /// pass.
     ///
     /// Choice bits MUST be supplied explicitly via `choice_bits` (BUG-02 /
     /// Phase 1.2). `choice_bits.len()` must equal `x.rows()`.
@@ -184,7 +187,7 @@ impl AuthTensorEval {
         y_d_gb: &MatrixViewRef<Block>,
         y_d_ev: &MatrixViewRef<Block>,
         choice_bits: &[bool],
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<(Block, Block)>>,
         first_half: bool,
     ) {
@@ -344,14 +347,14 @@ impl AuthTensorEval {
         y_ev
     }
 
-    pub fn evaluate_first_half(&mut self, chunk_levels: Vec<Vec<(Block, Block)>>, chunk_cts: Vec<Vec<Block>>) {
+    pub fn evaluate_first_half(&mut self, chunk_levels: Vec<Vec<Block>>, chunk_cts: Vec<Vec<Block>>) {
         let (x, y) = self.get_first_inputs();
         // Choice bits cloned out so we don't hold &self while &mut self is in use.
         let choice_bits = self.masked_x_bits.clone();
         self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), &choice_bits, chunk_levels, chunk_cts, true);
     }
 
-    pub fn evaluate_second_half(&mut self, chunk_levels: Vec<Vec<(Block, Block)>>, chunk_cts: Vec<Vec<Block>>) {
+    pub fn evaluate_second_half(&mut self, chunk_levels: Vec<Vec<Block>>, chunk_cts: Vec<Vec<Block>>) {
         let (x, y) = self.get_second_inputs();
         let choice_bits = self.masked_y_bits.clone();
         self.eval_chunked_half_outer_product(&x.as_view(), &y.as_view(), &choice_bits, chunk_levels, chunk_cts, false);
@@ -385,7 +388,7 @@ impl AuthTensorEval {
     /// (D_gb) and `first_half_out_ev` (D_ev) in a single pass.
     pub fn evaluate_first_half_p2(
         &mut self,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<(Block, Block)>>,
     ) {
         let (x, y_d_gb) = self.get_first_inputs();
@@ -406,7 +409,7 @@ impl AuthTensorEval {
     /// half-outer-product on the eval side.
     pub fn evaluate_second_half_p2(
         &mut self,
-        chunk_levels: Vec<Vec<(Block, Block)>>,
+        chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<(Block, Block)>>,
     ) {
         let (x, y_d_gb) = self.get_second_inputs();

@@ -1,16 +1,17 @@
-//! Generalized Tensor Macro (Paper Appendix F, Construction 1).
+//! Generalized Tensor Macro (paper Construction 4 / `5_online.tex:43-103`).
 //!
 //! This module provides the reusable GGM-tree-based primitive used by
-//! Pi_LeakyTensor (Construction 2, Phase 4). Two functions:
+//! Pi_LeakyTensor (Construction 2). Two functions:
 //!
-//! - [`tensor_garbler`] — garbler side: builds a 2^n-leaf GGM tree, emits
-//!   level ciphertexts `G_{i,0}/G_{i,1}` and leaf ciphertexts `G_k`,
+//! - [`tensor_garbler`] — garbler side: builds a 2^n-leaf GGM tree under the
+//!   paper's improved one-hot construction (one ciphertext per level, citing
+//!   [Heath24]), emits level ciphertexts `G_i` and leaf ciphertexts `G_k`,
 //!   returns `Z_garbler` and the ciphertext bundle `G`.
-//! - [`tensor_evaluator`] — evaluator side: reconstructs the untraversed
-//!   subtree from the evaluator's authenticated MAC values, recovers the
-//!   missing leaf column, and returns `Z_evaluator`.
+//! - [`tensor_evaluator`] — evaluator side: reconstructs the level tree using
+//!   the level ciphertexts, recovers the missing leaf column, and returns
+//!   `Z_evaluator`.
 //!
-//! Correctness invariant (paper Theorem 1):
+//! Correctness invariant (paper Lemma `lem:tensor-macro-correctness`):
 //!
 //! ```text
 //! Z_garbler XOR Z_evaluator == a ⊗ T
@@ -42,18 +43,19 @@ use crate::{
 
 /// Ciphertexts emitted by [`tensor_garbler`] and consumed by [`tensor_evaluator`].
 ///
-/// Maps directly to paper Construction 1 (Appendix F):
-/// - `level_cts[i]` is `(G_{i,0}, G_{i,1})` for tree level `i ∈ [n-1]`
-/// - `leaf_cts[k]` is `G_k` for output column `k ∈ [m]`
+/// Maps to paper Construction 4 / `5_online.tex:43-72` under the improved
+/// one-hot construction:
+/// - `level_cts[i] = G_i` for tree level `i ∈ [1, n-1]` — single Block per
+///   level. Defined as `G_i := (⊕_{j ∈ [2^i]} R_{i,j}) ⊕ A_i`.
+/// - `leaf_cts[k] = G_k` for output column `k ∈ [m]` — leaf-expansion
+///   ciphertext `G_k := (⊕_ℓ X_{ℓ,k}) ⊕ B_k`.
 ///
-/// `G_{i,0}` corresponds to even-indexed sibling XORs
-/// (`⊕_j S_{i,2j}`) blinded by `H(A_i ⊕ Δ, ν_{i,0})`, and `G_{i,1}`
-/// corresponds to odd-indexed siblings (`⊕_j S_{i,2j+1}`) blinded by
-/// `H(A_i, ν_{i,1})`. The `ν_{i,b}` nonces are instantiated via
-/// `FixedKeyAes::tccr` tweaks 0 and 1 (see `src/aes.rs`).
+/// Communication cost realized: `(n-1) + m` ciphertexts of length κ — paper's
+/// claim at `5_online.tex:28`. (HK21's two-ciphertext-per-level construction
+/// emitted `2(n-1) + m`; the prior code matched HK21, see AUDIT-2.1 B1.)
 pub(crate) struct TensorMacroCiphertexts {
-    /// Length `n - 1`. Each entry is `(G_{i,0}, G_{i,1})`.
-    pub level_cts: Vec<(Block, Block)>,
+    /// Length `n - 1`. `level_cts[i-1] = G_i`.
+    pub level_cts: Vec<Block>,
     /// Length `m`. `leaf_cts[k] = G_k`.
     pub leaf_cts: Vec<Block>,
 }
@@ -93,10 +95,8 @@ pub(crate) fn tensor_garbler(
 
     let cipher: &FixedKeyAes = &FIXED_KEY_AES;
 
-    // [1-2] Build GGM tree; collect (leaf seeds, per-level (evens, odds)).
-    //       `level_cts` is structurally (G_{i,0}, G_{i,1}) already —
-    //       see src/tensor_ops.rs for the G encoding (evens/odds XORed
-    //       with tccr of A_i / A_i XOR Δ).
+    // [1-3] Build GGM tree under paper's improved one-hot construction;
+    //       collect leaf seeds + one ciphertext per level (G_i = ⊕_j R_{i,j} ⊕ A_i).
     let a_blocks: &[Block] = Key::as_blocks(a_keys);
     let (leaf_seeds, level_cts) =
         gen_populate_seeds_mem_optimized(a_blocks, cipher, delta);
@@ -243,7 +243,17 @@ mod tests {
         assert_eq!(z_gen.cols(), m, "z_gen cols mismatch");
         assert_eq!(z_eval.rows(), n, "z_eval rows mismatch");
         assert_eq!(z_eval.cols(), m, "z_eval cols mismatch");
+        // Paper's improved one-hot: ONE Block per level (n-1 total). Counts
+        // half of HK21's two-ct scheme that the prior code emitted (AUDIT-2.1 D2).
         assert_eq!(g.level_cts.len(), n.saturating_sub(1), "G level_cts length");
+        // Element type is `Block` (not `(Block, Block)`); verified at the type level
+        // by `Vec<Block>` typing of `TensorMacroCiphertexts.level_cts`. A bytewise
+        // size sanity check guards against accidental future widening of the type.
+        let bytes_per_level: usize = std::mem::size_of::<Block>();
+        assert_eq!(
+            bytes_per_level, 16,
+            "level_cts entry must be a single 128-bit Block (paper Construction 4)"
+        );
         assert_eq!(g.leaf_cts.len(), m, "G leaf_cts length");
 
         // ----- Compute expected a ⊗ T -----

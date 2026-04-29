@@ -105,9 +105,9 @@ impl AuthTensorGen {
         x: &MatrixViewRef<Block>,
         y: &MatrixViewRef<Block>,
         first_half: bool,
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
-    
-        let mut chunk_levels: Vec<Vec<(Block, Block)>> = Vec::new();
+    ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
+
+        let mut chunk_levels: Vec<Vec<Block>> = Vec::new();
         let mut chunk_cts: Vec<Vec<Block>> = Vec::new();
     
         for s in 0..((x.rows() + self.chunking_factor-1)/self.chunking_factor) {
@@ -144,15 +144,22 @@ impl AuthTensorGen {
     /// Wide-leaf variant of `gen_chunked_half_outer_product`. Phase 9 P2-02.
     /// Writes BOTH the D_gb output (`first_half_out` or `second_half_out`) AND the
     /// D_ev output (`first_half_out_ev` or `second_half_out_ev`) in a single pass
-    /// over the GGM tree. Returns wide chunk_cts of type `Vec<Vec<(Block, Block)>>`.
+    /// over the GGM tree.
+    ///
+    /// Returns `(chunk_levels, chunk_cts)` where:
+    /// - `chunk_levels: Vec<Vec<Block>>` — paper-faithful single-Block-per-level
+    ///   tree ciphertexts (Construction 4 / `5_online.tex:43-72`); leaf-level only.
+    /// - `chunk_cts: Vec<Vec<(Block, Block)>>` — wide leaf cts at `(κ, κ)` width.
+    ///   Paper-faithful `(κ, ρ)` width via `RhoBlock` is deferred (AUDIT-2.4 D1
+    ///   second half); current shape preserves the κ-bit ρ-half.
     pub(crate) fn gen_chunked_half_outer_product_wide(
         &mut self,
         x: &MatrixViewRef<Block>,
         y_d_gb: &MatrixViewRef<Block>,
         y_d_ev: &MatrixViewRef<Block>,
         first_half: bool,
-    ) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<(Block, Block)>>) {
-        let mut chunk_levels: Vec<Vec<(Block, Block)>> = Vec::new();
+    ) -> (Vec<Vec<Block>>, Vec<Vec<(Block, Block)>>) {
+        let mut chunk_levels: Vec<Vec<Block>> = Vec::new();
         let mut chunk_cts: Vec<Vec<(Block, Block)>> = Vec::new();
 
         for s in 0..((x.rows() + self.chunking_factor - 1) / self.chunking_factor) {
@@ -271,14 +278,14 @@ impl AuthTensorGen {
         (x, y)
     }
 
-    pub fn garble_first_half(&mut self) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
+    pub fn garble_first_half(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
         let (x, y) = self.get_first_inputs();
         let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&x.as_view(), &y.as_view(), true);
 
         (chunk_levels, chunk_cts)
     }
 
-    pub fn garble_second_half(&mut self) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<Block>>) {
+    pub fn garble_second_half(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
         let (x, y) = self.get_second_inputs();
         let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&x.as_view(), &y.as_view(), false);
 
@@ -338,11 +345,16 @@ impl AuthTensorGen {
     }
 
     /// Phase 9 P2-02. Drives the wide GGM tree expansion for the first
-    /// half-outer-product. Returns `(chunk_levels, chunk_cts_wide)` where
-    /// `chunk_cts_wide: Vec<Vec<(Block, Block)>>` carries the kappa-half AND
-    /// rho-half ciphertexts. Writes BOTH `first_half_out` (D_gb) and
-    /// `first_half_out_ev` (D_ev) in a single pass.
-    pub fn garble_first_half_p2(&mut self) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<(Block, Block)>>) {
+    /// half-outer-product. Returns `(chunk_levels, chunk_cts_wide)` where:
+    /// - `chunk_levels: Vec<Vec<Block>>` is the paper-faithful single-Block-
+    ///   per-level tree-cts shape (Construction 4).
+    /// - `chunk_cts_wide: Vec<Vec<(Block, Block)>>` carries the kappa-half AND
+    ///   rho-half ciphertexts (paper-faithful (κ, ρ) width via `RhoBlock` is
+    ///   deferred — see AUDIT-2.4 D1 second half).
+    ///
+    /// Writes BOTH `first_half_out` (D_gb) and `first_half_out_ev` (D_ev) in
+    /// a single pass.
+    pub fn garble_first_half_p2(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<(Block, Block)>>) {
         let (x, y_d_gb) = self.get_first_inputs();
         let y_d_ev = self.get_first_inputs_p2_y_d_ev();
         self.gen_chunked_half_outer_product_wide(
@@ -356,7 +368,7 @@ impl AuthTensorGen {
     /// Phase 9 P2-02. Drives the wide GGM tree expansion for the second
     /// half-outer-product. Mirrors `garble_first_half_p2` with second-half
     /// inputs.
-    pub fn garble_second_half_p2(&mut self) -> (Vec<Vec<(Block, Block)>>, Vec<Vec<(Block, Block)>>) {
+    pub fn garble_second_half_p2(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<(Block, Block)>>) {
         let (x, y_d_gb) = self.get_second_inputs();
         let y_d_ev = self.get_second_inputs_p2_y_d_ev();
         self.gen_chunked_half_outer_product_wide(
@@ -531,5 +543,42 @@ mod tests {
             }
         }
         assert!(!chunk_cts.is_empty(), "chunk_cts must be non-empty");
+    }
+
+    /// AUDIT-2.1 D2 / AUDIT-2.3 D3: chunked wrappers must propagate the paper-
+    /// faithful single-Block-per-level shape (Construction 4 / 5_online.tex:43-72).
+    /// HK21's two-ct-per-level shape would surface as `Vec<Vec<(Block, Block)>>`
+    /// here; the static type bound + element count check catches both regressions.
+    #[test]
+    fn test_chunked_levels_paper_one_hot_shape() {
+        let n = 8;  // > chunking_factor to force multiple chunks
+        let m = 3;
+        let cf = 4;
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, cf);
+        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
+        install_test_input_labels(&mut gar, &mut ev, 0, 0);
+
+        // P1 narrow path.
+        let (cl_narrow, _ct_narrow) = gar.garble_first_half();
+        assert_eq!(cl_narrow.len(), n / cf, "narrow chunks = ceil(n/cf)");
+        for chunk in &cl_narrow {
+            // Each chunk is the level-cts for a 2^cf-leaf GGM tree → cf - 1 levels.
+            assert_eq!(chunk.len(), cf - 1, "narrow chunk levels = cf - 1");
+            // Static type check: element type is `Block` (not `(Block, Block)`).
+            for level_ct in chunk {
+                let _: &Block = level_ct;
+            }
+        }
+
+        // P2 wide path.
+        let (cl_wide, _ct_wide) = gar.garble_first_half_p2();
+        assert_eq!(cl_wide.len(), n / cf, "wide chunks = ceil(n/cf)");
+        for chunk in &cl_wide {
+            assert_eq!(chunk.len(), cf - 1, "wide chunk levels = cf - 1");
+            for level_ct in chunk {
+                let _: &Block = level_ct;
+            }
+        }
     }
 }

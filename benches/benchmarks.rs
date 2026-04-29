@@ -86,8 +86,9 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 }
 
 /// Total GC byte count for Protocol 1 garble output at `(n, m, chunking_factor)`.
-/// Sum is `chunk_levels.len() * 2 * KAPPA_BYTES + chunk_cts.len() * KAPPA_BYTES`
-/// per chunk over both halves, matching `bench_online_with_networking_for_size:413–417`.
+/// Sum is `chunk_levels.len() * KAPPA_BYTES + chunk_cts.len() * KAPPA_BYTES`
+/// per chunk over both halves. Tree-level cts are paper-faithful one-Block-
+/// per-level (paper Construction 4 / `5_online.tex:43-72`, AUDIT-2.1 D1).
 /// Output count is determined by `(n, m, chunking_factor)` alone, so this is
 /// called once per cell outside the timed iter loop.
 ///
@@ -100,11 +101,11 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
     encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half();
     let (second_levels, second_cts) = generator.garble_second_half();
-    // GGM-tree internal-node ciphertexts: 2 × κ bits per row.
-    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    // Paper-faithful: one κ-wide ciphertext per tree level.
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     // P1 narrow leaf ciphertext: κ bits per row.
     let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * KAPPA_BYTES).sum();
-    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
 }
@@ -112,11 +113,11 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// Total GC byte count for Protocol 2 garble output. P2's `chunk_cts` is a
 /// `Vec<Vec<(Block, Block)>>` (wide leaf ciphertexts per `6_total.tex:90`, the
 /// κ + ρ extension): the .0 component carries the κ-bit Δ_gb-label material,
-/// .1 carries the ρ-bit Δ_ev-MAC material. GGM-tree level ciphertexts stay
-/// κ-wide.
+/// .1 carries the ρ-bit Δ_ev-MAC material. GGM-tree level ciphertexts are
+/// paper-faithful one-Block-per-level (Construction 4 / AUDIT-2.1 D1).
 ///
 /// Per-row width on the wire:
-///   * `levels`: 2 × KAPPA_BYTES (left + right child of GGM-tree internal node).
+///   * `levels`: KAPPA_BYTES per tree level (paper improved one-hot).
 ///   * `cts`:    KAPPA_BYTES + RHO_BYTES (κ-half + ρ-half of wide leaf cipher).
 ///
 /// In-memory the ρ-half is still a full `Block` (the cryptographic computation
@@ -131,11 +132,11 @@ fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
     encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = generator.garble_first_half_p2();
     let (second_levels, second_cts) = generator.garble_second_half_p2();
-    // GGM-tree internal-node ciphertexts stay κ-wide (`6_total.tex:90`).
-    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    // Paper-faithful: one κ-wide ciphertext per tree level.
+    let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     // Wide leaf ciphertexts: κ + ρ bits per row (`6_total.tex:90`, Construction 4).
     let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
-    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * KAPPA_BYTES).sum();
+    let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
     levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2
 }
@@ -488,9 +489,10 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
         let (second_levels, second_cts) = generator.garble_second_half();
         generator.garble_final();
 
-        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        // Paper-faithful: one κ-wide ciphertext per tree level.
+        let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * block_sz).sum();
         let cts_bytes_1: usize = first_cts.iter().map(|row| row.len() * block_sz).sum();
-        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * 2 * block_sz).sum();
+        let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * block_sz).sum();
         let cts_bytes_2: usize = second_cts.iter().map(|row| row.len() * block_sz).sum();
         let total_bytes = levels_bytes_1 + cts_bytes_1 + levels_bytes_2 + cts_bytes_2;
 
