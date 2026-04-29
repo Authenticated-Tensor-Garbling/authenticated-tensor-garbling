@@ -34,9 +34,26 @@ Per the master plan (`/Users/turan/.claude/plans/concerns-md-include-many-possib
 - Original source: `references/2018-578-3.pdf` (KRRW18) — useful historical comparison; the paper's Construction 1 is a reformulation.
 
 **Source (current):**
-- `src/tensor_macro.rs` — `tensor_garbler`, `tensor_evaluator` (the named macros used in tests/benches).
+- `src/tensor_macro.rs` — `tensor_garbler`, `tensor_evaluator` (the named macros).
 - `src/tensor_ops.rs` — narrow GGM helpers: `gen_populate_seeds_mem_optimized`, `gen_unary_outer_product`, `eval_populate_seeds_mem_optimized`, `eval_unary_outer_product`. Wide-variant helpers (`gen_unary_outer_product_wide`, `eval_unary_outer_product_wide`) live here too but are P2-specific — audit those in 2.4.
-- Block-storage primitive: `src/block.rs` — Block::lsb() (GGM pointer-bit semantics).
+- Block-storage primitive: `src/block.rs` — `Block::lsb()` (GGM pointer-bit semantics).
+
+**Call graph (relevant for cross-surface audit cohesion):**
+P1's online tensor invocation and preprocessing's leaky-tensor invocation share the same low-level primitives but enter through different middle layers:
+```
+P1 garble path:
+  AuthTensorGen::garble_first_half
+    └─ gen_chunked_half_outer_product       (auth_tensor_gen.rs — P1 chunking wrapper)
+       └─ gen_populate_seeds_mem_optimized  ┐
+       └─ gen_unary_outer_product            ├─ tensor_ops.rs (shared primitives)
+
+Preprocessing (LeakyTensor) path:
+  LeakyTensorPre::generate
+    └─ tensor_garbler / tensor_evaluator    (tensor_macro.rs — full-(n,m), no chunking)
+       └─ gen_populate_seeds_mem_optimized  ┐
+       └─ gen_unary_outer_product            ├─ tensor_ops.rs (same primitives)
+```
+The shared primitives in `tensor_ops.rs` plus the named macro in `tensor_macro.rs` are the audit subject for 2.1. P1's chunking wrapper is a tile-iteration over those primitives — properly part of the **2.3** audit.
 
 **Key entities to verify:**
 - GGM tree endianness: `src/tensor_ops.rs` comments document index 0 = LSB, n-1 = MSB.
@@ -69,6 +86,10 @@ Per the master plan (`/Users/turan/.claude/plans/concerns-md-include-many-possib
 - **Construction 3 (two_to_one_combine):** four steps — `d := y' XOR y''`, verify d via `verify_cross_party`, `x := x' XOR x''`, `Z := Z' XOR Z'' XOR (x'' ⊗ d)`. Match algebraically to paper §3.1.
 - **Construction 4 (bucketing):** `bucket_size_for(n, ell)` formula matches paper. SSP=40 hardcoded — verify it threads through all bucket-size sites consistently. Asymmetric permutation (x rows + Z i-indices permuted; y untouched) matches paper §3.2 σ ∈ S_n action on x-space only. Hardcoded `shuffle_seed=42` in `combine_leaky_triples` flagged for SEC-05 (Phase 3.3 hardening, not this audit).
 - δ_a / δ_b LSB invariants (see "Cross-cutting facts" below).
+
+**Known gaps to surface as audit findings (deferred fixes — do not implement during 2.2):**
+- **Preprocessing has no chunking.** `LeakyTensorPre::generate` calls `tensor_garbler(self.n, self.m, ...)` directly with the full `n`, allocating a `2^n` GGM-leaf buffer in `gen_populate_seeds_mem_optimized`. P1 by contrast tiles via `chunking_factor` ∈ 1..=8. **Per project decision, preprocessing MUST adopt chunking before benchmarking, and the chunking size MUST match the P1 chunking size used for the same matrix.** Mismatched chunking would yield triples whose tile boundaries don't line up with what P1 consumes — the bucketing combiner produces auth-bit shares per bit position, not per tile, but the GGM-tree traversal cost and the tile-aligned label spaces would diverge. Surface this as a 2.2 (d) item; resolution is "design + implement chunked LeakyTensor with cf-parameterized API and bench fixture." Track as a future phase, **not** during the audit drafting itself.
+- **`bench_preprocessing` is dormant.** `criterion_main!(online_benches);` at `benches/benchmarks.rs:581` registers only the online group; `preprocessing_benches` is defined but never run. Re-enabling at any of the current `BENCHMARK_PARAMS` (n=64, 128, 256) would OOM under the no-chunking implementation. Resolution depends on the chunking-implementation item above.
 
 **Existing test coverage:**
 - `src/leaky_tensor_pre.rs` `mod tests` — `test_leaky_triple_product_invariant`, `test_leaky_triple_mac_invariants`, `test_macro_outputs_xor_invariant`, `test_c_a_c_b_xor_invariant`, `test_correlated_randomness_dimensions`, `test_feq_passes_on_honest_run`, `test_leaky_triple_shape_field_access`, `test_key_lsb_zero_all_shares`.
@@ -158,6 +179,10 @@ For each authenticated bit X (alpha=λ_a, beta=λ_b, correlated=λ_a⊗λ_b, gam
 
 ### Input encoding asymmetry
 Per paper §211–215: gen's `masked_x_bits = vec![false; n]` (0-vec); eval's `masked_x_bits = d_x` (cleartext masked-input vector). XOR reveals d_x. Same for masked_y_bits.
+
+### Chunking-size matching invariant (P1 ↔ preprocessing)
+
+When chunked preprocessing lands (currently a dormant gap; see Surface 2.2 known gaps), the chunking factor used by preprocessing **MUST match** the chunking factor used by the P1 garble path that consumes its triples. This is a project-level invariant for benchmarking and for any wired-up production path. Audits should flag any code path that lets the two diverge, and any (d) fix that introduces a chunked preprocessing API must thread the same `chunking_factor` value already carried by `AuthTensorGen` / `AuthTensorEval`.
 
 ### CheckZero is paper-faithful full-block
 `block_check_zero` does per-index full-block equality; `block_hash_check_zero` is the paper's `H({V_w})` digest via fixed-key AES correlation-robust hash. **No LSB-only path remains** anywhere in the CheckZero pipeline (the prior LSB-only glue was retired in 1.2(i)).
