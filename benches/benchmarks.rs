@@ -11,6 +11,7 @@ use network_simulator::SimpleNetworkSimulator;
 use authenticated_tensor_garbling::{
     auth_tensor_eval::AuthTensorEval,
     auth_tensor_gen::AuthTensorGen,
+    auth_tensor_pre::bucket_size_for,
     block::Block,
     input_encoding::encode_inputs,
     online::block_hash_check_zero,
@@ -148,22 +149,54 @@ fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
 // TensorFpreGen / TensorFpreEval.
 //
 // Uses iter_custom + std::time::Instant (pure wall-clock, no async scheduler
-// overhead). Communication cost of bCOT is noted as a comment; it is NOT
-// part of the measured time.
+// overhead). Network communication is simulated deterministically via
+// `transit_ns(prep_bytes(n, m))` — this is a research-tooling extension beyond
+// the paper's experimental methodology, which only simulates the online phase
+// (`appendix_experiments.tex:14-15, 31-32`).
 // ---------------------------------------------------------------------------
 
-/// Benchmarks uncompressed preprocessing (Construction 4) using sync wall-clock
-/// measurement via `iter_custom` + `std::time::Instant`.
+/// Total on-wire byte count for one uncompressed preprocessing run, per the
+/// paper's Construction 4 communication theorem (`appendix_krrw_pre.tex:495-499`):
+///
+/// ```text
+///   prep_bits(n, m, B) = B · [2(n + m − 1)·κ + 2·n·m] + (B − 1)·m
+/// ```
+///
+/// Where `B = bucket_size_for(n, 1)` (matches `run_preprocessing`'s ℓ=1 call).
+/// Independent of `chunking_factor` — tiling is an application-layer organization
+/// (`appendix_applications.tex`), not a wire-level change in Construction 4.
+///
+/// The three terms decompose as:
+///   * `B · 2(n + m − 1)·κ` — per-bucket leaky-triple GGM-tree ciphertext bytes.
+///   * `B · 2·n·m`         — per-bucket AND-correlated bit transfers.
+///   * `(B − 1)·m`         — bucketing-combiner reveals across `B−1` two-to-one
+///     combine steps.
+///
+/// Result is rounded up to the next whole byte.
+fn prep_bytes(n: usize, m: usize) -> usize {
+    let b = bucket_size_for(n, 1);
+    let prep_bits = b * (2 * (n + m - 1) * CSP + 2 * n * m) + (b - 1) * m;
+    (prep_bits + 7) / 8
+}
+
+/// Benchmarks uncompressed preprocessing (Construction 4) under a 100 Mbps
+/// network model: each iteration's measured wall-clock includes both the local
+/// compute time (`run_preprocessing`) and the deterministic transit time
+/// (`transit_ns(prep_bytes(n, m))`). Mirrors `bench_online_with_networking_for_size`.
 ///
 /// Throughput is reported in two complementary units:
 ///   - ms per tensor op  — elapsed_ns / iterations / 1_000_000  (paper style)
 ///   - Criterion's AND-gates/s via `Throughput::Elements(n * m)`  (literature style)
+///
+/// Per-cell, prints one `KB,prep,N=…,M=…,B=…,kb=…` line on first invocation
+/// (deduped via `OnceCell`) so the same plotting script that joins the online
+/// `KB,p1/p2,…` lines with Criterion's `estimates.json` can pick up the
+/// preprocessing communication numbers too.
 fn bench_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("preprocessing");
     group.warm_up_time(std::time::Duration::from_secs(5));
     group.measurement_time(std::time::Duration::from_secs(20));
 
-    let block_sz = size_of::<Block>();
     let chunking_factor = 1;
 
     for &(n, m) in BENCHMARK_PARAMS {
@@ -172,24 +205,33 @@ fn bench_preprocessing(c: &mut Criterion) {
         // Reported as AND-gate count (n*m) for literature-style ns-per-AND-gate comparison.
         group.throughput(Throughput::Elements((n * m) as u64));
 
-        // Communication estimate (not measured, for reference):
-        //   bCOT phase: 2 rounds × (n + m + 2·n·m) authenticated bits × 16 bytes per Block
-        let _bcot_bytes = 2 * (n + m + 2 * n * m) * block_sz;
-
         if n * m > 4096 {
             group.sample_size(10);
         }
+
+        // Construction 4 communication, per paper formula (constant per (n, m)).
+        let bytes = prep_bytes(n, m);
+        let bucket = bucket_size_for(n, 1);
+        let kb_cache: OnceCell<()> = OnceCell::new();
 
         group.bench_with_input(
             BenchmarkId::new("real_preprocessing", format!("{}x{}", n, m)),
             &(n, m),
             |b, &(n, m)| {
+                kb_cache.get_or_init(|| {
+                    println!(
+                        "KB,prep,N={},M={},B={},kb={:.3}",
+                        n, m, bucket,
+                        bytes as f64 / 1024.0,
+                    );
+                });
+                let transit = std::time::Duration::from_nanos(transit_ns(bytes));
                 b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
                     for _ in 0..iters {
                         let start = Instant::now();
                         let (fpre_gen, fpre_eval) = run_preprocessing(n, m, chunking_factor);
-                        total += start.elapsed();
+                        total += start.elapsed() + transit;
                         // black_box prevents dead-code elimination of the preprocessing output.
                         black_box(fpre_gen);
                         black_box(fpre_eval);
