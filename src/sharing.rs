@@ -4,7 +4,7 @@ use crate::macs::Mac;
 use crate::delta::Delta;
 
 use std::ops::Add;
-use rand_chacha::ChaCha12Rng;
+use rand::{CryptoRng, Rng};
 
 #[derive(Debug, Clone, Copy)]
 
@@ -121,7 +121,7 @@ impl Add<&AuthBitShare> for &AuthBitShare {
 /// when A holds the key and B holds the MAC, `delta` is B's delta). The returned
 /// share satisfies the IT-MAC invariant `mac == key.auth(bit, delta)` and its
 /// `key` has `lsb() == 0` (enforced by `Key::new`).
-pub fn build_share(rng: &mut ChaCha12Rng, bit: bool, delta: &Delta) -> AuthBitShare {
+pub fn build_share<R: Rng + CryptoRng>(rng: &mut R, bit: bool, delta: &Delta) -> AuthBitShare {
     let key: Key = Key::new(Block::random(rng));
     let mac: Mac = key.auth(bit, delta);
     AuthBitShare { key, mac, value: bit }
