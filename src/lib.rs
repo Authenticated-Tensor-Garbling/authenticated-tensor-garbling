@@ -527,7 +527,7 @@ mod tests {
         let n = 4;
         let m = 3;
 
-        let (fpre_gen, fpre_eval) = backend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = backend.run(n, m, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
@@ -652,7 +652,7 @@ mod tests {
         let n = 4;
         let m = 3;
 
-        let (fpre_gen, fpre_eval) = backend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = backend.run(n, m, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
@@ -774,7 +774,7 @@ mod tests {
         let n = 4;
         let m = 3;
 
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
@@ -856,7 +856,7 @@ mod tests {
         let n = 4;
         let m = 3;
 
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 

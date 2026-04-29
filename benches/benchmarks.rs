@@ -108,7 +108,7 @@ fn setup_auth_eval(n: usize, m: usize, chunking_factor: usize) -> AuthTensorEval
 /// (see `src/preprocessing.rs:145-150`). The `chunking_factor` is forwarded
 /// unchanged.
 fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen, AuthTensorEval) {
-    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, chunking_factor);
+    let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, chunking_factor);
     (
         AuthTensorGen::new_from_fpre_gen(fpre_gen),
         AuthTensorEval::new_from_fpre_eval(fpre_eval),
@@ -212,7 +212,7 @@ fn bench_preprocessing(c: &mut Criterion) {
                     let mut total = std::time::Duration::ZERO;
                     for _ in 0..iters {
                         let start = Instant::now();
-                        let (fpre_gen, fpre_eval) = run_preprocessing(n, m, 1, chunking_factor);
+                        let (fpre_gen, fpre_eval) = run_preprocessing(n, m, chunking_factor);
                         total += start.elapsed();
                         // black_box prevents dead-code elimination of the preprocessing output.
                         black_box(fpre_gen);

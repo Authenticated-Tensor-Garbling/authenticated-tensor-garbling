@@ -499,7 +499,7 @@ mod tests {
         // Statically the type is (Vec<Block>, Vec<Block>) — there is no bool field.
         let n = 4;
         let m = 3;
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         install_test_input_labels(&mut gar, &mut ev, 0, 0);
@@ -517,7 +517,7 @@ mod tests {
         // P2-01/P2-02: garble_first_half_p2 returns wide chunk_cts of type Vec<Vec<(Block, Block)>>.
         let n = 4;
         let m = 3;
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         install_test_input_labels(&mut gar, &mut ev, 0, 0);

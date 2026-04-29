@@ -500,7 +500,7 @@ mod tests {
     /// require `encode_inputs` to have been called first.
     /// Tests needing non-zero inputs should call the builders directly.
     fn build_pair(n: usize, m: usize) -> (AuthTensorGen, AuthTensorEval) {
-        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         let mut rng = ChaCha12Rng::seed_from_u64(0xDEAD_BEEF);

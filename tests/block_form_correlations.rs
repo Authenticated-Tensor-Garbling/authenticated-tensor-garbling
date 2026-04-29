@@ -165,7 +165,7 @@ fn check_bit_recovery(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &Au
 fn run_backend(backend: &dyn TensorPreprocessing, n: usize, m: usize)
     -> (AuthTensorGen, AuthTensorEval, AuthBitTruth)
 {
-    let (fpre_gen, fpre_eval) = backend.run(n, m, 1, 1);
+    let (fpre_gen, fpre_eval) = backend.run(n, m, 1);
     let truth = AuthBitTruth {
         gen_alpha: fpre_gen.alpha_auth_bit_shares.clone(),
         gen_beta:  fpre_gen.beta_auth_bit_shares.clone(),

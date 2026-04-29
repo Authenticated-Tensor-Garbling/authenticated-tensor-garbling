@@ -678,7 +678,7 @@ mod tests {
         assert!(b_new < 40, "Construction 4 B must be smaller than Construction 3 B=40");
 
         // Full pipeline (includes permutation + iterative fold + bucket reduction).
-        let (gen_out, eval_out) = crate::preprocessing::run_preprocessing(n, m, 1, 1);
+        let (gen_out, eval_out) = crate::preprocessing::run_preprocessing(n, m, 1);
 
         // (3) Dimensions on both sides.
         assert_eq!(gen_out.alpha_auth_bit_shares.len(), n);

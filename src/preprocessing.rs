@@ -123,17 +123,13 @@ pub trait TensorPreprocessing {
         &self,
         n: usize,
         m: usize,
-        count: usize,
         chunking_factor: usize,
     ) -> (TensorFpreGen, TensorFpreEval);
 }
 
 /// Backend that wraps the real two-party uncompressed preprocessing protocol (Pi_aTensor',
-/// Construction 4). Callers should use `UncompressedPreprocessingBackend.run(n, m, 1, cf)`
+/// Construction 4). Callers should use `UncompressedPreprocessingBackend.run(n, m, cf)`
 /// instead of calling `run_preprocessing` directly. See CONTEXT.md D-02.
-///
-/// Note: count > 1 retains the existing `assert_eq!(count, 1)` panic from `run_preprocessing`
-/// until a batch variant is implemented. This matches existing behavior.
 pub struct UncompressedPreprocessingBackend;
 
 impl TensorPreprocessing for UncompressedPreprocessingBackend {
@@ -141,10 +137,9 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
         &self,
         n: usize,
         m: usize,
-        count: usize,
         chunking_factor: usize,
     ) -> (TensorFpreGen, TensorFpreEval) {
-        run_preprocessing(n, m, count, chunking_factor)
+        run_preprocessing(n, m, chunking_factor)
     }
 }
 
@@ -164,17 +159,8 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
         &self,
         n: usize,
         m: usize,
-        count: usize,
         chunking_factor: usize,
     ) -> (TensorFpreGen, TensorFpreEval) {
-        assert_eq!(
-            count, 1,
-            "IdealPreprocessingBackend::run: count > 1 is not yet supported; \
-             the ideal backend returns exactly one (TensorFpreGen, TensorFpreEval) pair. \
-             Use a loop calling run(n, m, 1, cf) for batch use."
-        );
-        let _ = count;
-
         let mut fpre = TensorFpre::new(0, n, m, chunking_factor);
         fpre.generate_ideal();
 
@@ -226,8 +212,8 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
 
 /// Run the real two-party uncompressed preprocessing protocol (Pi_aTensor', Construction 4).
 ///
-/// Generates `count` authenticated tensor triples using:
-///   1. bucket_size_for(n, count) leaky triples per output triple (from Pi_LeakyTensor)
+/// Generates one authenticated tensor triple using:
+///   1. `bucket_size_for(n, 1)` leaky triples (from Pi_LeakyTensor)
 ///   2. Pi_aTensor bucketing combiner to amplify security
 ///
 /// CRITICAL: ONE shared IdealBCot is created before the generation loop. All
@@ -240,40 +226,24 @@ impl TensorPreprocessing for IdealPreprocessingBackend {
 /// Returns one (TensorFpreGen, TensorFpreEval) pair suitable for feeding into
 /// AuthTensorGen::new_from_fpre_gen and AuthTensorEval::new_from_fpre_eval.
 ///
-/// For Phase 1 benchmarking, count = 1. For future batch use, count > 1.
-///
 /// Preprocessing is fully input-independent per paper Construction 2. Triples are
 /// sampled from LeakyTensorPre's internal ChaCha12Rng; no input values flow in here.
 ///
-/// # Panics
-///
-/// Panics if `count != 1`. Batch output (count > 1) requires a Vec-returning
-/// variant that is not yet implemented.
+/// Batch output is not yet implemented — for multiple triples, call this in a loop.
 pub fn run_preprocessing(
     n: usize,
     m: usize,
-    count: usize,
     chunking_factor: usize,
 ) -> (TensorFpreGen, TensorFpreEval) {
-    assert_eq!(
-        count, 1,
-        "Phase 1: only count=1 is supported; batch output requires a Vec-returning variant. \
-        Note: total_leaky = bucket_size * count generates enough leaky triples for 'count' \
-        output authenticated triples, but combine_leaky_triples below only consumes \
-        bucket_size of them and returns a single pair — remove this assert only after \
-        adding a loop that calls combine_leaky_triples once per output triple."
-    );
-
-    let bucket_size = bucket_size_for(n, count);
-    let total_leaky = bucket_size * count;
+    let bucket_size = bucket_size_for(n, 1);
 
     // ONE shared IdealBCot for all triples — ensures all share the same delta_a and delta_b.
     // Seed choice: 0 for delta_a, 1 for delta_b. The internal rng seed is 0^1=1 (trivial),
     // but key generation inside each LeakyTensorPre uses its own per-instance rng.
     let mut bcot = IdealBCot::new(0, 1);
 
-    let mut triples = Vec::with_capacity(total_leaky);
-    for t in 0..total_leaky {
+    let mut triples = Vec::with_capacity(bucket_size);
+    for t in 0..bucket_size {
         // Each LeakyTensorPre borrows &mut bcot — shares delta_a and delta_b.
         // Per-instance seed `t+2` ensures independent key randomness across triples.
         let mut ltp = LeakyTensorPre::new((t + 2) as u64, n, m, &mut bcot);
@@ -394,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_run_preprocessing_dimensions() {
-        let (gen_out, eval_out) = super::run_preprocessing(4, 4, 1, 1);
+        let (gen_out, eval_out) = super::run_preprocessing(4, 4, 1);
         assert_eq!(gen_out.n, 4);
         assert_eq!(gen_out.m, 4);
         assert_eq!(gen_out.correlated_auth_bit_shares.len(), 16);
@@ -403,13 +373,13 @@ mod tests {
 
     #[test]
     fn test_run_preprocessing_delta_lsb() {
-        let (gen_out, _eval_out) = super::run_preprocessing(4, 4, 1, 1);
+        let (gen_out, _eval_out) = super::run_preprocessing(4, 4, 1);
         assert!(gen_out.delta_a.as_block().lsb(), "delta_a LSB must be 1");
     }
 
     #[test]
     fn test_run_preprocessing_feeds_online_phase() {
-        let (fpre_gen, fpre_eval) = super::run_preprocessing(4, 4, 1, 1);
+        let (fpre_gen, fpre_eval) = super::run_preprocessing(4, 4, 1);
         let _gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let _ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         // No panic = success
@@ -421,7 +391,7 @@ mod tests {
     #[test]
     fn test_trait_dispatch_ideal() {
         let backend: &dyn TensorPreprocessing = &IdealPreprocessingBackend;
-        let (gen_out, eval_out) = backend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = backend.run(4, 4, 1);
         assert_eq!(gen_out.n, 4);
         assert_eq!(gen_out.m, 4);
         assert_eq!(eval_out.n, 4);
@@ -431,7 +401,7 @@ mod tests {
     #[test]
     fn test_trait_dispatch_uncompressed() {
         let backend: &dyn TensorPreprocessing = &UncompressedPreprocessingBackend;
-        let (gen_out, eval_out) = backend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = backend.run(4, 4, 1);
         assert_eq!(gen_out.n, 4);
         assert_eq!(gen_out.m, 4);
         assert_eq!(eval_out.n, 4);
@@ -441,7 +411,7 @@ mod tests {
     // PRE-03: UncompressedPreprocessingBackend delegates to run_preprocessing exactly
     #[test]
     fn test_uncompressed_backend_delegates_to_run_preprocessing() {
-        let (gen_out, _eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, _eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1);
         assert_eq!(gen_out.n, 4);
         assert_eq!(gen_out.m, 4);
         assert_eq!(gen_out.correlated_auth_bit_shares.len(), 16,
@@ -454,7 +424,7 @@ mod tests {
     // `run_preprocessing`, mirroring the ideal backend.
     #[test]
     fn test_uncompressed_backend_gamma_field_is_populated() {
-        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1);
         assert_eq!(gen_out.gamma_auth_bit_shares.len(), 4 * 4,
             "gen.gamma_auth_bit_shares must have length n*m=16");
         assert_eq!(eval_out.gamma_auth_bit_shares.len(), 4 * 4,
@@ -466,7 +436,7 @@ mod tests {
     fn test_uncompressed_backend_eval_shares_lengths() {
         let n = 4;
         let m = 3;
-        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1);
         assert_eq!(gen_out.alpha_eval.len(),       n);
         assert_eq!(eval_out.alpha_eval.len(),      n);
         assert_eq!(gen_out.beta_eval.len(),        m);
@@ -483,7 +453,7 @@ mod tests {
     fn test_uncompressed_backend_eval_shares_bit_correlation() {
         let n = 4;
         let m = 3;
-        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1);
         let delta_b = eval_out.delta_b;
 
         for k in 0..n {
@@ -515,7 +485,7 @@ mod tests {
     fn test_uncompressed_backend_gamma_auth_bit_shares_mac_invariant() {
         let n = 4;
         let m = 3;
-        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1, 1);
+        let (gen_out, eval_out) = UncompressedPreprocessingBackend.run(n, m, 1);
         for k in 0..(n * m) {
             verify_cross_party(
                 &gen_out.gamma_auth_bit_shares[k],
@@ -531,7 +501,7 @@ mod tests {
     // in Rust 2024 edition.
     #[test]
     fn test_ideal_backend_dimensions() {
-        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
         assert_eq!(gen_out.n, 4);
         assert_eq!(gen_out.m, 4);
         assert_eq!(gen_out.alpha_auth_bit_shares.len(), 4,  "alpha shares: length n=4");
@@ -545,7 +515,7 @@ mod tests {
     // PRE-04: gamma_auth_bit_shares length is n*m on both sides
     #[test]
     fn test_ideal_backend_gamma_auth_bit_shares_length() {
-        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
         assert_eq!(gen_out.gamma_auth_bit_shares.len(),  4 * 4,
             "gen.gamma_auth_bit_shares must have n*m=16 entries");
         assert_eq!(eval_out.gamma_auth_bit_shares.len(), 4 * 4,
@@ -557,7 +527,7 @@ mod tests {
     // cross-party shares. Always use verify_cross_party (see RESEARCH.md Pitfall 3).
     #[test]
     fn test_ideal_backend_gamma_auth_bit_shares_mac_invariant() {
-        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
         for k in 0..(4 * 4) {
             verify_cross_party(
                 &gen_out.gamma_auth_bit_shares[k],
@@ -575,7 +545,7 @@ mod tests {
     fn test_ideal_backend_eval_shares_lengths() {
         let n = 4;
         let m = 4;
-        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1);
         assert_eq!(gen_out.alpha_eval.len(),        n,
             "gen.alpha_eval must have length n");
         assert_eq!(eval_out.alpha_eval.len(),       n,
@@ -597,7 +567,7 @@ mod tests {
         use crate::block::Block;
         let n = 4;
         let m = 4;
-        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1, 1);
+        let (gen_out, eval_out) = IdealPreprocessingBackend.run(n, m, 1);
         let delta_b = eval_out.delta_b;
 
         for k in 0..n {
@@ -624,7 +594,7 @@ mod tests {
     // from correlated_auth_bit_shares (l_gamma*). Basic distinctness: not all-zero bits.
     #[test]
     fn test_ideal_backend_gamma_distinct_from_correlated() {
-        let (gen_out, _eval_out) = IdealPreprocessingBackend.run(4, 4, 1, 1);
+        let (gen_out, _eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
         // gamma bits: gen and eval shares XOR to the actual l_gamma bit (gen.value XOR eval.value)
         // correlated bits: same XOR gives l_gamma* bit
         // They are independent random samples; expect at least one to differ from false.
