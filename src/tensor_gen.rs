@@ -24,8 +24,8 @@ pub struct TensorProductGen {
     pub alpha_labels: Vec<Block>,
     pub beta_labels: Vec<Block>,
     
-    pub first_half_out: BlockMatrix,
-    pub second_half_out: BlockMatrix,
+    pub gb_first_half_out_dgb: BlockMatrix,
+    pub gb_second_half_out_dgb: BlockMatrix,
 }
 
 impl TensorProductGen {
@@ -42,8 +42,8 @@ impl TensorProductGen {
             y_labels: fpre_gen.y_labels,
             alpha_labels: fpre_gen.alpha_labels,
             beta_labels: fpre_gen.beta_labels,
-            first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
-            second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
+            gb_first_half_out_dgb: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
+            gb_second_half_out_dgb: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
         }
     }
 
@@ -72,9 +72,9 @@ impl TensorProductGen {
             let delta = self.delta;
 
             let mut out = if first_half {
-                self.first_half_out.as_view_mut()
+                self.gb_first_half_out_dgb.as_view_mut()
             } else {
-                self.second_half_out.as_view_mut()
+                self.gb_second_half_out_dgb.as_view_mut()
             };
 
             out.with_subrows(self.chunking_factor * s, slice_size, |part| {
@@ -91,35 +91,35 @@ impl TensorProductGen {
     }
 
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        let mut gen_x = BlockMatrix::new(self.n, 1);
+        let mut x_dgb = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            gen_x[i] = self.x_labels[i];
+            x_dgb[i] = self.x_labels[i];
         }
-        let mut gen_y = BlockMatrix::new(self.m, 1);
+        let mut y_dgb = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
-            gen_y[i] = self.y_labels[i] ^ self.beta_labels[i];
+            y_dgb[i] = self.y_labels[i] ^ self.beta_labels[i];
         }
-        (gen_x, gen_y)
+        (x_dgb, y_dgb)
     }
     
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        let mut gen_x = BlockMatrix::new(self.m, 1);
+        let mut x_dgb = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            gen_x[j] = self.y_labels[j];
+            x_dgb[j] = self.y_labels[j];
         }
-        let mut gen_y = BlockMatrix::new(self.n, 1);
+        let mut y_dgb = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            gen_y[i] = self.alpha_labels[i];
+            y_dgb[i] = self.alpha_labels[i];
         }
-        (gen_x, gen_y)
+        (x_dgb, y_dgb)
     }
 
     pub fn garble_first_half_outer_product(
         &mut self
     ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
 
-        let (gen_x, gen_y) = self.get_first_inputs();
-        let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&gen_x.as_view(), &gen_y.as_view(), true);
+        let (x_dgb, y_dgb) = self.get_first_inputs();
+        let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&x_dgb.as_view(), &y_dgb.as_view(), true);
 
         (chunk_levels, chunk_cts)
     }
@@ -128,8 +128,8 @@ impl TensorProductGen {
         &mut self
     ) -> (Vec<Vec<Block>>, Vec<Vec<Block>>) {
 
-        let (gen_x, gen_y) = self.get_second_inputs();
-        let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&gen_x.as_view(), &gen_y.as_view(), false);
+        let (x_dgb, y_dgb) = self.get_second_inputs();
+        let (chunk_levels, chunk_cts) = self.gen_chunked_half_outer_product(&x_dgb.as_view(), &y_dgb.as_view(), false);
 
         (chunk_levels, chunk_cts)
     }
@@ -155,11 +155,11 @@ impl TensorProductGen {
         // accumulate the results into the first matrix
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)] ^ gen_alpha_beta[(i, j)];
+                self.gb_first_half_out_dgb[(i, j)] ^= self.gb_second_half_out_dgb[(j, i)] ^ gen_alpha_beta[(i, j)];
             }
         }
 
-        self.first_half_out.clone() 
+        self.gb_first_half_out_dgb.clone() 
     }
 }
 

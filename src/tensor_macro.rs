@@ -7,7 +7,7 @@
 //!   paper's improved one-hot construction (one ciphertext per level, citing
 //!   [Heath24]), emits level ciphertexts `G_i` and leaf ciphertexts `G_k`,
 //!   returns `Z_garbler` and the ciphertext bundle `G`.
-//! - [`tensor_evaluator`] — evaluator side: reconstructs the level tree using
+//! - [`tensor_evaluator`] — ev side: reconstructs the level tree using
 //!   the level ciphertexts, recovers the missing leaf column, and returns
 //!   `Z_evaluator`.
 //!
@@ -83,7 +83,7 @@ pub(crate) struct TensorMacroCiphertexts {
 /// Builds a 2^n-leaf GGM tree from the garbler's IT-MAC keys `a_keys`,
 /// computes level ciphertexts {G_{i,0}, G_{i,1}}_{i ∈ [n-1]} and leaf
 /// ciphertexts {G_k}_{k ∈ [m]}, and returns `(Z_gen, G)` such that when
-/// paired with the evaluator's [`tensor_evaluator`] output on matching
+/// paired with the ev's [`tensor_evaluator`] output on matching
 /// inputs,
 ///
 /// ```text
@@ -140,12 +140,12 @@ pub(crate) fn tensor_garbler(
 
 /// Evaluator side of Construction 1 (paper Appendix F).
 ///
-/// Reconstructs the untraversed GGM subtree from the evaluator's IT-MAC
+/// Reconstructs the untraversed GGM subtree from the ev's IT-MAC
 /// values `a_macs` (each equal to `A_i XOR a_i·Δ`) and the garbler's
 /// ciphertexts `g`, then recovers the missing-leaf column and accumulates
 /// `Z_eval`.
 ///
-/// `a_bits` are the evaluator's explicit choice bits — index 0 is the LSB
+/// `a_bits` are the ev's explicit choice bits — index 0 is the LSB
 /// of the `a` vector, index `n-1` is the MSB. These are passed separately
 /// from `a_macs` to allow the tree traversal to work even when the garbler's
 /// Δ has `lsb == 0` (in which case `mac.lsb() != a_i`).
@@ -336,9 +336,9 @@ mod tests {
     /// Paper-invariant oracle:
     ///
     /// 1. Produce matched `(a_keys: Vec<Key>, a_macs: Vec<Mac>)` from
-    ///    `IdealBCot::transfer_b_to_a(&choices)` — guaranteed to satisfy
-    ///    `mac = key XOR bit·delta_a` with `key.lsb() == 0` and
-    ///    `mac.lsb() == choice_bit` (relies on `delta_a.lsb() == 1`).
+    ///    `IdealBCot::transfer_ev_to_gb(&choices)` — guaranteed to satisfy
+    ///    `mac = key XOR bit·delta_gb` with `key.lsb() == 0` and
+    ///    `mac.lsb() == choice_bit` (relies on `delta_gb.lsb() == 1`).
     /// 2. Generate random T shares `t_gen`, `t_eval` (length-m column vectors).
     /// 3. Run `tensor_garbler` and `tensor_evaluator`.
     /// 4. Compute expected `a ⊗ T` using the same endianness convention the
@@ -348,22 +348,22 @@ mod tests {
         // ----- Set up bCOT and derive the macro's Δ -----
         let mut bcot = IdealBCot::new(seed, seed ^ 0xDEAD_BEEF);
 
-        // Garbler uses delta_a (LSB=1). Same-delta convention: transfer_a_to_b uses
-        // delta_a, so receiver MACs have lsb = choice bit. The garbler holds the sender
-        // keys; the evaluator holds the receiver MACs. Explicit choice bits are passed
+        // Garbler uses delta_gb (LSB=1). Same-delta convention: transfer_gb_to_ev uses
+        // delta_gb, so receiver MACs have lsb = choice bit. The garbler holds the sender
+        // keys; the ev holds the receiver MACs. Explicit choice bits are passed
         // separately to tensor_evaluator so tree navigation works for any delta.
-        let delta = bcot.delta_a;
+        let delta = bcot.delta_gb;
 
         // ----- Sample random choice bits -----
         let mut rng = ChaCha12Rng::seed_from_u64(seed);
         let choices: Vec<bool> = (0..n).map(|_| rng.random_bool(0.5)).collect();
 
         // ----- Perform the batch bCOT (A sends, B evaluates with choices) -----
-        // transfer_a_to_b uses delta_a → mac = K[0] XOR choice * delta_a
-        // Garbler holds sender_keys; evaluator holds receiver_macs.
-        let cot = bcot.transfer_a_to_b(&choices);
+        // transfer_gb_to_ev uses delta_gb → mac = K[0] XOR choice * delta_gb
+        // Garbler holds sender_keys; ev holds receiver_macs.
+        let cot = bcot.transfer_gb_to_ev(&choices);
         let a_keys: Vec<Key> = cot.sender_keys;    // LSB = 0 invariant (Key::new)
-        let a_macs: Vec<Mac> = cot.receiver_macs;  // mac = K[0] XOR choice * delta_a
+        let a_macs: Vec<Mac> = cot.receiver_macs;  // mac = K[0] XOR choice * delta_gb
 
         // ----- Sample random T shares (each a length-m column vector) -----
         let mut t_gen = BlockMatrix::new(m, 1);

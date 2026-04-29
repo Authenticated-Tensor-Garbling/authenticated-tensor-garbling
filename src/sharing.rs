@@ -131,8 +131,8 @@ pub fn build_share<R: Rng + CryptoRng>(rng: &mut R, bit: bool, delta: &Delta) ->
 /// paper's "publicly reveal with appropriate MACs".
 ///
 /// `gen_share.key` is A's sender key; `gen_share.mac` is A's sender MAC (committed
-/// under δ_b). `eval_share.key` is B's sender key; `eval_share.mac` is B's sender
-/// MAC (committed under δ_a). The two `.verify` calls below reassemble properly
+/// under δ_ev). `eval_share.key` is B's sender key; `eval_share.mac` is B's sender
+/// MAC (committed under δ_gb). The two `.verify` calls below reassemble properly
 /// aligned IT-MAC pairs so that each side checks `mac == key XOR bit*delta` under
 /// the correct verifier's delta. Panics with "MAC mismatch in share" on tampered
 /// shares.
@@ -144,21 +144,21 @@ pub fn build_share<R: Rng + CryptoRng>(rng: &mut R, bit: bool, delta: &Delta) ->
 pub(crate) fn verify_cross_party(
     gen_share: &AuthBitShare,
     eval_share: &AuthBitShare,
-    delta_a: &Delta,
-    delta_b: &Delta,
+    delta_gb: &Delta,
+    delta_ev: &Delta,
 ) {
     AuthBitShare {
         key: eval_share.key,
         mac: gen_share.mac,
         value: gen_share.value,
     }
-    .verify(delta_b);
+    .verify(delta_ev);
     AuthBitShare {
         key: gen_share.key,
         mac: eval_share.mac,
         value: eval_share.value,
     }
-    .verify(delta_a);
+    .verify(delta_gb);
 }
 
 /// Both parties' views of an authenticated bit, paired together.
@@ -170,7 +170,7 @@ pub(crate) fn verify_cross_party(
 ///
 /// The additive-sharing relation is `[x] = gen_share.value XOR eval_share.value`
 /// (see `full_bit()`); MAC invariants are verified under each party's delta by
-/// `verify(&delta_a, &delta_b)`.
+/// `verify(&delta_gb, &delta_ev)`.
 #[derive(Debug, Clone)]
 pub struct AuthBit {
     /// Generator's share of the auth bit
@@ -186,7 +186,7 @@ impl AuthBit {
     }
 
     /// verify auth bits
-    pub fn verify(&self, delta_a: &Delta, delta_b: &Delta) {
+    pub fn verify(&self, delta_gb: &Delta, delta_ev: &Delta) {
         // Reconstruct shares for testing
         let r = AuthBitShare {
             key: self.eval_share.key,
@@ -198,8 +198,8 @@ impl AuthBit {
             mac: self.eval_share.mac,
             value: self.eval_share.bit(),
         };
-        r.verify(delta_b);
-        s.verify(delta_a);
+        r.verify(delta_ev);
+        s.verify(delta_gb);
     }
 }
 
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_build_share_key_lsb_is_zero() {
         let mut rng = ChaCha12Rng::seed_from_u64(7);
-        let delta = Delta::random(&mut rng);
+        let delta = Delta::random_gb(&mut rng);
         for bit in [false, true] {
             let share = build_share(&mut rng, bit, &delta);
             assert!(!share.key.as_block().lsb(),
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn test_build_share_mac_invariant_holds() {
         let mut rng = ChaCha12Rng::seed_from_u64(11);
-        let delta = Delta::random(&mut rng);
+        let delta = Delta::random_gb(&mut rng);
         for bit in [false, true] {
             let share = build_share(&mut rng, bit, &delta);
             share.verify(&delta);   // panics on mismatch

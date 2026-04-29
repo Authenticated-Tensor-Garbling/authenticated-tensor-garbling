@@ -27,7 +27,7 @@ use crate::{
 /// `seeds[j]` writes children at `seeds[2j]` (even, "lower half" → `R ⊕ parent`)
 /// and `seeds[2j+1]` (odd, "upper half" → `R`). The mapping is
 /// consistent with the leaf-expansion + `(missing >> k) & 1` path-bit reads in
-/// `gen_unary_outer_product` and the eval-side `missing = (missing << 1) | bit`
+/// `gen_unary_outer_product` and the ev-side `missing = (missing << 1) | bit`
 /// accumulator (bit=0 → even child = lower half, bit=1 → odd child = upper half;
 /// see paper's `α_i := α_{i-1} + a_i·2^i` adapted to interleaved indexing).
 ///
@@ -128,14 +128,14 @@ pub(crate) fn gen_unary_outer_product(
 ///
 /// Mirrors `gen_populate_seeds_mem_optimized` under the paper's improved
 /// one-hot construction. For each non-missing parent at level `i-1`, the
-/// evaluator's seed equals the garbler's; the active R is recovered from
+/// ev's seed equals the garbler's; the active R is recovered from
 /// `G_i` per paper `5_online.tex:81-83`:
 ///
 /// ```text
 ///   R_{i, α_{i-1}}^ev := G_i ⊕ (⊕_{j ≠ α_{i-1}} R_{i,j}^ev) ⊕ (A_i ⊕ a_i·Δ_gb)
 /// ```
 ///
-/// where `A_i ⊕ a_i·Δ_gb = x[n-1-i]` is the evaluator's MAC for level i. The
+/// where `A_i ⊕ a_i·Δ_gb = x[n-1-i]` is the ev's MAC for level i. The
 /// recovered R differs from the garbler's by `a_i·Δ_gb`, which propagates the
 /// missing-path Δ-offset invariant into the next level's children:
 ///
@@ -145,12 +145,12 @@ pub(crate) fn gen_unary_outer_product(
 ///
 /// Level-0 init also changes from HK21's TCCR-based two-branch dispatch to
 /// the paper's direct assignment: BOTH `seeds[0]` and `seeds[1]` receive the
-/// evaluator's MAC `x[n-1]` (= `A_0 ⊕ a_0·Δ_gb`). The branching bit `a_0`
+/// ev's MAC `x[n-1]` (= `A_0 ⊕ a_0·Δ_gb`). The branching bit `a_0`
 /// only enters via the `missing` accumulator. The garbler's S_{0,*} differ
 /// from each other by Δ, so the eval value matches gb's at one position and
 /// is Δ-shifted at the other — exactly as the missing-path invariant requires.
 ///
-/// `a_bits` is the evaluator's explicit choice vector — passed separately
+/// `a_bits` is the ev's explicit choice vector — passed separately
 /// from `x` (the MAC) so tree navigation works for any Δ.lsb (paper assumes
 /// MAC LSB = bit; the codebase generalizes).
 ///
@@ -177,7 +177,7 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
 
     let mut seeds: Vec<Block> = vec![Block::default(); 1 << n];
 
-    // Level-0 init (paper step 2): both positions receive the evaluator's MAC.
+    // Level-0 init (paper step 2): both positions receive the ev's MAC.
     // Per the missing-path invariant, seeds[α_0]^ev = seeds[α_0]^gb ⊕ Δ and
     // seeds[1-α_0]^ev = seeds[1-α_0]^gb. Since gb writes A_0⊕Δ at index 0 and
     // A_0 at index 1, eval's MAC `x[n-1] = A_0 ⊕ a_0·Δ` satisfies both
@@ -236,7 +236,7 @@ pub(crate) fn eval_populate_seeds_mem_optimized(
 /// Evaluator's leaf-expansion + Z accumulation counterpart to `gen_unary_outer_product`.
 ///
 /// Combines the reconstructed `seeds` (with `seeds[missing] == Block::default()`),
-/// the garbler's leaf ciphertexts `gen_cts`, the evaluator's `y` share (T^ev),
+/// the garbler's leaf ciphertexts `gen_cts`, the ev's `y` share (T^ev),
 /// and the `missing` index to (a) write Z_eval into `out` and (b) return the
 /// recovered missing-leaf column values (for optional downstream use).
 ///

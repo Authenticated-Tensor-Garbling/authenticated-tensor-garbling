@@ -32,7 +32,7 @@ pub const FIXED_KEY: [u8; 16] = [
 /// 2019/074) depends on fixed-key AES being correlation-robust, not on the
 /// key being hidden. Any constant key works; the specific bytes are
 /// arbitrary. Do not replace this with a per-session key — doing so would
-/// break interoperability between garbler and evaluator.
+/// break interoperability between garbler and ev.
 pub static FIXED_KEY_AES: Lazy<FixedKeyAes> = Lazy::new(|| FixedKeyAes {
     aes: Aes128Enc::new_from_slice(&FIXED_KEY).unwrap(),
 });

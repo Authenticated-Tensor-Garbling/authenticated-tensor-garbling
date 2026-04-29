@@ -26,7 +26,7 @@ impl SemiHonestTensorPre {
             n,
             m,
             chunking_factor,
-            delta: Delta::random(&mut rand::rng()),
+            delta: Delta::random_gb(&mut rand::rng()),
             x_labels: Vec::with_capacity(n),
             y_labels: Vec::with_capacity(m),
             alpha_labels: Vec::with_capacity(n),

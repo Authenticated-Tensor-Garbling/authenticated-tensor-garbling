@@ -3,7 +3,7 @@
 //! authenticated bit values as the underlying `*_auth_bit_shares` triples.
 //!
 //! For each authenticated bit category (alpha, beta, correlated, gamma)
-//! and each lowering form (`_eval` under δ_b, `_gen` under δ_a):
+//! and each lowering form (`_eval` under δ_ev, `_gen` under δ_gb):
 //!
 //!   gen_block[i] XOR eval_block[i] == bit_i · delta
 //!
@@ -11,9 +11,9 @@
 //!
 //! Once these invariants hold for both backends, the `*_auth_bit_shares`
 //! fields are redundant given `_eval` + `_gen` + own δ:
-//!   bit  = LSB(party._eval XOR party._gen)        // since LSB(δ_a XOR δ_b) = 1
+//!   bit  = LSB(party._eval XOR party._gen)        // since LSB(δ_gb XOR δ_ev) = 1
 //!   mac  = party._eval                  (gen-side) | party._gen  (eval-side)
-//!   key  = party._gen XOR (bit · δ_a)   (gen-side) | party._eval XOR (bit · δ_b) (eval-side)
+//!   key  = party._gen XOR (bit · δ_gb)   (gen-side) | party._eval XOR (bit · δ_ev) (eval-side)
 //!
 //! Run as an integration test in `tests/` so it isolates from lib.rs's
 //! pre-existing red `test_auth_tensor_product` (carried over from 1.2(d)
@@ -68,38 +68,38 @@ struct AuthBitTruth {
 }
 
 fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &AuthBitTruth) {
-    let delta_a = gen_out.delta_a;
-    let delta_b = eval_out.delta_b;
+    let delta_gb = gen_out.delta_gb;
+    let delta_ev = eval_out.delta_ev;
 
     // alpha (length n) — both forms
     check_one("alpha _eval",
-        &gen_out.alpha_eval, &eval_out.alpha_eval,
+        &gen_out.alpha_dev, &eval_out.alpha_dev,
         &t.gen_alpha, &t.eval_alpha,
-        &delta_b);
+        &delta_ev);
     check_one("alpha _gen",
-        &gen_out.alpha_gen, &eval_out.alpha_gen,
+        &gen_out.alpha_dgb, &eval_out.alpha_dgb,
         &t.gen_alpha, &t.eval_alpha,
-        &delta_a);
+        &delta_gb);
 
     // beta (length m) — both forms
     check_one("beta _eval",
-        &gen_out.beta_eval, &eval_out.beta_eval,
+        &gen_out.beta_dev, &eval_out.beta_dev,
         &t.gen_beta, &t.eval_beta,
-        &delta_b);
+        &delta_ev);
     check_one("beta _gen",
-        &gen_out.beta_gen, &eval_out.beta_gen,
+        &gen_out.beta_dgb, &eval_out.beta_dgb,
         &t.gen_beta, &t.eval_beta,
-        &delta_a);
+        &delta_gb);
 
     // correlated `l_gamma*` (length n*m, column-major) — both forms
     check_one("correlated _eval",
-        &gen_out.correlated_eval, &eval_out.correlated_eval,
+        &gen_out.correlated_dev, &eval_out.correlated_dev,
         &t.gen_corr, &t.eval_corr,
-        &delta_b);
+        &delta_ev);
     check_one("correlated _gen",
-        &gen_out.correlated_gen, &eval_out.correlated_gen,
+        &gen_out.correlated_dgb, &eval_out.correlated_dgb,
         &t.gen_corr, &t.eval_corr,
-        &delta_a);
+        &delta_gb);
 
     // gamma `l_gamma` output mask (length n*m, column-major) — both forms.
     // Truth slices come from `t.gen_gamma` / `t.eval_gamma` extracted from
@@ -107,13 +107,13 @@ fn check_all(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &AuthBitTrut
     // gamma_auth_bit_shares (Option B for compute_lambda_gamma retired
     // it along with the gate-semantics check).
     check_one("gamma _eval",
-        &gen_out.gamma_eval, &eval_out.gamma_eval,
+        &gen_out.gamma_dev, &eval_out.gamma_dev,
         &t.gen_gamma, &t.eval_gamma,
-        &delta_b);
+        &delta_ev);
     check_one("gamma _gen",
-        &gen_out.gamma_gen, &eval_out.gamma_gen,
+        &gen_out.gamma_dgb, &eval_out.gamma_dgb,
         &t.gen_gamma, &t.eval_gamma,
-        &delta_a);
+        &delta_gb);
 }
 
 /// Bonus: also verify the recovery formula -- given (_eval, _gen, own_delta)
@@ -142,20 +142,20 @@ fn check_bit_recovery(gen_out: &AuthTensorGen, eval_out: &AuthTensorEval, t: &Au
     }
 
     check_recovery("alpha",
-        &gen_out.alpha_eval, &gen_out.alpha_gen,
-        &eval_out.alpha_eval, &eval_out.alpha_gen,
+        &gen_out.alpha_dev, &gen_out.alpha_dgb,
+        &eval_out.alpha_dev, &eval_out.alpha_dgb,
         &t.gen_alpha, &t.eval_alpha);
     check_recovery("beta",
-        &gen_out.beta_eval, &gen_out.beta_gen,
-        &eval_out.beta_eval, &eval_out.beta_gen,
+        &gen_out.beta_dev, &gen_out.beta_dgb,
+        &eval_out.beta_dev, &eval_out.beta_dgb,
         &t.gen_beta, &t.eval_beta);
     check_recovery("correlated",
-        &gen_out.correlated_eval, &gen_out.correlated_gen,
-        &eval_out.correlated_eval, &eval_out.correlated_gen,
+        &gen_out.correlated_dev, &gen_out.correlated_dgb,
+        &eval_out.correlated_dev, &eval_out.correlated_dgb,
         &t.gen_corr, &t.eval_corr);
     check_recovery("gamma",
-        &gen_out.gamma_eval, &gen_out.gamma_gen,
-        &eval_out.gamma_eval, &eval_out.gamma_gen,
+        &gen_out.gamma_dev, &gen_out.gamma_dgb,
+        &eval_out.gamma_dev, &eval_out.gamma_dgb,
         &t.gen_gamma, &t.eval_gamma);
 }
 

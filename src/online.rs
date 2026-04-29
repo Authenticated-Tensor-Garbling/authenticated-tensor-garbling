@@ -1,4 +1,4 @@
-//! Online phase primitives that span both garbler and evaluator views.
+//! Online phase primitives that span both garbler and ev views.
 //!
 //! Hosts `block_check_zero` (per-index full-block equality) and
 //! `block_hash_check_zero` (the paper's `H({V_w})` digest). `open()` and its
@@ -27,14 +27,14 @@ use crate::block::Block;
 /// digests imply per-index equality by collision-resistance of the hash.
 ///
 /// Returns:
-/// - `true` ("pass") if `gen_blocks.len() == eval_blocks.len()` and every
+/// - `true` ("pass") if `gb_blocks.len() == ev_blocks.len()` and every
 ///   per-index pair is equal.
 /// - `false` ("abort") on the first mismatch (or length mismatch).
-pub fn block_check_zero(gen_blocks: &[Block], eval_blocks: &[Block]) -> bool {
-    if gen_blocks.len() != eval_blocks.len() {
+pub fn block_check_zero(gb_blocks: &[Block], ev_blocks: &[Block]) -> bool {
+    if gb_blocks.len() != ev_blocks.len() {
         return false;
     }
-    for (g, e) in gen_blocks.iter().zip(eval_blocks.iter()) {
+    for (g, e) in gb_blocks.iter().zip(ev_blocks.iter()) {
         if g != e {
             return false;
         }

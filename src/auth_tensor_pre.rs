@@ -10,7 +10,7 @@ use rand_chacha::ChaCha12Rng;
 /// (references/appendix_krrw_pre.tex §3.1 lines 415-444).
 ///
 /// Inputs: two LeakyTriples `prime` (consumed) and `dprime` (borrowed), both with the
-/// same (n, m, delta_a, delta_b). Output: a single combined LeakyTriple.
+/// same (n, m, delta_gb, delta_ev). Output: a single combined LeakyTriple.
 ///
 /// Algorithm (paper lines 427-443):
 ///   x := x' XOR x''                           (D-01)
@@ -20,7 +20,7 @@ use rand_chacha::ChaCha12Rng;
 ///
 /// The `itmac{x''}{Δ} ⊗ d` term is computed locally since d is public (paper line
 /// 437). For each (i, j), the IT-MAC share at column-major index j*n+i is
-/// `dprime.gen_x_shares[i]` if d[j] == 1, else the zero share
+/// `dprime.gb_x_shares[i]` if d[j] == 1, else the zero share
 /// `AuthBitShare::default()`.
 ///
 /// Panics: "MAC mismatch in share" if any assembled d share fails MAC verification
@@ -29,48 +29,48 @@ pub(crate) fn two_to_one_combine(
     prime: LeakyTriple,
     dprime: &LeakyTriple,
 ) -> LeakyTriple {
-    // Precondition: same (n, m, delta_a, delta_b). The outer combine_leaky_triples
+    // Precondition: same (n, m, delta_gb, delta_ev). The outer combine_leaky_triples
     // already asserts this, but re-assert for unit-test safety (per 05-CONTEXT D-11).
     assert_eq!(prime.n, dprime.n, "two_to_one_combine: n mismatch");
     assert_eq!(prime.m, dprime.m, "two_to_one_combine: m mismatch");
     assert_eq!(
-        prime.delta_a.as_block(),
-        dprime.delta_a.as_block(),
-        "two_to_one_combine: delta_a mismatch"
+        prime.delta_gb.as_block(),
+        dprime.delta_gb.as_block(),
+        "two_to_one_combine: delta_gb mismatch"
     );
     assert_eq!(
-        prime.delta_b.as_block(),
-        dprime.delta_b.as_block(),
-        "two_to_one_combine: delta_b mismatch"
+        prime.delta_ev.as_block(),
+        dprime.delta_ev.as_block(),
+        "two_to_one_combine: delta_ev mismatch"
     );
     let n = prime.n;
     let m = prime.m;
-    let delta_a = prime.delta_a;
-    let delta_b = prime.delta_b;
+    let delta_gb = prime.delta_gb;
+    let delta_ev = prime.delta_ev;
 
     // ---- Step A: assemble d shares (paper line 428: d := y' XOR y'') ----
     // AuthBitShare + AuthBitShare is XOR field-wise per src/sharing.rs:66-77.
-    let gen_d: Vec<AuthBitShare> = (0..m)
-        .map(|j| prime.gen_y_shares[j] + dprime.gen_y_shares[j])
+    let gb_d: Vec<AuthBitShare> = (0..m)
+        .map(|j| prime.gb_y_shares[j] + dprime.gb_y_shares[j])
         .collect();
-    let eval_d: Vec<AuthBitShare> = (0..m)
-        .map(|j| prime.eval_y_shares[j] + dprime.eval_y_shares[j])
+    let ev_d: Vec<AuthBitShare> = (0..m)
+        .map(|j| prime.ev_y_shares[j] + dprime.ev_y_shares[j])
         .collect();
 
     // ---- Step B: MAC-verify d and extract d bits (paper line 428) ----
     // In-process substitute for "publicly reveal with appropriate MACs".
     let mut d_bits: Vec<bool> = Vec::with_capacity(m);
     for j in 0..m {
-        verify_cross_party(&gen_d[j], &eval_d[j], &delta_a, &delta_b);
-        d_bits.push(gen_d[j].value ^ eval_d[j].value);
+        verify_cross_party(&gb_d[j], &ev_d[j], &delta_gb, &delta_ev);
+        d_bits.push(gb_d[j].value ^ ev_d[j].value);
     }
 
     // ---- Step C: x = x' XOR x'' (paper line 427, D-01) ----
-    let gen_x: Vec<AuthBitShare> = (0..n)
-        .map(|i| prime.gen_x_shares[i] + dprime.gen_x_shares[i])
+    let x_dgb: Vec<AuthBitShare> = (0..n)
+        .map(|i| prime.gb_x_shares[i] + dprime.gb_x_shares[i])
         .collect();
-    let eval_x: Vec<AuthBitShare> = (0..n)
-        .map(|i| prime.eval_x_shares[i] + dprime.eval_x_shares[i])
+    let ev_x: Vec<AuthBitShare> = (0..n)
+        .map(|i| prime.ev_x_shares[i] + dprime.ev_x_shares[i])
         .collect();
 
     // ---- Step D: Z = Z' XOR Z'' XOR (x'' tensor d), paper line 443 ----
@@ -84,36 +84,36 @@ pub(crate) fn two_to_one_combine(
             let k = j * n + i;
             // Rightmost term: x''_i if d[j] else ZERO
             let dx_gen = if d_bits[j] {
-                dprime.gen_x_shares[i]
+                dprime.gb_x_shares[i]
             } else {
                 zero_share
             };
             let dx_eval = if d_bits[j] {
-                dprime.eval_x_shares[i]
+                dprime.ev_x_shares[i]
             } else {
                 zero_share
             };
-            gen_z.push(prime.gen_z_shares[k] + dprime.gen_z_shares[k] + dx_gen);
-            eval_z.push(prime.eval_z_shares[k] + dprime.eval_z_shares[k] + dx_eval);
+            gen_z.push(prime.gb_z_shares[k] + dprime.gb_z_shares[k] + dx_gen);
+            eval_z.push(prime.ev_z_shares[k] + dprime.ev_z_shares[k] + dx_eval);
         }
     }
 
     // ---- Step E: y = y' (paper line 427, D-02) ----
     // Move the vectors out of prime (it is owned); no clone needed.
-    let gen_y = prime.gen_y_shares;
-    let eval_y = prime.eval_y_shares;
+    let y_dgb = prime.gb_y_shares;
+    let ev_y = prime.ev_y_shares;
 
     LeakyTriple {
         n,
         m,
-        delta_a,
-        delta_b,
-        gen_x_shares: gen_x,
-        gen_y_shares: gen_y,
-        gen_z_shares: gen_z,
-        eval_x_shares: eval_x,
-        eval_y_shares: eval_y,
-        eval_z_shares: eval_z,
+        delta_gb,
+        delta_ev,
+        gb_x_shares: x_dgb,
+        gb_y_shares: y_dgb,
+        gb_z_shares: gen_z,
+        ev_x_shares: ev_x,
+        ev_y_shares: ev_y,
+        ev_z_shares: eval_z,
     }
 }
 
@@ -169,7 +169,7 @@ pub fn verify_chunking_factor_cross_party(fpre_gen: &TensorFpreGen, fpre_eval: &
 /// lines 415-444) iteratively: start with `triples[0]`, fold the remaining B-1 triples
 /// into the accumulator one at a time via `two_to_one_combine`.
 ///
-/// PRECONDITION: All triples MUST share the same delta_a and delta_b. This is guaranteed
+/// PRECONDITION: All triples MUST share the same delta_gb and delta_ev. This is guaranteed
 /// when run_preprocessing uses a single shared IdealBCot instance. An assertion enforces
 /// this at runtime. If violated, the combining panics because XOR of shares under
 /// different deltas cannot preserve the MAC invariant mac = key XOR bit*delta.
@@ -196,23 +196,23 @@ pub fn combine_leaky_triples(
     assert_eq!(triples.len(), bucket_size, "triples.len() must equal bucket_size");
     assert!(bucket_size >= 1);
 
-    // W-04: Assert all triples share the same delta_a and delta_b before combining.
+    // W-04: Assert all triples share the same delta_gb and delta_ev before combining.
     // This invariant is guaranteed by run_preprocessing using a single shared IdealBCot.
     // If violated, the XOR combination MAC invariant mac = key XOR bit*delta breaks
     // because keys and MACs from different deltas cannot be XOR-combined correctly.
-    let delta_a = triples[0].delta_a;
-    let delta_b = triples[0].delta_b;
+    let delta_gb = triples[0].delta_gb;
+    let delta_ev = triples[0].delta_ev;
     for (idx, t) in triples.iter().enumerate() {
         assert_eq!(
-            t.delta_a.as_block(),
-            delta_a.as_block(),
-            "triple[{}] delta_a differs from triple[0] delta_a — all triples must share the same IdealBCot",
+            t.delta_gb.as_block(),
+            delta_gb.as_block(),
+            "triple[{}] delta_gb differs from triple[0] delta_gb — all triples must share the same IdealBCot",
             idx
         );
         assert_eq!(
-            t.delta_b.as_block(),
-            delta_b.as_block(),
-            "triple[{}] delta_b differs from triple[0] delta_b — all triples must share the same IdealBCot",
+            t.delta_ev.as_block(),
+            delta_ev.as_block(),
+            "triple[{}] delta_ev differs from triple[0] delta_ev — all triples must share the same IdealBCot",
             idx
         );
     }
@@ -253,37 +253,37 @@ pub fn combine_leaky_triples(
             n,
             m,
             chunking_factor,
-            delta_a,
-            alpha_auth_bit_shares: acc.gen_x_shares,
-            alpha_eval: vec![],
-            alpha_gen: vec![],
-            beta_auth_bit_shares: acc.gen_y_shares,
-            beta_eval: vec![],
-            beta_gen: vec![],
-            correlated_auth_bit_shares: acc.gen_z_shares,
-            correlated_eval: vec![],
-            correlated_gen: vec![],
+            delta_gb,
+            alpha_auth_bit_shares: acc.gb_x_shares,
+            alpha_dev: vec![],
+            alpha_dgb: vec![],
+            beta_auth_bit_shares: acc.gb_y_shares,
+            beta_dev: vec![],
+            beta_dgb: vec![],
+            correlated_auth_bit_shares: acc.gb_z_shares,
+            correlated_dev: vec![],
+            correlated_dgb: vec![],
             gamma_auth_bit_shares: vec![],
-            gamma_eval: vec![],
-            gamma_gen: vec![],
+            gamma_dev: vec![],
+            gamma_dgb: vec![],
         },
         TensorFpreEval {
             n,
             m,
             chunking_factor,
-            delta_b,
-            alpha_auth_bit_shares: acc.eval_x_shares,
-            alpha_eval: vec![],
-            alpha_gen: vec![],
-            beta_auth_bit_shares: acc.eval_y_shares,
-            beta_eval: vec![],
-            beta_gen: vec![],
-            correlated_auth_bit_shares: acc.eval_z_shares,
-            correlated_eval: vec![],
-            correlated_gen: vec![],
+            delta_ev,
+            alpha_auth_bit_shares: acc.ev_x_shares,
+            alpha_dev: vec![],
+            alpha_dgb: vec![],
+            beta_auth_bit_shares: acc.ev_y_shares,
+            beta_dev: vec![],
+            beta_dgb: vec![],
+            correlated_auth_bit_shares: acc.ev_z_shares,
+            correlated_dev: vec![],
+            correlated_dgb: vec![],
             gamma_auth_bit_shares: vec![],
-            gamma_eval: vec![],
-            gamma_gen: vec![],
+            gamma_dev: vec![],
+            gamma_dgb: vec![],
         },
     )
 }
@@ -294,11 +294,11 @@ pub fn combine_leaky_triples(
 /// row permutation; beta is untouched.
 ///
 /// Permutation semantics:
-///   new gen_x_shares[i]  = old gen_x_shares[perm[i]]   for i in 0..n
-///   new eval_x_shares[i] = old eval_x_shares[perm[i]]  for i in 0..n
+///   new gb_x_shares[i]  = old gb_x_shares[perm[i]]   for i in 0..n
+///   new ev_x_shares[i] = old ev_x_shares[perm[i]]  for i in 0..n
 ///   for each column j in 0..m, within the contiguous slice [j*n..(j+1)*n]:
-///     new gen_z_shares[j*n + i]  = old gen_z_shares[j*n + perm[i]]
-///     new eval_z_shares[j*n + i] = old eval_z_shares[j*n + perm[i]]
+///     new gb_z_shares[j*n + i]  = old gb_z_shares[j*n + perm[i]]
+///     new ev_z_shares[j*n + i] = old ev_z_shares[j*n + perm[i]]
 ///
 /// `perm.len()` must equal `triple.n`; otherwise this panics. The caller
 /// is responsible for constructing `perm` as a valid permutation of 0..n.
@@ -316,21 +316,21 @@ pub(crate) fn apply_permutation_to_triple(
 
     // Permute x shares (length n) — build new vecs by reading position
     // perm[i] from the original snapshot.
-    let orig_gen_x = triple.gen_x_shares.clone();
-    let orig_eval_x = triple.eval_x_shares.clone();
+    let orig_gen_x = triple.gb_x_shares.clone();
+    let orig_eval_x = triple.ev_x_shares.clone();
     for i in 0..n {
-        triple.gen_x_shares[i] = orig_gen_x[perm[i]];
-        triple.eval_x_shares[i] = orig_eval_x[perm[i]];
+        triple.gb_x_shares[i] = orig_gen_x[perm[i]];
+        triple.ev_x_shares[i] = orig_eval_x[perm[i]];
     }
 
     // Permute Z shares column-major: for each column j, permute the
     // i-index within the contiguous slice [j*n .. (j+1)*n].
-    let orig_gen_z = triple.gen_z_shares.clone();
-    let orig_eval_z = triple.eval_z_shares.clone();
+    let orig_gen_z = triple.gb_z_shares.clone();
+    let orig_eval_z = triple.ev_z_shares.clone();
     for j in 0..m {
         for i in 0..n {
-            triple.gen_z_shares[j * n + i] = orig_gen_z[j * n + perm[i]];
-            triple.eval_z_shares[j * n + i] = orig_eval_z[j * n + perm[i]];
+            triple.gb_z_shares[j * n + i] = orig_gen_z[j * n + perm[i]];
+            triple.ev_z_shares[j * n + i] = orig_eval_z[j * n + perm[i]];
         }
     }
 }
@@ -345,7 +345,7 @@ mod tests {
     use crate::auth_tensor_eval::AuthTensorEval;
 
     fn make_triples(n: usize, m: usize, count: usize) -> Vec<LeakyTriple> {
-        // Single shared IdealBCot — ALL triples get the same delta_a and delta_b.
+        // Single shared IdealBCot — ALL triples get the same delta_gb and delta_ev.
         let mut bcot = IdealBCot::new(42, 99);
         let mut triples = Vec::new();
         // Use cf=1 (single chunk) for these structural unit tests — they
@@ -377,22 +377,22 @@ mod tests {
     fn test_apply_permutation_identity_is_noop() {
         let triples = make_triples(4, 2, 1);
         let mut t = triples[0].clone();
-        let before_gen_x = t.gen_x_shares.clone();
-        let before_eval_x = t.eval_x_shares.clone();
-        let before_gen_y = t.gen_y_shares.clone();
-        let before_eval_y = t.eval_y_shares.clone();
-        let before_gen_z = t.gen_z_shares.clone();
-        let before_eval_z = t.eval_z_shares.clone();
+        let before_gen_x = t.gb_x_shares.clone();
+        let before_eval_x = t.ev_x_shares.clone();
+        let before_gen_y = t.gb_y_shares.clone();
+        let before_eval_y = t.ev_y_shares.clone();
+        let before_gen_z = t.gb_z_shares.clone();
+        let before_eval_z = t.ev_z_shares.clone();
 
         let perm: Vec<usize> = (0..t.n).collect();
         apply_permutation_to_triple(&mut t, &perm);
 
-        assert!(slices_eq(&t.gen_x_shares, &before_gen_x), "identity perm must not move gen_x");
-        assert!(slices_eq(&t.eval_x_shares, &before_eval_x), "identity perm must not move eval_x");
-        assert!(slices_eq(&t.gen_y_shares, &before_gen_y), "y is never permuted");
-        assert!(slices_eq(&t.eval_y_shares, &before_eval_y), "y is never permuted");
-        assert!(slices_eq(&t.gen_z_shares, &before_gen_z), "identity perm must not move gen_z");
-        assert!(slices_eq(&t.eval_z_shares, &before_eval_z), "identity perm must not move eval_z");
+        assert!(slices_eq(&t.gb_x_shares, &before_gen_x), "identity perm must not move x_dgb");
+        assert!(slices_eq(&t.ev_x_shares, &before_eval_x), "identity perm must not move ev_x");
+        assert!(slices_eq(&t.gb_y_shares, &before_gen_y), "y is never permuted");
+        assert!(slices_eq(&t.ev_y_shares, &before_eval_y), "y is never permuted");
+        assert!(slices_eq(&t.gb_z_shares, &before_gen_z), "identity perm must not move gen_z");
+        assert!(slices_eq(&t.ev_z_shares, &before_eval_z), "identity perm must not move eval_z");
     }
 
     #[test]
@@ -401,37 +401,37 @@ mod tests {
         let m = 2usize;
         let triples = make_triples(n, m, 1);
         let mut t = triples[0].clone();
-        let before_gen_x = t.gen_x_shares.clone();
-        let before_eval_x = t.eval_x_shares.clone();
-        let before_gen_y = t.gen_y_shares.clone();
-        let before_eval_y = t.eval_y_shares.clone();
-        let before_gen_z = t.gen_z_shares.clone();
-        let before_eval_z = t.eval_z_shares.clone();
+        let before_gen_x = t.gb_x_shares.clone();
+        let before_eval_x = t.ev_x_shares.clone();
+        let before_gen_y = t.gb_y_shares.clone();
+        let before_eval_y = t.ev_y_shares.clone();
+        let before_gen_z = t.gb_z_shares.clone();
+        let before_eval_z = t.ev_z_shares.clone();
 
         // Swap rows 0 and 1; leave 2 and 3 fixed.
         let perm = vec![1usize, 0, 2, 3];
         apply_permutation_to_triple(&mut t, &perm);
 
         // x: row 0 and row 1 swapped.
-        assert!(shares_eq(&t.gen_x_shares[0], &before_gen_x[1]));
-        assert!(shares_eq(&t.gen_x_shares[1], &before_gen_x[0]));
-        assert!(shares_eq(&t.gen_x_shares[2], &before_gen_x[2]));
-        assert!(shares_eq(&t.gen_x_shares[3], &before_gen_x[3]));
-        assert!(shares_eq(&t.eval_x_shares[0], &before_eval_x[1]));
-        assert!(shares_eq(&t.eval_x_shares[1], &before_eval_x[0]));
+        assert!(shares_eq(&t.gb_x_shares[0], &before_gen_x[1]));
+        assert!(shares_eq(&t.gb_x_shares[1], &before_gen_x[0]));
+        assert!(shares_eq(&t.gb_x_shares[2], &before_gen_x[2]));
+        assert!(shares_eq(&t.gb_x_shares[3], &before_gen_x[3]));
+        assert!(shares_eq(&t.ev_x_shares[0], &before_eval_x[1]));
+        assert!(shares_eq(&t.ev_x_shares[1], &before_eval_x[0]));
 
         // y must be unchanged.
-        assert!(slices_eq(&t.gen_y_shares, &before_gen_y));
-        assert!(slices_eq(&t.eval_y_shares, &before_eval_y));
+        assert!(slices_eq(&t.gb_y_shares, &before_gen_y));
+        assert!(slices_eq(&t.ev_y_shares, &before_eval_y));
 
         // Z: in each column j, indices 0 and 1 swap; indices 2 and 3 fixed.
         for j in 0..m {
-            assert!(shares_eq(&t.gen_z_shares[j * n + 0], &before_gen_z[j * n + 1]));
-            assert!(shares_eq(&t.gen_z_shares[j * n + 1], &before_gen_z[j * n + 0]));
-            assert!(shares_eq(&t.gen_z_shares[j * n + 2], &before_gen_z[j * n + 2]));
-            assert!(shares_eq(&t.gen_z_shares[j * n + 3], &before_gen_z[j * n + 3]));
-            assert!(shares_eq(&t.eval_z_shares[j * n + 0], &before_eval_z[j * n + 1]));
-            assert!(shares_eq(&t.eval_z_shares[j * n + 1], &before_eval_z[j * n + 0]));
+            assert!(shares_eq(&t.gb_z_shares[j * n + 0], &before_gen_z[j * n + 1]));
+            assert!(shares_eq(&t.gb_z_shares[j * n + 1], &before_gen_z[j * n + 0]));
+            assert!(shares_eq(&t.gb_z_shares[j * n + 2], &before_gen_z[j * n + 2]));
+            assert!(shares_eq(&t.gb_z_shares[j * n + 3], &before_gen_z[j * n + 3]));
+            assert!(shares_eq(&t.ev_z_shares[j * n + 0], &before_eval_z[j * n + 1]));
+            assert!(shares_eq(&t.ev_z_shares[j * n + 1], &before_eval_z[j * n + 0]));
         }
     }
 
@@ -499,41 +499,41 @@ mod tests {
         // MAC invariant on every combined share (sanity that d-reveal didn't corrupt shares).
         for i in 0..n {
             verify_cross_party(
-                &combined.gen_x_shares[i],
-                &combined.eval_x_shares[i],
-                &combined.delta_a,
-                &combined.delta_b,
+                &combined.gb_x_shares[i],
+                &combined.ev_x_shares[i],
+                &combined.delta_gb,
+                &combined.delta_ev,
             );
         }
         for j in 0..m {
             verify_cross_party(
-                &combined.gen_y_shares[j],
-                &combined.eval_y_shares[j],
-                &combined.delta_a,
-                &combined.delta_b,
+                &combined.gb_y_shares[j],
+                &combined.ev_y_shares[j],
+                &combined.delta_gb,
+                &combined.delta_ev,
             );
         }
         for k in 0..(n * m) {
             verify_cross_party(
-                &combined.gen_z_shares[k],
-                &combined.eval_z_shares[k],
-                &combined.delta_a,
-                &combined.delta_b,
+                &combined.gb_z_shares[k],
+                &combined.ev_z_shares[k],
+                &combined.delta_gb,
+                &combined.delta_ev,
             );
         }
 
         // Product invariant: Z_full[j*n+i] == x_full[i] AND y_full[j].
         let x_full: Vec<bool> = (0..n)
-            .map(|i| combined.gen_x_shares[i].value ^ combined.eval_x_shares[i].value)
+            .map(|i| combined.gb_x_shares[i].value ^ combined.ev_x_shares[i].value)
             .collect();
         let y_full: Vec<bool> = (0..m)
-            .map(|j| combined.gen_y_shares[j].value ^ combined.eval_y_shares[j].value)
+            .map(|j| combined.gb_y_shares[j].value ^ combined.ev_y_shares[j].value)
             .collect();
         for j in 0..m {
             for i in 0..n {
                 let k = j * n + i;
                 let z_full =
-                    combined.gen_z_shares[k].value ^ combined.eval_z_shares[k].value;
+                    combined.gb_z_shares[k].value ^ combined.ev_z_shares[k].value;
                 assert_eq!(
                     z_full,
                     x_full[i] & y_full[j],
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "MAC mismatch in share")]
     fn test_two_to_one_combine_tampered_d_panics() {
-        // TEST-05 tamper path: flip one y'' value bit on the eval side without touching
+        // TEST-05 tamper path: flip one y'' value bit on the ev side without touching
         // the MAC. The assembled d[0] share (d = y' XOR y'') now has inconsistent
         // (value, mac, key) and verify_cross_party inside two_to_one_combine Step B
         // detects the mismatch and panics. Matches the paper's "publicly reveal with
@@ -560,9 +560,9 @@ mod tests {
         let t0 = triples[0].clone();
         let mut t1 = triples[1].clone();
 
-        // Tamper: flip the value bit of eval_y_shares[0] without updating the MAC.
+        // Tamper: flip the value bit of ev_y_shares[0] without updating the MAC.
         // The assembled d share for j=0 will fail verify_cross_party.
-        t1.eval_y_shares[0].value = !t1.eval_y_shares[0].value;
+        t1.ev_y_shares[0].value = !t1.ev_y_shares[0].value;
 
         // Must panic with "MAC mismatch in share" inside two_to_one_combine Step B.
         let _ = two_to_one_combine(t0, &t1);
@@ -593,24 +593,24 @@ mod tests {
             verify_cross_party(
                 &gen_out.alpha_auth_bit_shares[i],
                 &eval_out.alpha_auth_bit_shares[i],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
         for j in 0..m {
             verify_cross_party(
                 &gen_out.beta_auth_bit_shares[j],
                 &eval_out.beta_auth_bit_shares[j],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
         for k in 0..(n * m) {
             verify_cross_party(
                 &gen_out.correlated_auth_bit_shares[k],
                 &eval_out.correlated_auth_bit_shares[k],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
 
@@ -683,24 +683,24 @@ mod tests {
             verify_cross_party(
                 &gen_out.alpha_auth_bit_shares[i],
                 &eval_out.alpha_auth_bit_shares[i],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
         for j in 0..m {
             verify_cross_party(
                 &gen_out.beta_auth_bit_shares[j],
                 &eval_out.beta_auth_bit_shares[j],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
         for k in 0..(n * m) {
             verify_cross_party(
                 &gen_out.correlated_auth_bit_shares[k],
                 &eval_out.correlated_auth_bit_shares[k],
-                &gen_out.delta_a,
-                &eval_out.delta_b,
+                &gen_out.delta_gb,
+                &eval_out.delta_ev,
             );
         }
 

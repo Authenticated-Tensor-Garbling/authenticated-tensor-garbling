@@ -26,29 +26,34 @@ impl Delta {
         self
     }
 
-    /// Generate a random block using the provided RNG
+    /// Generate a random Δ_gb (the garbler's global key; LSB = 1).
+    ///
+    /// Pairs with `Delta::random_ev` (LSB=0) so that
+    /// `lsb(Δ_gb ⊕ Δ_ev) = 1`, the precondition required by
+    /// Π_LeakyTensor Construction 2's masked reveal (paper §F).
     #[inline]
-    pub fn random<R: Rng>(rng: &mut R) -> Self {
+    pub fn random_gb<R: Rng>(rng: &mut R) -> Self {
         // Self::new() sets the LSB to 1
         Self::new(Block::from(rng.random::<[u8; 16]>()))
     }
 
     /// Creates a new Delta with an explicit pointer-bit value.
     ///
-    /// Used when the two parties' deltas must satisfy `lsb(Δ_A ⊕ Δ_B) == 1`
-    /// (paper §F requires this for Pi_LeakyTensor Construction 2's masked reveal).
+    /// Used when the two parties' deltas must satisfy `lsb(Δ_gb ⊕ Δ_ev) == 1`
+    /// (paper §F requires this for Π_LeakyTensor Construction 2's masked reveal).
     #[inline]
     pub fn new_with_lsb(mut value: Block, lsb_value: bool) -> Self {
         value.set_lsb(lsb_value);
         Self(value)
     }
 
-    /// Generate a random Party-B Delta (LSB cleared to 0).
+    /// Generate a random Δ_ev (the ev's global key; LSB cleared to 0).
     ///
-    /// Pairs with `Delta::random` (LSB=1) so that `lsb(delta_a ⊕ delta_b) == 1`,
-    /// which is required by Pi_LeakyTensor Construction 2's masked reveal.
+    /// Pairs with `Delta::random_gb` (LSB=1) so that
+    /// `lsb(Δ_gb ⊕ Δ_ev) = 1`, the precondition required by
+    /// Π_LeakyTensor Construction 2's masked reveal (paper §F).
     #[inline]
-    pub fn random_b<R: Rng>(rng: &mut R) -> Self {
+    pub fn random_ev<R: Rng>(rng: &mut R) -> Self {
         Self::new_with_lsb(Block::from(rng.random::<[u8; 16]>()), false)
     }
 

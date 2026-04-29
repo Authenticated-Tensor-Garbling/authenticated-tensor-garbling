@@ -22,8 +22,8 @@ pub struct TensorProductEval {
     pub alpha_labels: BlockMatrix,
     pub beta_labels: BlockMatrix,
 
-    pub first_half_out: BlockMatrix,
-    pub second_half_out: BlockMatrix,
+    pub ev_first_half_out_dgb: BlockMatrix,
+    pub ev_second_half_out_dgb: BlockMatrix,
 }
 
 impl TensorProductEval {
@@ -37,8 +37,8 @@ impl TensorProductEval {
             y_labels: fpre_eval.y_labels,
             alpha_labels: BlockMatrix::constant(fpre_eval.n, 1, Block::default()),
             beta_labels: BlockMatrix::constant(fpre_eval.m, 1, Block::default()),
-            first_half_out: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
-            second_half_out: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
+            ev_first_half_out_dgb: BlockMatrix::new(fpre_eval.n, fpre_eval.m),
+            ev_second_half_out_dgb: BlockMatrix::new(fpre_eval.m, fpre_eval.n),
         }
     }
 
@@ -66,9 +66,9 @@ impl TensorProductEval {
 
             // IMPORTANT: transpose the out matrix before calling with_subrows for the second half
             let mut out = if first_half {
-                self.first_half_out.as_view_mut()
+                self.ev_first_half_out_dgb.as_view_mut()
             } else {
-                self.second_half_out.as_view_mut()
+                self.ev_second_half_out_dgb.as_view_mut()
             };
             
 
@@ -95,30 +95,30 @@ impl TensorProductEval {
     }
 
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        let mut eval_x = BlockMatrix::new(self.n, 1);
+        let mut ev_x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            eval_x[i] = self.x_labels[i];
+            ev_x[i] = self.x_labels[i];
         }
-        let mut eval_y = BlockMatrix::new(self.m, 1);
+        let mut ev_y = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            eval_y[j] = self.y_labels[j];
+            ev_y[j] = self.y_labels[j];
         }
 
-        (eval_x, eval_y)
+        (ev_x, ev_y)
     }
 
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        let mut eval_x = BlockMatrix::new(self.m, 1);
+        let mut ev_x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            eval_x[j] = self.y_labels[j];
+            ev_x[j] = self.y_labels[j];
         }
 
-        let mut eval_y = BlockMatrix::new(self.n, 1);
+        let mut ev_y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            eval_y[i] = self.alpha_labels[i];
+            ev_y[i] = self.alpha_labels[i];
         }
 
-        (eval_x, eval_y)
+        (ev_x, ev_y)
     }
 
     pub fn evaluate_first_half_outer_product(
@@ -126,8 +126,8 @@ impl TensorProductEval {
         chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
     ) {
-        let (eval_x, eval_y) = self.get_first_inputs();
-        self.eval_chunked_half_outer_product(&eval_x.as_view(), &eval_y.as_view(), chunk_levels, chunk_cts, true);
+        let (ev_x, ev_y) = self.get_first_inputs();
+        self.eval_chunked_half_outer_product(&ev_x.as_view(), &ev_y.as_view(), chunk_levels, chunk_cts, true);
     }
 
     pub fn evaluate_second_half_outer_product(
@@ -135,26 +135,26 @@ impl TensorProductEval {
         chunk_levels: Vec<Vec<Block>>,
         chunk_cts: Vec<Vec<Block>>,
     ) {
-        let (eval_x, eval_y) = self.get_second_inputs();
-        self.eval_chunked_half_outer_product(&eval_x.as_view(), &eval_y.as_view(), chunk_levels, chunk_cts, false);
+        let (ev_x, ev_y) = self.get_second_inputs();
+        self.eval_chunked_half_outer_product(&ev_x.as_view(), &ev_y.as_view(), chunk_levels, chunk_cts, false);
 
     }
 
     pub fn evaluate_final_outer_product(
         &mut self,
     ) -> BlockMatrix {
-        // NOTE: In the semi-honest variant the evaluator's correlated share
+        // NOTE: In the semi-honest variant the ev's correlated share
         // (alpha ⊗ beta) is always zero — alpha_labels is never populated from
         // preprocessing data, so there is no eval_alpha_beta term to XOR in here.
         // The authenticated path (auth_tensor_eval.rs) handles the non-zero case
         // via correlated_auth_bit_shares[j*n+i].mac.
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^= self.second_half_out[(j, i)];
+                self.ev_first_half_out_dgb[(i, j)] ^= self.ev_second_half_out_dgb[(j, i)];
             }
         }
 
-        self.first_half_out.clone()
+        self.ev_first_half_out_dgb.clone()
     }
 
 }

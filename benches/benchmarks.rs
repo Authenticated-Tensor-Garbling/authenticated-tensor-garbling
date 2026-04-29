@@ -94,13 +94,13 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 ///
 /// All P1 ciphertexts are κ-wide (no ρ widening); the protocol is unauthenticated.
 fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
-    let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
     // Garble output sizes are input-independent (determined by n/m/chunking
     // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
     // n > usize::BITS without tripping the encode_inputs bit-pack assert.
-    encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
-    let (first_levels, first_cts) = generator.garble_first_half();
-    let (second_levels, second_cts) = generator.garble_second_half();
+    encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
+    let (first_levels, first_cts) = gb.garble_first_half();
+    let (second_levels, second_cts) = gb.garble_second_half();
     // Paper-faithful: one κ-wide ciphertext per tree level.
     let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     // P1 narrow leaf ciphertext: κ bits per row.
@@ -125,13 +125,13 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// what the network simulator sleeps on and what the paper's communication
 /// formulas refer to.
 fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
-    let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+    let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
     // Garble output sizes are input-independent (determined by n/m/chunking
     // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
     // n > usize::BITS without tripping the encode_inputs bit-pack assert.
-    encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
-    let (first_levels, first_cts) = generator.garble_first_half_p2();
-    let (second_levels, second_cts) = generator.garble_second_half_p2();
+    encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
+    let (first_levels, first_cts) = gb.garble_first_half_p2();
+    let (second_levels, second_cts) = gb.garble_second_half_p2();
     // Paper-faithful: one κ-wide ciphertext per tree level.
     let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     // Wide leaf ciphertexts: κ + ρ bits per row (`6_total.tex:90`, Construction 4).
@@ -283,40 +283,40 @@ fn bench_online_p1(c: &mut Criterion) {
                     b.iter_custom(|iters| {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
-                            let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+                            let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
                             // Input encoding (preprocessing → input encoding → garbling).
                             // Done outside the timed region to preserve prior bench
                             // semantics (online compute = garble + evaluate + CheckZero).
                             // Use input=(0, 0) per run_full_protocol_1's convention.
-                            encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
+                            encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
 
                             let l_alpha_pub: Vec<bool> = vec![false; n];
                             let l_beta_pub:  Vec<bool> = vec![false; m];
 
                             let start = Instant::now();
 
-                            let (cl1, ct1) = generator.garble_first_half();
-                            evaluator.evaluate_first_half(cl1, ct1);
-                            let (cl2, ct2) = generator.garble_second_half();
-                            evaluator.evaluate_second_half(cl2, ct2);
-                            generator.garble_final();
-                            evaluator.evaluate_final();
+                            let (cl1, ct1) = gb.garble_first_half();
+                            ev.evaluate_first_half(cl1, ct1);
+                            let (cl2, ct2) = gb.garble_second_half();
+                            ev.evaluate_second_half(cl2, ct2);
+                            gb.garble_final();
+                            ev.evaluate_final();
 
-                            let gb_v_alpha_eval: Vec<Block> = generator.alpha_eval.clone();
-                            let ev_v_alpha_eval: Vec<Block> = evaluator.alpha_eval.clone();
-                            let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
-                            let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
+                            let gb_v_alpha_dev: Vec<Block> = gb.alpha_dev.clone();
+                            let ev_v_alpha_dev: Vec<Block> = ev.alpha_dev.clone();
+                            let gb_v_beta_dev:  Vec<Block> = gb.beta_dev.clone();
+                            let ev_v_beta_dev:  Vec<Block> = ev.beta_dev.clone();
 
                             let (e_gen_blocks, e_eval_blocks) = assemble_e_input_wire_blocks_p1(
                                 n, m,
-                                &gb_v_alpha_eval,
-                                &ev_v_alpha_eval,
-                                &gb_v_beta_eval,
-                                &ev_v_beta_eval,
+                                &gb_v_alpha_dev,
+                                &ev_v_alpha_dev,
+                                &gb_v_beta_dev,
+                                &ev_v_beta_dev,
                                 &l_alpha_pub,
                                 &l_beta_pub,
-                                &generator,
-                                &evaluator,
+                                &gb,
+                                &ev,
                             );
 
                             // Each party hashes its own block vector; in a real
@@ -335,8 +335,8 @@ fn bench_online_p1(c: &mut Criterion) {
                             let _ = black_box(e_gen_blocks);
                             let _ = black_box(e_eval_blocks);
                             let _ = black_box(_h_simulated_match);
-                            let _ = black_box(&generator);
-                            let _ = black_box(&evaluator);
+                            let _ = black_box(&gb);
+                            let _ = black_box(&ev);
                         }
 
                         total
@@ -400,37 +400,37 @@ fn bench_online_p2(c: &mut Criterion) {
                     b.iter_custom(|iters| {
                         let mut total = std::time::Duration::ZERO;
                         for _ in 0..iters {
-                            let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
+                            let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
                             // Input encoding (see P1 bench above for rationale).
-                            encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
+                            encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
 
                             let l_alpha_pub: Vec<bool> = vec![false; n];
                             let l_beta_pub:  Vec<bool> = vec![false; m];
 
                             let start = Instant::now();
 
-                            let (cl1, ct1) = generator.garble_first_half_p2();
-                            evaluator.evaluate_first_half_p2(cl1, ct1);
-                            let (cl2, ct2) = generator.garble_second_half_p2();
-                            evaluator.evaluate_second_half_p2(cl2, ct2);
-                            let (_d_gb_out, _gb_d_ev_out) = generator.garble_final_p2();
-                            let _ev_d_ev_out = evaluator.evaluate_final_p2();
+                            let (cl1, ct1) = gb.garble_first_half_p2();
+                            ev.evaluate_first_half_p2(cl1, ct1);
+                            let (cl2, ct2) = gb.garble_second_half_p2();
+                            ev.evaluate_second_half_p2(cl2, ct2);
+                            let (_d_gb_out, _gb_d_ev_out) = gb.garble_final_p2();
+                            let _ev_d_ev_out = ev.evaluate_final_p2();
 
-                            let gb_v_alpha_eval: Vec<Block> = generator.alpha_eval.clone();
-                            let ev_v_alpha_eval: Vec<Block> = evaluator.alpha_eval.clone();
-                            let gb_v_beta_eval:  Vec<Block> = generator.beta_eval.clone();
-                            let ev_v_beta_eval:  Vec<Block> = evaluator.beta_eval.clone();
+                            let gb_v_alpha_dev: Vec<Block> = gb.alpha_dev.clone();
+                            let ev_v_alpha_dev: Vec<Block> = ev.alpha_dev.clone();
+                            let gb_v_beta_dev:  Vec<Block> = gb.beta_dev.clone();
+                            let ev_v_beta_dev:  Vec<Block> = ev.beta_dev.clone();
 
                             let (c_gen_blocks, c_eval_blocks) = assemble_c_alpha_beta_blocks_p2(
                                 n, m,
-                                &gb_v_alpha_eval,
-                                &ev_v_alpha_eval,
-                                &gb_v_beta_eval,
-                                &ev_v_beta_eval,
+                                &gb_v_alpha_dev,
+                                &ev_v_alpha_dev,
+                                &gb_v_beta_dev,
+                                &ev_v_beta_dev,
                                 &l_alpha_pub,
                                 &l_beta_pub,
-                                &generator,
-                                &evaluator,
+                                &gb,
+                                &ev,
                             );
 
                             // Each party hashes its own block vector; honest
@@ -448,8 +448,8 @@ fn bench_online_p2(c: &mut Criterion) {
                             let _ = black_box(c_gen_blocks);
                             let _ = black_box(c_eval_blocks);
                             let _ = black_box(_h_simulated_match);
-                            let _ = black_box(&generator);
-                            let _ = black_box(&evaluator);
+                            let _ = black_box(&gb);
+                            let _ = black_box(&ev);
                         }
 
                         total
@@ -483,11 +483,11 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
         // accurate network-cost accounting (matches the synchronous P1 / P2
         // benches). Use a correlated `setup_auth_pair` so the bench traverses
         // a valid honest run — same setup as the rest of the bench file.
-        let (mut generator, mut throwaway_eval) = setup_auth_pair(n, m, chunking_factor);
-        encode_inputs(&mut generator, &mut throwaway_eval, 0, 0, &mut rand::rng());
-        let (first_levels, first_cts) = generator.garble_first_half();
-        let (second_levels, second_cts) = generator.garble_second_half();
-        generator.garble_final();
+        let (mut gb, mut throwaway_eval) = setup_auth_pair(n, m, chunking_factor);
+        encode_inputs(&mut gb, &mut throwaway_eval, 0, 0, &mut rand::rng());
+        let (first_levels, first_cts) = gb.garble_first_half();
+        let (second_levels, second_cts) = gb.garble_second_half();
+        gb.garble_final();
 
         // Paper-faithful: one κ-wide ciphertext per tree level.
         let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * block_sz).sum();
@@ -509,27 +509,27 @@ fn bench_online_with_networking_for_size(c: &mut Criterion, n: usize, m: usize) 
                     || {
                         // Correlated honest-run setup; encode_inputs runs in setup
                         // (not timed) per the P1/P2 bench convention.
-                        let (mut generator, mut evaluator) = setup_auth_pair(n, m, chunking_factor);
-                        encode_inputs(&mut generator, &mut evaluator, 0, 0, &mut rand::rng());
+                        let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
+                        encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
                         (
-                            generator,
-                            evaluator,
+                            gb,
+                            ev,
                             SimpleNetworkSimulator::new(100.0, 0),
                         )
                     },
-                    |(mut generator, mut evaluator, network)| async move {
-                        let (first_levels_inner, first_cts_inner) = generator.garble_first_half();
+                    |(mut gb, mut ev, network)| async move {
+                        let (first_levels_inner, first_cts_inner) = gb.garble_first_half();
                         let (second_levels_inner, second_cts_inner) =
-                            generator.garble_second_half();
-                        black_box(generator.garble_final());
+                            gb.garble_second_half();
+                        black_box(gb.garble_final());
 
                         network.send_size_with_metrics(total_bytes).await;
 
-                        evaluator
+                        ev
                             .evaluate_first_half(first_levels_inner, first_cts_inner);
-                        evaluator
+                        ev
                             .evaluate_second_half(second_levels_inner, second_cts_inner);
-                        black_box(evaluator.evaluate_final());
+                        black_box(ev.evaluate_final());
                     },
                     BatchSize::SmallInput,
                 )

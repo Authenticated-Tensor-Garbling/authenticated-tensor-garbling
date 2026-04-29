@@ -21,49 +21,49 @@ pub struct AuthTensorGen {
     n: usize,
     m: usize,
 
-    pub delta_a: Delta,
+    pub delta_gb: Delta,
 
-    /// Block-form sharings under δ_a (`_gen`) and δ_b (`_eval`); see
+    /// Block-form sharings under δ_gb (`_gen`) and δ_ev (`_eval`); see
     /// `TensorFpreGen` field doc for semantics. The Online layer operates
     /// purely on these XOR-share Blocks (paper `5_online.tex` §155–180,
     /// `6_total.tex` §136–180), no MAC/Key recovery required.
-    pub alpha_eval: Vec<Block>,
-    pub alpha_gen:  Vec<Block>,
-    pub beta_eval: Vec<Block>,
-    pub beta_gen:  Vec<Block>,
-    pub correlated_eval: Vec<Block>,
-    pub correlated_gen:  Vec<Block>,
-    pub gamma_eval: Vec<Block>,
-    pub gamma_gen:  Vec<Block>,
+    pub alpha_dev: Vec<Block>,
+    pub alpha_dgb:  Vec<Block>,
+    pub beta_dev: Vec<Block>,
+    pub beta_dgb:  Vec<Block>,
+    pub correlated_dev: Vec<Block>,
+    pub correlated_dgb:  Vec<Block>,
+    pub gamma_dev: Vec<Block>,
+    pub gamma_dgb:  Vec<Block>,
 
-    /// Gen's half of `[x D_a]^gb` — the gen-side IT-MAC wire-label sharing
-    /// of input `x` under δ_a. Length n. Populated by `encode_inputs`.
-    pub x_gen: Vec<Block>,
-    /// Gen's half of `[y D_a]^gb`. Length m.
-    pub y_gen: Vec<Block>,
-    /// Gen's half of `[(x ⊕ α) D_a]^gb` — the masked-input wire-label
-    /// sharing under δ_a, gen side. Length n. Populated by `encode_inputs`.
+    /// Gen's half of `[x D_gb]^gb` — the gb-side IT-MAC wire-label sharing
+    /// of input `x` under δ_gb. Length n. Populated by `encode_inputs`.
+    pub x_dgb: Vec<Block>,
+    /// Gen's half of `[y D_gb]^gb`. Length m.
+    pub y_dgb: Vec<Block>,
+    /// Gen's half of `[(x ⊕ α) D_gb]^gb` — the masked-input wire-label
+    /// sharing under δ_gb, gb side. Length n. Populated by `encode_inputs`.
     /// Used as the GGM-tree seed input by `garble_first_half`.
-    pub masked_x_gen: Vec<Block>,
-    /// Gen's half of (sharing of y XOR β under δ_a). Length m.
-    pub masked_y_gen: Vec<Block>,
+    pub masked_x_dgb: Vec<Block>,
+    /// Gen's half of (sharing of y XOR β under δ_gb). Length m.
+    pub masked_y_dgb: Vec<Block>,
     /// Gen's component of the cleartext masked-bit sharing for `d_x`. The
     /// 0-vec by convention -- gen covers both GGM-tree branches; eval owns
     /// the d-vector for traversal choice. Populated by input encoding.
-    pub masked_x_bits: Vec<bool>,
+    pub gb_masked_x_bits: Vec<bool>,
     /// Gen's component of the cleartext masked-bit sharing for `d_y`. 0-vec.
-    pub masked_y_bits: Vec<bool>,
+    pub gb_masked_y_bits: Vec<bool>,
 
-    pub first_half_out: BlockMatrix,
-    pub second_half_out: BlockMatrix,
+    pub gb_first_half_out_dgb: BlockMatrix,
+    pub gb_second_half_out_dgb: BlockMatrix,
 
     /// D_ev (rho-half) accumulator for the first half-outer-product. Phase 9 P2-02.
-    /// Mirrors `first_half_out` but accumulates the rho-half PRG outputs from
+    /// Mirrors `gb_first_half_out_dgb` but accumulates the rho-half PRG outputs from
     /// `gen_unary_outer_product_wide`. Written by `garble_first_half_p2` /
     /// `garble_second_half_p2`; consumed by `garble_final_p2`.
-    pub first_half_out_ev: BlockMatrix,
+    pub gb_first_half_out_dev: BlockMatrix,
     /// D_ev (rho-half) accumulator for the second half-outer-product. Phase 9 P2-02.
-    pub second_half_out_ev: BlockMatrix,
+    pub gb_second_half_out_dev: BlockMatrix,
 
     /// Set to `true` by `garble_final()`. `compute_lambda_gamma()` asserts
     /// this flag to prevent silent garbage output when called out of order.
@@ -88,25 +88,25 @@ impl AuthTensorGen {
             n: fpre_gen.n,
             m: fpre_gen.m,
             chunking_factor: fpre_gen.chunking_factor,
-            delta_a: fpre_gen.delta_a,
-            alpha_eval: fpre_gen.alpha_eval,
-            alpha_gen: fpre_gen.alpha_gen,
-            beta_eval: fpre_gen.beta_eval,
-            beta_gen: fpre_gen.beta_gen,
-            correlated_eval: fpre_gen.correlated_eval,
-            correlated_gen: fpre_gen.correlated_gen,
-            gamma_eval: fpre_gen.gamma_eval,
-            gamma_gen: fpre_gen.gamma_gen,
-            x_gen: Vec::new(),
-            y_gen: Vec::new(),
-            masked_x_gen: Vec::new(),
-            masked_y_gen: Vec::new(),
-            masked_x_bits: Vec::new(),
-            masked_y_bits: Vec::new(),
-            first_half_out: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
-            second_half_out: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
-            first_half_out_ev: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
-            second_half_out_ev: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
+            delta_gb: fpre_gen.delta_gb,
+            alpha_dev: fpre_gen.alpha_dev,
+            alpha_dgb: fpre_gen.alpha_dgb,
+            beta_dev: fpre_gen.beta_dev,
+            beta_dgb: fpre_gen.beta_dgb,
+            correlated_dev: fpre_gen.correlated_dev,
+            correlated_dgb: fpre_gen.correlated_dgb,
+            gamma_dev: fpre_gen.gamma_dev,
+            gamma_dgb: fpre_gen.gamma_dgb,
+            x_dgb: Vec::new(),
+            y_dgb: Vec::new(),
+            masked_x_dgb: Vec::new(),
+            masked_y_dgb: Vec::new(),
+            gb_masked_x_bits: Vec::new(),
+            gb_masked_y_bits: Vec::new(),
+            gb_first_half_out_dgb: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
+            gb_second_half_out_dgb: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
+            gb_first_half_out_dev: BlockMatrix::new(fpre_gen.n, fpre_gen.m),
+            gb_second_half_out_dev: BlockMatrix::new(fpre_gen.m, fpre_gen.n),
             final_computed: false,
         }
     }
@@ -131,12 +131,12 @@ impl AuthTensorGen {
 
             // Extract fields before closure
             let cipher = self.cipher;
-            let delta = self.delta_a;
+            let delta = self.delta_gb;
 
             let mut out = if first_half {
-                self.first_half_out.as_view_mut()
+                self.gb_first_half_out_dgb.as_view_mut()
             } else {
-                self.second_half_out.as_view_mut()
+                self.gb_second_half_out_dgb.as_view_mut()
             };
 
             out.with_subrows(self.chunking_factor * s, slice_size, |part| {
@@ -153,8 +153,8 @@ impl AuthTensorGen {
     }
 
     /// Wide-leaf variant of `gen_chunked_half_outer_product`. Phase 9 P2-02.
-    /// Writes BOTH the D_gb output (`first_half_out` or `second_half_out`) AND the
-    /// D_ev output (`first_half_out_ev` or `second_half_out_ev`) in a single pass
+    /// Writes BOTH the D_gb output (`gb_first_half_out_dgb` or `gb_second_half_out_dgb`) AND the
+    /// D_ev output (`gb_first_half_out_dev` or `gb_second_half_out_dev`) in a single pass
     /// over the GGM tree.
     ///
     /// Returns `(chunk_levels, chunk_cts)` where:
@@ -186,7 +186,7 @@ impl AuthTensorGen {
             }
 
             let cipher = self.cipher;
-            let delta = self.delta_a;
+            let delta = self.delta_gb;
             let chunking_factor = self.chunking_factor;
 
             // Borrow both D_gb and D_ev output halves disjointly. We split the
@@ -196,9 +196,9 @@ impl AuthTensorGen {
                 &mut BlockMatrix,
                 &mut BlockMatrix,
             ) = if first_half {
-                (&mut self.first_half_out, &mut self.first_half_out_ev)
+                (&mut self.gb_first_half_out_dgb, &mut self.gb_first_half_out_dev)
             } else {
-                (&mut self.second_half_out, &mut self.second_half_out_ev)
+                (&mut self.gb_second_half_out_dgb, &mut self.gb_second_half_out_dev)
             };
 
             let mut out_gb = out_gb_full.as_view_mut();
@@ -238,24 +238,24 @@ impl AuthTensorGen {
     /// Paper-aligned (`5_online.tex` §157, `6_total.tex` §137):
     /// the first half is `tensorgb(n, m, D_gb, [(a ⊕ λ_a) D_gb], [λ_b D_gb])`.
     /// In codebase naming with `a = x` and `λ_b = β`:
-    /// - `x[i] = masked_x_gen[i]` — gen's share `[(x ⊕ α) D_a]^gb` from input encoding.
-    /// - `y[j] = beta_gen[j]`     — gen's share `[β D_a]^gb` from preprocessing.
+    /// - `x[i] = masked_x_dgb[i]` — gb.s share `[(x ⊕ α) D_gb]^gb` from input encoding.
+    /// - `y[j] = beta_dgb[j]`     — gb.s share `[β D_gb]^gb` from preprocessing.
     ///
-    /// MUST be called after `encode_inputs` has populated `masked_x_gen`.
+    /// MUST be called after `encode_inputs` has populated `masked_x_dgb`.
     pub fn get_first_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        assert_eq!(self.masked_x_gen.len(), self.n,
-            "get_first_inputs: masked_x_gen not populated; call encode_inputs first");
-        assert_eq!(self.beta_gen.len(), self.m,
-            "get_first_inputs: beta_gen not populated by preprocessing");
+        assert_eq!(self.masked_x_dgb.len(), self.n,
+            "get_first_inputs: masked_x_dgb not populated; call encode_inputs first");
+        assert_eq!(self.beta_dgb.len(), self.m,
+            "get_first_inputs: beta_dgb not populated by preprocessing");
 
         let mut x = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            x[i] = self.masked_x_gen[i];
+            x[i] = self.masked_x_dgb[i];
         }
 
         let mut y = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            y[j] = self.beta_gen[j];
+            y[j] = self.beta_dgb[j];
         }
 
         (x, y)
@@ -266,24 +266,24 @@ impl AuthTensorGen {
     /// Paper-aligned (`5_online.tex` §158, `6_total.tex` §138):
     /// the second half is `tensorgb(m, n, D_gb, [(b ⊕ λ_b) D_gb], [a D_gb])`.
     /// In codebase naming with `a = x` and `b = y`:
-    /// - `x[j] = masked_y_gen[j]` — gen's share `[(y ⊕ β) D_a]^gb` from input encoding.
-    /// - `y[i] = x_gen[i]`        — gen's share `[x D_a]^gb` from input encoding.
+    /// - `x[j] = masked_y_dgb[j]` — gb.s share `[(y ⊕ β) D_gb]^gb` from input encoding.
+    /// - `y[i] = x_dgb[i]`        — gb.s share `[x D_gb]^gb` from input encoding.
     ///
-    /// MUST be called after `encode_inputs` has populated `masked_y_gen` / `x_gen`.
+    /// MUST be called after `encode_inputs` has populated `masked_y_dgb` / `x_dgb`.
     pub fn get_second_inputs(&self) -> (BlockMatrix, BlockMatrix) {
-        assert_eq!(self.masked_y_gen.len(), self.m,
-            "get_second_inputs: masked_y_gen not populated; call encode_inputs first");
-        assert_eq!(self.x_gen.len(), self.n,
-            "get_second_inputs: x_gen not populated; call encode_inputs first");
+        assert_eq!(self.masked_y_dgb.len(), self.m,
+            "get_second_inputs: masked_y_dgb not populated; call encode_inputs first");
+        assert_eq!(self.x_dgb.len(), self.n,
+            "get_second_inputs: x_dgb not populated; call encode_inputs first");
 
         let mut x = BlockMatrix::new(self.m, 1);
         for j in 0..self.m {
-            x[j] = self.masked_y_gen[j];
+            x[j] = self.masked_y_dgb[j];
         }
 
         let mut y = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y[i] = self.x_gen[i];
+            y[i] = self.x_dgb[i];
         }
 
         (x, y)
@@ -306,20 +306,20 @@ impl AuthTensorGen {
     /// Combines both half-outer-product outputs with the correlated preprocessing
     /// share to produce the garbled tensor gate output. Per `5_online.tex` §160:
     /// `[c D_gb] := Z_{c,0} ⊕ Z_{c,1}^T ⊕ [(λ_a ⊗ λ_b) D_gb]`. The third term
-    /// is gen's preprocessing share `correlated_gen[idx]`.
+    /// is gen's preprocessing share `correlated_dgb[idx]`.
     pub fn garble_final(&mut self) {
         assert!(
             !self.final_computed,
             "garble_final called twice on the same instance — \
-             first_half_out would be double-XOR'd; create a new instance per gate"
+             gb_first_half_out_dgb would be double-XOR'd; create a new instance per gate"
         );
-        assert_eq!(self.correlated_gen.len(), self.n * self.m,
-            "garble_final: correlated_gen not populated by preprocessing");
+        assert_eq!(self.correlated_dgb.len(), self.n * self.m,
+            "garble_final: correlated_dgb not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^=
-                    self.second_half_out[(j, i)] ^
-                    self.correlated_gen[j * self.n + i];
+                self.gb_first_half_out_dgb[(i, j)] ^=
+                    self.gb_second_half_out_dgb[(j, i)] ^
+                    self.correlated_dgb[j * self.n + i];
             }
         }
         self.final_computed = true;
@@ -327,30 +327,30 @@ impl AuthTensorGen {
 
     /// y inputs (D_ev half) for `garble_first_half_p2`.
     ///
-    /// Paper-aligned with `get_first_inputs`'s D_a side: the first-half y
-    /// operand is `β` (paper's `λ_b`). This emits gen's share of `[β D_ev]`
-    /// from preprocessing — i.e. `beta_eval[i]`. Combined with the D_a track
-    /// (`beta_gen[i]` via `get_first_inputs`), the wide GGM expansion produces
+    /// Paper-aligned with `get_first_inputs`'s D_gb side: the first-half y
+    /// operand is `β` (paper's `λ_b`). This emits gb.s share of `[β D_ev]`
+    /// from preprocessing — i.e. `beta_dev[i]`. Combined with the D_gb track
+    /// (`beta_dgb[i]` via `get_first_inputs`), the wide GGM expansion produces
     /// `(x ⊕ α) ⊗ β` under both deltas.
     fn get_first_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.m, 1);
         for i in 0..self.m {
-            y_ev[i] = self.beta_eval[i];
+            y_ev[i] = self.beta_dev[i];
         }
         y_ev
     }
 
     /// y inputs (D_ev half) for `garble_second_half_p2`.
     ///
-    /// Paper-aligned with `get_second_inputs`'s D_a side: the second-half y
+    /// Paper-aligned with `get_second_inputs`'s D_gb side: the second-half y
     /// operand is `x` (paper's `a`). Per `5_online.tex` §211, gb sets
-    /// `[v_a D_ev]^gb := [λ_a D_ev]^gb`, so gen's share of `[x D_ev]` equals
-    /// its share of `[α D_ev]` — i.e. `alpha_eval[i]`. The eval side XORs in
+    /// `[v_a D_ev]^gb := [λ_a D_ev]^gb`, so gb.s share of `[x D_ev]` equals
+    /// its share of `[α D_ev]` — i.e. `alpha_dev[i]`. The ev side XORs in
     /// `L_a · D_ev` (see `AuthTensorEval::get_second_inputs_p2_y_d_ev`).
     fn get_second_inputs_p2_y_d_ev(&self) -> BlockMatrix {
         let mut y_ev = BlockMatrix::new(self.n, 1);
         for i in 0..self.n {
-            y_ev[i] = self.alpha_eval[i];
+            y_ev[i] = self.alpha_dev[i];
         }
         y_ev
     }
@@ -363,7 +363,7 @@ impl AuthTensorGen {
     ///   rho-half ciphertexts (paper-faithful (κ, ρ) width via `RhoBlock` is
     ///   deferred — see AUDIT-2.4 D1 second half).
     ///
-    /// Writes BOTH `first_half_out` (D_gb) and `first_half_out_ev` (D_ev) in
+    /// Writes BOTH `gb_first_half_out_dgb` (D_gb) and `gb_first_half_out_dev` (D_ev) in
     /// a single pass.
     pub fn garble_first_half_p2(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<(Block, Block)>>) {
         let (x, y_d_gb) = self.get_first_inputs();
@@ -395,7 +395,7 @@ impl AuthTensorGen {
     ///
     /// Returns `(d_gb_out, d_ev_out)`:
     /// - `d_gb_out[j*n + i]` = `[v_gamma D_gb]^gb` for gate (i, j); identical to
-    ///   the value `garble_final` writes into `first_half_out[(i, j)]`.
+    ///   the value `garble_final` writes into `gb_first_half_out_dgb[(i, j)]`.
     /// - `d_ev_out[j*n + i]` = `[v_gamma D_ev]^gb` for gate (i, j); the new D_ev
     ///   path.
     ///
@@ -405,45 +405,45 @@ impl AuthTensorGen {
     /// `(Vec<Block>, Vec<Block>)` enforces the privacy property at compile
     /// time.
     ///
-    /// D_ev encoding rule (garbler side): the garbler does NOT hold `delta_b`,
+    /// D_ev encoding rule (garbler side): the garbler does NOT hold `delta_ev`,
     /// so its share of `[(λ_a ⊗ λ_b) D_ev]^gb` is the Block-form value
-    /// `correlated_eval[idx]` (paper-side `mac` of the auth-bit, lowered to a
+    /// `correlated_dev[idx]` (paper-side `mac` of the auth-bit, lowered to a
     /// raw `Block` by `derive_sharing_blocks` during `run_preprocessing`).
-    /// Folded into `first_half_out_ev` directly with no `delta_b` XOR. The
-    /// eval-side mirror in `evaluate_final_p2` adds its own `delta_b`-bearing
-    /// term to reconstruct the IT-MAC pair under `delta_b`. See
+    /// Folded into `gb_first_half_out_dev` directly with no `delta_ev` XOR. The
+    /// ev-side mirror in `evaluate_final_p2` adds its own `delta_ev`-bearing
+    /// term to reconstruct the IT-MAC pair under `delta_ev`. See
     /// `get_first_inputs_p2_y_d_ev` doc for derivation.
     pub fn garble_final_p2(&mut self) -> (Vec<Block>, Vec<Block>) {
         assert!(
             !self.final_computed,
             "garble_final_p2 called twice on the same instance — \
-             first_half_out would be double-XOR'd; create a new instance per gate"
+             gb_first_half_out_dgb would be double-XOR'd; create a new instance per gate"
         );
         // D_gb path: identical to existing `garble_final` — per `6_total.tex` §140,
         // `[c D_gb] := Z_{c,0} ⊕ Z_{c,1}^T ⊕ [(λ_a ⊗ λ_b) D_gb]`, where the third
-        // term is gen's preprocessing share `correlated_gen[idx]`.
-        assert_eq!(self.correlated_gen.len(), self.n * self.m,
-            "garble_final_p2: correlated_gen not populated by preprocessing");
+        // term is gen's preprocessing share `correlated_dgb[idx]`.
+        assert_eq!(self.correlated_dgb.len(), self.n * self.m,
+            "garble_final_p2: correlated_dgb not populated by preprocessing");
         for i in 0..self.n {
             for j in 0..self.m {
-                self.first_half_out[(i, j)] ^=
-                    self.second_half_out[(j, i)] ^
-                    self.correlated_gen[j * self.n + i];
+                self.gb_first_half_out_dgb[(i, j)] ^=
+                    self.gb_second_half_out_dgb[(j, i)] ^
+                    self.correlated_dgb[j * self.n + i];
             }
         }
 
-        // D_ev path: mirror of D_gb but using `correlated_eval`. The
-        // garbler folds `correlated_eval[idx]` (a Block already lowered from the
+        // D_ev path: mirror of D_gb but using `correlated_dev`. The
+        // garbler folds `correlated_dev[idx]` (a Block already lowered from the
         // paper-side `mac` by `derive_sharing_blocks` at preprocessing) directly
-        // into `first_half_out_ev` — no `delta_b` XOR, since gb does not hold
-        // `delta_b`. The eval-side mirror in `evaluate_final_p2` applies its
-        // own `delta_b`-bearing term to reconstruct the IT-MAC pair under
-        // `delta_b`.
+        // into `gb_first_half_out_dev` — no `delta_ev` XOR, since gb does not hold
+        // `delta_ev`. The ev-side mirror in `evaluate_final_p2` applies its
+        // own `delta_ev`-bearing term to reconstruct the IT-MAC pair under
+        // `delta_ev`.
         for i in 0..self.n {
             for j in 0..self.m {
-                let correlated_share_ev = self.correlated_eval[j * self.n + i];
-                self.first_half_out_ev[(i, j)] ^=
-                    self.second_half_out_ev[(j, i)] ^
+                let correlated_share_ev = self.correlated_dev[j * self.n + i];
+                self.gb_first_half_out_dev[(i, j)] ^=
+                    self.gb_second_half_out_dev[(j, i)] ^
                     correlated_share_ev;
             }
         }
@@ -453,8 +453,8 @@ impl AuthTensorGen {
         let mut d_ev_out: Vec<Block> = Vec::with_capacity(self.n * self.m);
         for j in 0..self.m {
             for i in 0..self.n {
-                d_gb_out.push(self.first_half_out[(i, j)]);
-                d_ev_out.push(self.first_half_out_ev[(i, j)]);
+                d_gb_out.push(self.gb_first_half_out_dgb[(i, j)]);
+                d_ev_out.push(self.gb_first_half_out_dev[(i, j)]);
             }
         }
 
@@ -474,18 +474,18 @@ mod tests {
     use rand_chacha::ChaCha12Rng;
 
     /// Test helper: run the input-encoding phase so
-    /// `gar.garble_*_half` and `ev.evaluate_*_half` can run. Per BUG-02 /
+    /// `gb.garble_*_half` and `ev.evaluate_*_half` can run. Per BUG-02 /
     /// Phase 1.2, input wire labels are no longer populated by
     /// preprocessing — tests must call this between `new_from_fpre_*`
     /// and the first `garble_*` / `evaluate_*` call.
     fn install_test_input_labels(
-        gar: &mut AuthTensorGen,
+        gb: &mut AuthTensorGen,
         ev: &mut AuthTensorEval,
         x: usize,
         y: usize,
     ) {
         let mut rng = ChaCha12Rng::seed_from_u64(0xDEAD_BEEF);
-        crate::input_encoding::encode_inputs(gar, ev, x, y, &mut rng);
+        crate::input_encoding::encode_inputs(gb, ev, x, y, &mut rng);
     }
 
     #[test]
@@ -503,23 +503,23 @@ mod tests {
 
         assert_eq!(fpre_gen.correlated_auth_bit_shares.len(), n * m);
 
-        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
         // Block-form sharings populated from preprocessing.
-        assert_eq!(gar.alpha_eval.len(), n);
-        assert_eq!(gar.alpha_gen.len(),  n);
-        assert_eq!(gar.beta_eval.len(),  m);
-        assert_eq!(gar.beta_gen.len(),   m);
-        assert_eq!(gar.correlated_eval.len(), n * m);
-        assert_eq!(gar.correlated_gen.len(),  n * m);
+        assert_eq!(gb.alpha_dev.len(), n);
+        assert_eq!(gb.alpha_dgb.len(),  n);
+        assert_eq!(gb.beta_dev.len(),  m);
+        assert_eq!(gb.beta_dgb.len(),   m);
+        assert_eq!(gb.correlated_dev.len(), n * m);
+        assert_eq!(gb.correlated_dgb.len(),  n * m);
 
-        install_test_input_labels(&mut gar, &mut ev, 0b1101, 0b110);
+        install_test_input_labels(&mut gb, &mut ev, 0b1101, 0b110);
 
-        assert_eq!(gar.masked_x_gen.len(), n);
-        assert_eq!(gar.masked_y_gen.len(), m);
+        assert_eq!(gb.masked_x_dgb.len(), n);
+        assert_eq!(gb.masked_y_dgb.len(), m);
 
-        let (_chunk_levels, _chunk_cts) = gar.garble_first_half();
+        let (_chunk_levels, _chunk_cts) = gb.garble_first_half();
     }
 
     #[test]
@@ -529,13 +529,13 @@ mod tests {
         let n = 4;
         let m = 3;
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
-        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-        install_test_input_labels(&mut gar, &mut ev, 0, 0);
+        install_test_input_labels(&mut gb, &mut ev, 0, 0);
 
-        let (_cl1, _ct1) = gar.garble_first_half_p2();
-        let (_cl2, _ct2) = gar.garble_second_half_p2();
-        let (d_gb, d_ev) = gar.garble_final_p2();
+        let (_cl1, _ct1) = gb.garble_first_half_p2();
+        let (_cl2, _ct2) = gb.garble_second_half_p2();
+        let (d_gb, d_ev) = gb.garble_final_p2();
 
         assert_eq!(d_gb.len(), n * m, "D_gb output share has length n*m");
         assert_eq!(d_ev.len(), n * m, "D_ev output share has length n*m");
@@ -547,11 +547,11 @@ mod tests {
         let n = 4;
         let m = 3;
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
-        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-        install_test_input_labels(&mut gar, &mut ev, 0, 0);
+        install_test_input_labels(&mut gb, &mut ev, 0, 0);
 
-        let (_chunk_levels, chunk_cts) = gar.garble_first_half_p2();
+        let (_chunk_levels, chunk_cts) = gb.garble_first_half_p2();
         // Each ciphertext entry is (Block, Block) — verifies wide type at compile time.
         for chunk in &chunk_cts {
             for (kappa, rho) in chunk {
@@ -572,12 +572,12 @@ mod tests {
         let m = 3;
         let cf = 4;
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, cf);
-        let mut gar = AuthTensorGen::new_from_fpre_gen(fpre_gen);
+        let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
-        install_test_input_labels(&mut gar, &mut ev, 0, 0);
+        install_test_input_labels(&mut gb, &mut ev, 0, 0);
 
         // P1 narrow path.
-        let (cl_narrow, _ct_narrow) = gar.garble_first_half();
+        let (cl_narrow, _ct_narrow) = gb.garble_first_half();
         assert_eq!(cl_narrow.len(), n / cf, "narrow chunks = ceil(n/cf)");
         for chunk in &cl_narrow {
             // Each chunk is the level-cts for a 2^cf-leaf GGM tree → cf - 1 levels.
@@ -589,7 +589,7 @@ mod tests {
         }
 
         // P2 wide path.
-        let (cl_wide, _ct_wide) = gar.garble_first_half_p2();
+        let (cl_wide, _ct_wide) = gb.garble_first_half_p2();
         assert_eq!(cl_wide.len(), n / cf, "wide chunks = ceil(n/cf)");
         for chunk in &cl_wide {
             assert_eq!(chunk.len(), cf - 1, "wide chunk levels = cf - 1");
