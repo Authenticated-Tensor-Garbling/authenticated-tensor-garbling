@@ -15,8 +15,7 @@ use authenticated_tensor_garbling::{
     input_encoding::encode_inputs,
     online::block_hash_check_zero,
     preprocessing::run_preprocessing,
-    assemble_e_input_wire_blocks_p1,
-    assemble_c_alpha_beta_blocks_p2,
+    bench_internals::{assemble_c_alpha_beta_blocks_p2, assemble_e_input_wire_blocks_p1},
     CSP, SSP,
 };
 use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};

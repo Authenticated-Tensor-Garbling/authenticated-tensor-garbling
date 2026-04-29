@@ -3,6 +3,13 @@ name = "authenticated-tensor-garbling"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Re-exports crate-internal helpers (e.g. `assemble_e_input_wire_blocks_p1`,
+# `assemble_c_alpha_beta_blocks_p2`) under the `bench_internals` module so the
+# Criterion bench target can reach them. Off by default — these helpers are
+# not part of the stable public API surface (TD-01, Phase 3.1).
+bench-internals = []
+
 [dependencies]
 # crypto
 aes = "0.9.0-pre.3"
@@ -37,3 +44,4 @@ criterion = { version = "0.7", features = ["async_tokio"] }
 [[bench]]
 name = "benchmarks"
 harness = false
+required-features = ["bench-internals"]
