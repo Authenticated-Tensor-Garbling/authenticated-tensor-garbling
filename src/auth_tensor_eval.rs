@@ -4,7 +4,6 @@ use crate::aes::FIXED_KEY_AES;
 use crate::preprocessing::TensorFpreEval;
 use crate::matrix::MatrixViewRef;
 use crate::tensor_ops::eval_unary_outer_product_wide;
-use crate::auth_tensor_gen::InputLabelsForEval;
 
 pub struct AuthTensorEval {
     cipher: &'static FixedKeyAes,
@@ -142,80 +141,7 @@ impl AuthTensorEval {
         }
     }
 
-    /// Install eval-side input wire labels handed off by the garbler's
-    /// `AuthTensorGen::prepare_input_labels`.
-    ///
-    /// Per `.planning/LABELS-BUG-CONTEXT.md` "Correct Target Architecture"
-    /// (BUG-02), input wire labels arrive at the evaluator from the
-    /// garbler's online-phase message, not via preprocessing. In this
-    /// in-process simulation the "transmission" is the
-    /// `InputLabelsForEval` return value passed directly here.
-    ///
-    /// Side effects on `self`:
-    /// - `self.x_gen`, `self.y_gen` populated (lengths n, m). These are
-    ///   the eval halves of the input-share IT-MAC pairs (`key` halves).
-    /// - `self.masked_x_gen` populated, length n. Eval's wire-label half
-    ///   under δ_a; equals `x_input_eval_keys[i] XOR mac_e_α`.
-    /// - `self.masked_y_gen` populated, length m.
-    /// - `self.masked_x_bits` populated, length n. Cleartext masked bits
-    ///   used as GGM-tree choice bits in `evaluate_first_half`.
-    /// - `self.masked_y_bits` populated, length m.
-    ///
-    /// MUST be called before `evaluate_first_half` /
-    /// `evaluate_second_half` once callers migrate to this API
-    /// (Phase 1.2(b)).
-    ///
-    /// # Panics
-    /// Panics if any of the handed-off vector lengths does not match
-    /// `self.n` / `self.m`, or if `self.alpha_auth_bit_shares` /
-    /// `self.beta_auth_bit_shares` are not yet populated.
-    pub fn install_input_labels(&mut self, labels: InputLabelsForEval) {
-        assert_eq!(labels.x_input_eval_keys.len(), self.n,
-            "x_input_eval_keys.len() ({}) must equal self.n ({})",
-            labels.x_input_eval_keys.len(), self.n);
-        assert_eq!(labels.y_input_eval_keys.len(), self.m,
-            "y_input_eval_keys.len() ({}) must equal self.m ({})",
-            labels.y_input_eval_keys.len(), self.m);
-        assert_eq!(labels.masked_x_bits.len(), self.n);
-        assert_eq!(labels.masked_y_bits.len(), self.m);
-        assert_eq!(self.alpha_auth_bit_shares.len(), self.n,
-            "alpha_auth_bit_shares must be populated before install_input_labels; \
-             len={} expected={}",
-            self.alpha_auth_bit_shares.len(), self.n);
-        assert_eq!(self.beta_auth_bit_shares.len(), self.m,
-            "beta_auth_bit_shares must be populated before install_input_labels; \
-             len={} expected={}",
-            self.beta_auth_bit_shares.len(), self.m);
-
-        assert_eq!(labels.x_lsb_shifts.len(), self.n);
-        assert_eq!(labels.y_lsb_shifts.len(), self.m);
-
-        // Eval's α-share half under δ_a is `mac_e_α` (auth-bit `mac`
-        // held by eval); pair with gen's `key_g_α XOR a · δ_a` encodes
-        // `α · δ_a`. Wire-label eval half is the IT-MAC sum
-        // `input_eval_key XOR mac_e_α`, plus the gen-supplied LSB-shift
-        // `(x_i XOR a_i) · δ_a` that lands eval's LSB on `d_i` (GGM-tree
-        // convention). The shift cancels in the combined gen+eval sum.
-        self.masked_x_gen = (0..self.n)
-            .map(|i| {
-                let mac_e_alpha = *self.alpha_auth_bit_shares[i].mac.as_block();
-                labels.x_input_eval_keys[i] ^ mac_e_alpha ^ labels.x_lsb_shifts[i]
-            })
-            .collect();
-        self.masked_y_gen = (0..self.m)
-            .map(|j| {
-                let mac_e_beta = *self.beta_auth_bit_shares[j].mac.as_block();
-                labels.y_input_eval_keys[j] ^ mac_e_beta ^ labels.y_lsb_shifts[j]
-            })
-            .collect();
-
-        self.x_gen = labels.x_input_eval_keys;
-        self.y_gen = labels.y_input_eval_keys;
-        self.masked_x_bits = labels.masked_x_bits;
-        self.masked_y_bits = labels.masked_y_bits;
-    }
-
-    /// Choice bits for GGM-tree traversal MUST be supplied explicitly via
+/// Choice bits for GGM-tree traversal MUST be supplied explicitly via
     /// `choice_bits` (typically `&self.masked_x_bits` for first half, or
     /// `&self.masked_y_bits` for second half). Per BUG-02 / Phase 1.2, the
     /// previous LSB-of-wire-label readout is no longer correct under the
@@ -657,22 +583,17 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha12Rng;
 
-    /// Build a paired (gb, ev) and run the in-process d-opening + label
-    /// hand-off for x = y = 0. After Phase 1.2 / BUG-02, `garble_*_half`
-    /// and `evaluate_*_half` require `prepare_input_labels` /
-    /// `install_input_labels` to have been called first; this helper does
-    /// both with a fixed seed so unit tests stay deterministic.
+    /// Build a paired (gb, ev) and run the input-encoding phase for
+    /// x = y = 0 with a fixed seed so unit tests stay deterministic.
+    /// After Phase 1.2 / BUG-02, `garble_*_half` and `evaluate_*_half`
+    /// require `encode_inputs` to have been called first.
     /// Tests needing non-zero inputs should call the builders directly.
     fn build_pair(n: usize, m: usize) -> (AuthTensorGen, AuthTensorEval) {
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1, 1);
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
         let mut rng = ChaCha12Rng::seed_from_u64(0xDEAD_BEEF);
-        let labels = gb.prepare_input_labels(
-            &mut rng, 0, 0,
-            &ev.alpha_auth_bit_shares, &ev.beta_auth_bit_shares,
-        );
-        ev.install_input_labels(labels);
+        crate::input_encoding::encode_inputs(&mut gb, &mut ev, 0, 0, &mut rng);
         (gb, ev)
     }
 
