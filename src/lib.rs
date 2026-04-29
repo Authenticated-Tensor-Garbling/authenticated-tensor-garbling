@@ -320,7 +320,7 @@ mod tests {
         // check that first_out has the correct value
         // first_out should be masked_x (tensor) beta  (paper: (a⊕λ_a) ⊗ λ_b)
         assert!(
-            verify_tensor_output(masked_x, beta, n, m, &gb.gb_first_half_out_dgb, &ev.ev_first_half_out_dgb, &delta_gb)
+            verify_tensor_output(masked_x, beta, n, m, gb.gb_first_half_out_dgb(), ev.ev_first_half_out_dgb(), &delta_gb)
         );
 
 
@@ -342,7 +342,7 @@ mod tests {
         // check that second_out has the correct value
         // second_out should be masked_y (tensor) input_x  (paper: (b⊕λ_b) ⊗ a)
         assert!(
-            verify_tensor_output(masked_y, input_x, m, n, &gb.gb_second_half_out_dgb, &ev.ev_second_half_out_dgb, &delta_gb)
+            verify_tensor_output(masked_y, input_x, m, n, gb.gb_second_half_out_dgb(), ev.ev_second_half_out_dgb(), &delta_gb)
         );
 
         // check that final_out has the correct value
@@ -371,8 +371,8 @@ mod tests {
                 let expected_val = x_bit & y_bit;
                 print!("{} ", expected_val);
 
-                let gb_val = gb.gb_first_half_out_dgb[(i, j)];
-                let ev_val = ev.ev_first_half_out_dgb[(i, j)];
+                let gb_val = gb.gb_first_half_out_dgb()[(i, j)];
+                let ev_val = ev.ev_first_half_out_dgb()[(i, j)];
 
                 if expected_val {
                     assert_eq!(gb_val, ev_val ^ delta_gb.as_block(), "At position ({},{}): gb_out should equal ev_out ^ delta when expected_val=1", i, j);
@@ -420,7 +420,7 @@ mod tests {
         // first_half_out_dgb per (i, j) must reconstruct to `(x_i AND y_j) · δ_gb`.
         // This is the end-to-end correctness check on the gate output.
         assert!(
-            verify_tensor_output(x, y, n, m, &gb.gb_first_half_out_dgb, &ev.ev_first_half_out_dgb, &gb.delta_gb),
+            verify_tensor_output(x, y, n, m, gb.gb_first_half_out_dgb(), ev.ev_first_half_out_dgb(), &gb.delta_gb),
             "P1 garble_final must produce shares that reconstruct to x⊗y · δ_gb"
         );
 
@@ -550,7 +550,7 @@ mod tests {
         // and ev.ev_first_half_out_dgb[(i, j)] holds eval's matching share. Combined under
         // δ_gb, they reconstruct to (x ⊗ y) · δ_gb per position.
         assert!(
-            verify_tensor_output(x, y, n, m, &gb.gb_first_half_out_dgb, &ev.ev_first_half_out_dgb, &gb.delta_gb),
+            verify_tensor_output(x, y, n, m, gb.gb_first_half_out_dgb(), ev.ev_first_half_out_dgb(), &gb.delta_gb),
             "P2 garble_final_p2 must produce shares that reconstruct to x⊗y · δ_gb"
         );
 
@@ -564,7 +564,7 @@ mod tests {
         // `ev.delta_ev` is the simulation reach into eval's state — same
         // pattern used at lines 695-708 below for `c_α` / `c_β` assembly.)
         assert!(
-            verify_tensor_output(x, y, n, m, &gb.gb_first_half_out_dev, &ev.ev_first_half_out_dev, &ev.delta_ev),
+            verify_tensor_output(x, y, n, m, gb.gb_first_half_out_dev(), ev.ev_first_half_out_dev(), &ev.delta_ev),
             "P2 garble_final_p2 must produce D_ev shares that reconstruct to x⊗y · δ_ev"
         );
 

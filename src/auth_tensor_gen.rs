@@ -54,16 +54,24 @@ pub struct AuthTensorGen {
     /// Gen's component of the cleartext masked-bit sharing for `d_y`. 0-vec.
     pub gb_masked_y_bits: Vec<bool>,
 
-    pub gb_first_half_out_dgb: BlockMatrix,
-    pub gb_second_half_out_dgb: BlockMatrix,
+    /// D_gb accumulator for the first half-outer-product. Populated by
+    /// `garble_first_half` (P1) or `garble_first_half_p2` (P2). Read via
+    /// `gb_first_half_out_dgb()` once the populating step has run.
+    pub(crate) gb_first_half_out_dgb: BlockMatrix,
+    /// D_gb accumulator for the second half-outer-product. Populated by
+    /// `garble_second_half` (P1) or `garble_second_half_p2` (P2). Read via
+    /// `gb_second_half_out_dgb()`.
+    pub(crate) gb_second_half_out_dgb: BlockMatrix,
 
     /// D_ev (rho-half) accumulator for the first half-outer-product. Phase 9 P2-02.
     /// Mirrors `gb_first_half_out_dgb` but accumulates the rho-half PRG outputs from
     /// `gen_unary_outer_product_wide`. Written by `garble_first_half_p2` /
-    /// `garble_second_half_p2`; consumed by `garble_final_p2`.
-    pub gb_first_half_out_dev: BlockMatrix,
+    /// `garble_second_half_p2`; consumed by `garble_final_p2`. Read via
+    /// `gb_first_half_out_dev()`.
+    pub(crate) gb_first_half_out_dev: BlockMatrix,
     /// D_ev (rho-half) accumulator for the second half-outer-product. Phase 9 P2-02.
-    pub gb_second_half_out_dev: BlockMatrix,
+    /// Read via `gb_second_half_out_dev()`.
+    pub(crate) gb_second_half_out_dev: BlockMatrix,
 
     /// Set to `true` by `garble_final()`. `compute_lambda_gamma()` asserts
     /// this flag to prevent silent garbage output when called out of order.
@@ -231,6 +239,35 @@ impl AuthTensorGen {
         }
 
         (chunk_levels, chunk_cts)
+    }
+
+    /// Read-only view of the first-half D_gb accumulator. Meaningful only
+    /// after `garble_first_half` (P1) or `garble_first_half_p2` (P2) has run;
+    /// before that, the matrix is zero-initialized.
+    #[inline]
+    pub fn gb_first_half_out_dgb(&self) -> &BlockMatrix {
+        &self.gb_first_half_out_dgb
+    }
+
+    /// Read-only view of the second-half D_gb accumulator. Meaningful only
+    /// after `garble_second_half` (P1) or `garble_second_half_p2` (P2) has run.
+    #[inline]
+    pub fn gb_second_half_out_dgb(&self) -> &BlockMatrix {
+        &self.gb_second_half_out_dgb
+    }
+
+    /// Read-only view of the first-half D_ev (rho-half) accumulator.
+    /// Meaningful only after `garble_first_half_p2` has run.
+    #[inline]
+    pub fn gb_first_half_out_dev(&self) -> &BlockMatrix {
+        &self.gb_first_half_out_dev
+    }
+
+    /// Read-only view of the second-half D_ev (rho-half) accumulator.
+    /// Meaningful only after `garble_second_half_p2` has run.
+    #[inline]
+    pub fn gb_second_half_out_dev(&self) -> &BlockMatrix {
+        &self.gb_second_half_out_dev
     }
 
     /// returns: the garbler's x and y inputs to the first tensor half gate.

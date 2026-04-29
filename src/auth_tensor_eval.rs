@@ -54,16 +54,24 @@ pub struct AuthTensorEval {
     /// second-half GGM-tree traversal.
     pub ev_masked_y_bits: Vec<bool>,
 
-    pub ev_first_half_out_dgb: BlockMatrix,
-    pub ev_second_half_out_dgb: BlockMatrix,
+    /// D_gb accumulator for the first half-outer-product. Populated by
+    /// `evaluate_first_half` (P1) or `evaluate_first_half_p2` (P2). Read via
+    /// `ev_first_half_out_dgb()` once the populating step has run.
+    pub(crate) ev_first_half_out_dgb: BlockMatrix,
+    /// D_gb accumulator for the second half-outer-product. Populated by
+    /// `evaluate_second_half` (P1) or `evaluate_second_half_p2` (P2). Read via
+    /// `ev_second_half_out_dgb()`.
+    pub(crate) ev_second_half_out_dgb: BlockMatrix,
 
     /// D_ev (rho-half) accumulator for the first half-outer-product. Phase 9 P2-03.
     /// Mirrors `ev_first_half_out_dgb` but accumulates the rho-half PRG outputs from
     /// `eval_unary_outer_product_wide`. Written by `evaluate_first_half_p2` /
-    /// `evaluate_second_half_p2`; consumed by `evaluate_final_p2`.
-    pub ev_first_half_out_dev: BlockMatrix,
+    /// `evaluate_second_half_p2`; consumed by `evaluate_final_p2`. Read via
+    /// `ev_first_half_out_dev()`.
+    pub(crate) ev_first_half_out_dev: BlockMatrix,
     /// D_ev (rho-half) accumulator for the second half-outer-product. Phase 9 P2-03.
-    pub ev_second_half_out_dev: BlockMatrix,
+    /// Read via `ev_second_half_out_dev()`.
+    pub(crate) ev_second_half_out_dev: BlockMatrix,
 
     /// Set to `true` by `evaluate_final()`. `compute_lambda_gamma()` asserts
     /// this flag to prevent silent garbage output when called out of order.
@@ -262,6 +270,35 @@ impl AuthTensorEval {
                 });
             });
         }
+    }
+
+    /// Read-only view of the first-half D_gb accumulator. Meaningful only
+    /// after `evaluate_first_half` (P1) or `evaluate_first_half_p2` (P2) has
+    /// run; before that, the matrix is zero-initialized.
+    #[inline]
+    pub fn ev_first_half_out_dgb(&self) -> &BlockMatrix {
+        &self.ev_first_half_out_dgb
+    }
+
+    /// Read-only view of the second-half D_gb accumulator. Meaningful only
+    /// after `evaluate_second_half` (P1) or `evaluate_second_half_p2` (P2) has run.
+    #[inline]
+    pub fn ev_second_half_out_dgb(&self) -> &BlockMatrix {
+        &self.ev_second_half_out_dgb
+    }
+
+    /// Read-only view of the first-half D_ev (rho-half) accumulator.
+    /// Meaningful only after `evaluate_first_half_p2` has run.
+    #[inline]
+    pub fn ev_first_half_out_dev(&self) -> &BlockMatrix {
+        &self.ev_first_half_out_dev
+    }
+
+    /// Read-only view of the second-half D_ev (rho-half) accumulator.
+    /// Meaningful only after `evaluate_second_half_p2` has run.
+    #[inline]
+    pub fn ev_second_half_out_dev(&self) -> &BlockMatrix {
+        &self.ev_second_half_out_dev
     }
 
     /// Eval-side counterpart of `AuthTensorGen::get_first_inputs`.
