@@ -211,16 +211,26 @@ pub fn combine_leaky_triples(
 ///
 /// The fold body has exactly one wire-emission site per
 /// [`two_to_one_combine`] call: the public reveal of `d := y' ⊕ y''`
-/// (`m` bits per combine, paper Construction 3 line 428). Across the
-/// `bucket_size − 1` combines this yields `(bucket_size − 1) · ⌈m / 8⌉`
-/// bytes — matches the paper's `(B − 1)·m` term at
-/// `appendix_krrw_pre.tex:495-499` (rounded per-combine to whole bytes
-/// for real-message framing; identical when `m` divides 8 as in all
-/// `BENCHMARK_PARAMS`).
+/// (paper Construction 3 line 428). "Public reveal" is symmetric — both
+/// parties need `d` to construct their local `itmac{x''}{Δ} ⊗ d` term
+/// (see Step D of `two_to_one_combine`, where `d_bits[j]` feeds both the
+/// `dx_gen` and `dx_eval` branches). Each party transmits their `m`-bit
+/// `*_d.value` row to the other, so each combine carries
+/// `2 · ⌈m / 8⌉` bytes (per-direction byte rounding for real-message
+/// framing). Across the `bucket_size − 1` combines this yields
+/// `2 · (bucket_size − 1) · ⌈m / 8⌉` bytes total.
+///
+/// This is `2×` the paper's `(B − 1)·m` term at
+/// `appendix_krrw_pre.tex:495-499`. The paper formula appears to count
+/// only one direction of the d-reveal (or treats the second direction
+/// as folded into F_check); our impl-grounded count surfaces the full
+/// wire traffic that any real two-party realization needs.
 ///
 /// **NOT counted** (ideal subprotocols, like the paper's formula):
 ///   * `verify_cross_party` MAC checks inside `two_to_one_combine`
-///     (F_check).
+///     (F_check). The d-share MACs (m·κ bits per direction) get
+///     verified there but are skipped from the on-wire count under the
+///     same envelope as F_eq and F_COT.
 ///   * The local permutation seeds (`shuffle_seed.wrapping_add(j)`) —
 ///     in a real protocol the master `shuffle_seed` would be agreed via
 ///     coin-flip / hash commit, but that's a constant overhead
@@ -234,9 +244,13 @@ pub fn combine_leaky_triples_with_bytes(
     chunking_factor: usize,
     shuffle_seed: u64,
 ) -> ((TensorFpreGen, TensorFpreEval), usize) {
-    let bytes_per_combine = (m + 7) / 8;
+    // Two directions: each party broadcasts their m-bit `*_d.value` row to
+    // the other so both can compute d = gb_d.value ⊕ ev_d.value. Round each
+    // direction to whole bytes independently to match real-message framing
+    // (matches `LeakyTensorPre::generate_with_bytes`'s D-extraction reveal).
+    let bytes_per_direction = (m + 7) / 8;
     let combines = bucket_size.saturating_sub(1);
-    let comm_bytes = combines * bytes_per_combine;
+    let comm_bytes = 2 * combines * bytes_per_direction;
     let out = combine_leaky_triples_inner(
         triples, bucket_size, n, m, chunking_factor, shuffle_seed,
     );

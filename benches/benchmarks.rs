@@ -61,9 +61,9 @@ const BENCHMARK_PARAMS: &[(usize, usize)] = &[
     // (24, 24),
     // (32, 32),
     // (48, 48),
-    (64, 64),
-    // (96, 96),
-    (128, 128),
+    // (64, 64),
+    // // (96, 96),
+    // (128, 128),
     (256, 256),
 ];
 
@@ -173,8 +173,9 @@ fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
 ///     cts, full κ-bit Blocks).
 ///   * `B · 2·⌈n·m / 8⌉` bytes for `lsb(S_1)` + `lsb(S_2)` D-extraction
 ///     reveal across the bucket.
-///   * `(B − 1) · ⌈m / 8⌉` bytes for the d-reveal across the two-to-one
-///     combines.
+///   * `2 · (B − 1) · ⌈m / 8⌉` bytes for the symmetric d-reveal across
+///     the two-to-one combines (each party broadcasts their m-bit
+///     `*_d.value` row so both learn `d = y' ⊕ y''`).
 ///
 /// **What is NOT counted** (ideal subprotocols, exactly as in the paper
 /// formula):
