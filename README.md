@@ -1,21 +1,46 @@
 # Authenticated Tensor Garbling
 
-This repository contains the implementation and benchmarks for authenticated tensor garbling protocols.
+Implementation and benchmarks for authenticated tensor garbling protocols.
 
-## Running Benchmarks
-
-To run the benchmarks, use:
+## Tests
 
 ```bash
-cargo bench
+cargo test --lib
 ```
 
-This will execute all benchmark suites including:
-- Full protocol garbling benchmarks
-- Runtime benchmarks with network simulation
-- Performance analysis across different matrix sizes and chunking factors
+## Benchmarks
 
-## Project Structure
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo bench --features bench-internals 2>&1 \
+  | tee bench-$(date +%Y%m%d-%H%M).log
+```
 
-- `src/` - Core implementation of semihonest and authenticated garbled tensor protocols
-- `benches/` - Benchmark suites and network simulation
+Sweeps `(n, m) ∈ BENCHMARK_PARAMS × chunking_factor 1..=8` for both online
+protocols and uncompressed preprocessing under a 100 Mbps network model.
+Each cell emits a `KB,…` log line; per-cell timing lives in
+`target/criterion/`.
+
+## Figures and tables
+
+Requires `matplotlib`:
+
+```bash
+python3 -m venv tools/.venv
+tools/.venv/bin/pip install matplotlib
+```
+
+Then, against the latest `bench-*.log` (auto-detected):
+
+```bash
+tools/.venv/bin/python3 tools/parse_results.py main          # 6 PDFs → figures/main/ (N=256)
+tools/.venv/bin/python3 tools/parse_results.py appendix      # 18 PDFs → figures/appendix/ (N ∈ {64,128,256})
+tools/.venv/bin/python3 tools/comparison_table.py vertical   # main-paper table
+tools/.venv/bin/python3 tools/comparison_table.py horizontal # appendix table
+```
+
+## Project structure
+
+- `src/` — protocol implementation
+- `benches/` — Criterion benchmark suites and network simulator
+- `tests/` — integration tests
+- `tools/` — figure and table generators (Python)
