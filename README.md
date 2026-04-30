@@ -11,12 +11,16 @@ cargo test --lib
 ## Benchmarks
 
 ```bash
+RUSTFLAGS="-C target-cpu=native" cargo bench --features bench-internals
+```
+Sweeps `(n, m) ∈ BENCHMARK_PARAMS × chunking_factor 1..=8` for both online
+protocols and uncompressed preprocessing under a 100 Mbps network model.
+
+```bash
 RUSTFLAGS="-C target-cpu=native" cargo bench --features bench-internals 2>&1 \
   | tee bench-$(date +%Y%m%d-%H%M).log
 ```
-
-Sweeps `(n, m) ∈ BENCHMARK_PARAMS × chunking_factor 1..=8` for both online
-protocols and uncompressed preprocessing under a 100 Mbps network model.
+Collects the emitted networking analysis for use in plotting.
 Each cell emits a `KB,…` log line; per-cell timing lives in
 `target/criterion/`.
 
