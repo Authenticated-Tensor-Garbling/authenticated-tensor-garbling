@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """Parse benchmark results into the paper's figure layout.
 
-Reads two data sources:
+Reads three data sources:
 
 1. A bench log produced by `cargo bench --bench benchmarks 2>&1 | tee bench-….log`,
-   which contains one `KB,p{1|2},N=…,M=…,tile=…,kb=…` line per cell that ran.
+   which contains one `KB,p{1|2},N=…,M=…,tile=…,kb=…` line per online cell and
+   one `KB,prep,N=…,M=…,tile=…,B=…,kb=…` line per preprocessing cell that ran.
 2. Criterion's per-cell `target/criterion/online/<bench_id>/<tile>/new/estimates.json`,
    which carries mean / CI for the wall-clock time in nanoseconds.
+3. The same for `target/criterion/preprocessing/<bench_id>/<tile>/new/estimates.json`.
 
-Joins the two on (protocol, N, M, tile), writes a merged `results.csv`, and emits
-one PDF per (size, metric) with both protocols' bars side-by-side:
+Joins them on (protocol, N, M, tile) (or (N, M, tile) for prep), writes a
+merged `results.csv`, and emits SIX single-bar PDFs per requested size — one
+per (protocol, metric) pair so each chart's y-axis scales to its own data
+range and the protocol-vs-protocol comparison happens in print layout (figures
+placed side-by-side):
 
-    {N}x{N}_wallclock_bar.pdf     – ms per tile size, P2 on left, P1 on right
-    {N}x{N}_communication.pdf    – KB per tile size, same layout
+    {N}x{N}_p1_wallclock.pdf       — online P1 timing
+    {N}x{N}_p1_communication.pdf   — online P1 KB
+    {N}x{N}_p2_wallclock.pdf       — online P2 timing
+    {N}x{N}_p2_communication.pdf   — online P2 KB
+    {N}x{N}_prep_wallclock.pdf     — preprocessing timing
+    {N}x{N}_prep_communication.pdf — preprocessing KB
 
 Bar coloring follows the paper's convention (appendix_experiments.tex §Results):
 tile 1 (= distributed half-gates baseline) red, tile 6 (= optimum) blue,
-others light gray. Within each tile pair, P2 (left) uses the full tile
-color and P1 (right) uses a lightened version of the same color — same hue
-family, different saturation. The protocol legend is emitted only on the
-64×64 wallclock panel (LEGEND_CELL); the other panels rely on the same
-left=darker=P2, right=lighter=P1 convention.
+others light gray. The same per-bar coloring applies across all six PDFs
+so a single visual key carries through the whole figure set.
 
 Note: an earlier revision plotted a separate red "Standard" (CWYY dual-exec)
 reference bar at x=0; that bar has been removed and the red color is now
@@ -90,16 +96,6 @@ BASELINE_TILE = 1
 COLOR_BASELINE = "#d62728"  # paper's "red" — tile=1 (half-gates baseline configuration)
 COLOR_OPTIMAL = "#1f77b4"   # paper's "blue" — tile=6
 COLOR_DEFAULT = "#bdbdbd"   # gray — every other tile
-LIGHTEN_FRAC = 0.55         # P1 = blend toward white by this fraction
-
-
-def lighten(hex_color: str, frac: float = LIGHTEN_FRAC) -> str:
-    """Blend a #rrggbb color toward white by `frac` (0 = unchanged, 1 = white)."""
-    r, g, b = (int(hex_color[i:i+2], 16) for i in (1, 3, 5))
-    r = int(r + (255 - r) * frac)
-    g = int(g + (255 - g) * frac)
-    b = int(b + (255 - b) * frac)
-    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def parse_kb(
@@ -285,80 +281,37 @@ def bar_color(tile: int) -> str:
     return COLOR_DEFAULT
 
 
-# Bar layout. Two-bar mode (no prep) keeps the original 0.4-wide P2/P1 pair;
-# three-bar mode (prep present) shrinks each bar so the cluster still fits in
-# the [t-0.5, t+0.5] integer-tile slot.
-BAR_WIDTH_2 = 0.4
-BAR_WIDTH_3 = 0.27
-BAR_GAP = 0.02
+BAR_WIDTH = 0.4
 
 
-def plot_grouped_bar(
+def plot_single_bar(
     out_path: Path,
-    p2_pairs: list[tuple[int, float]],
-    p1_pairs: list[tuple[int, float]],
+    pairs: list[tuple[int, float]],
     ylabel: str,
-    prep_pairs: Optional[list[tuple[int, float]]] = None,
-    show_legend: bool = False,
 ) -> None:
-    """Grouped bar chart, one cluster per tile.
+    """Single-bar-per-tile chart for the preprocessing-only figures.
 
-    Two-bar mode (`prep_pairs=None`): P2 left, P1 right.
-    Three-bar mode (`prep_pairs` non-empty): P2 left, P1 middle, Prep right.
-
-    P2 uses the tile-color at full saturation; P1 uses a lightened version
-    (blended toward white by ``LIGHTEN_FRAC``); Prep uses the same tile-color
-    with hatched fill (``//``). Hatching gives prep a third visual axis
-    without burning a hue, keeping the tile-color encoding intact.
-
-    Tile coloring: tile=1 = red (half-gates baseline configuration);
-    tile=6 = blue (optimum); every other tile = gray.
+    Same paper-style tile-color encoding (red=tile-1 half-gates baseline,
+    blue=tile-6 paper optimum, gray otherwise) so the prep chart's color
+    semantics stay consistent with the online charts. No hatch — there's
+    no in-cluster competitor to distinguish from, so the visual marker
+    used in the 3-bar layout is unnecessary noise here.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Patch
 
-    p2_dict = dict(p2_pairs)
-    p1_dict = dict(p1_pairs)
-    prep_dict = dict(prep_pairs) if prep_pairs else {}
-    has_prep = bool(prep_dict)
-
-    all_tiles = sorted(set(p2_dict) | set(p1_dict) | set(prep_dict))
+    pairs_dict = dict(pairs)
+    all_tiles = sorted(pairs_dict)
     if not all_tiles:
         return
 
     fig, ax = plt.subplots(figsize=(5.0, 3.0))
 
-    if has_prep:
-        # Three bars centered on each integer tile: P2, P1, Prep at offsets
-        # -(BW+BG), 0, +(BW+BG).
-        bw = BAR_WIDTH_3
-        step = bw + BAR_GAP
-        p2_off, p1_off, prep_off = -step, 0.0, +step
-    else:
-        # Two bars: P2, P1 at ±half_offset.
-        bw = BAR_WIDTH_2
-        half = bw / 2 + BAR_GAP / 2
-        p2_off, p1_off, prep_off = -half, +half, None
+    x = list(all_tiles)
+    v = [pairs_dict[t] for t in x]
+    c = [bar_color(t) for t in x]
 
-    p2_x = [t + p2_off for t in all_tiles if t in p2_dict]
-    p2_v = [p2_dict[t] for t in all_tiles if t in p2_dict]
-    p2_c = [bar_color(t) for t in all_tiles if t in p2_dict]
-
-    p1_x = [t + p1_off for t in all_tiles if t in p1_dict]
-    p1_v = [p1_dict[t] for t in all_tiles if t in p1_dict]
-    p1_c = [lighten(bar_color(t)) for t in all_tiles if t in p1_dict]
-
-    ax.bar(p2_x, p2_v, width=bw, color=p2_c,
+    ax.bar(x, v, width=BAR_WIDTH, color=c,
            edgecolor="black", linewidth=0.6)
-    ax.bar(p1_x, p1_v, width=bw, color=p1_c,
-           edgecolor="black", linewidth=0.6)
-
-    if has_prep and prep_off is not None:
-        prep_x = [t + prep_off for t in all_tiles if t in prep_dict]
-        prep_v = [prep_dict[t] for t in all_tiles if t in prep_dict]
-        prep_c = [bar_color(t) for t in all_tiles if t in prep_dict]
-        ax.bar(prep_x, prep_v, width=bw, color=prep_c,
-               edgecolor="black", linewidth=0.6, hatch="//")
 
     ax.set_xlabel("Tile size")
     ax.set_ylabel(ylabel)
@@ -367,72 +320,68 @@ def plot_grouped_bar(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    if show_legend:
-        # Gray tile color communicates the protocol layering convention that
-        # holds across every tile cluster regardless of color.
-        handles = [
-            Patch(facecolor=COLOR_DEFAULT, edgecolor="black", label="P2 (left)"),
-            Patch(facecolor=lighten(COLOR_DEFAULT), edgecolor="black", label="P1 (middle)" if has_prep else "P1 (right)"),
-        ]
-        if has_prep:
-            handles.append(
-                Patch(facecolor=COLOR_DEFAULT, edgecolor="black",
-                      hatch="//", label="Prep (right)")
-            )
-        ax.legend(handles=handles, loc="upper right", fontsize=8, framealpha=0.9)
-
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
-
-
-# The single chart that carries the protocol legend — paper-style "explain it
-# once". Picked as the smallest paper size's wallclock panel.
-LEGEND_CELL = (64, "wallclock")
 
 
 def plot_size(
     ms_data, kb_data,
     n: int, out_dir: Path,
     ms_prep=None, kb_prep=None,
-) -> tuple[bool, bool]:
-    """One combined chart per metric for size n×n. Returns (wc_written, comm_written).
+) -> tuple[int, int]:
+    """Six single-bar PDFs per size n×n — one per (protocol, metric):
 
-    When `ms_prep` / `kb_prep` are provided and contain entries for `n`, the
-    chart renders a third "Prep" bar per tile cluster alongside P2 and P1.
+        - {n}x{n}_p1_wallclock.pdf       — online P1 timing
+        - {n}x{n}_p1_communication.pdf   — online P1 KB
+        - {n}x{n}_p2_wallclock.pdf       — online P2 timing
+        - {n}x{n}_p2_communication.pdf   — online P2 KB
+        - {n}x{n}_prep_wallclock.pdf     — preprocessing timing
+        - {n}x{n}_prep_communication.pdf — preprocessing KB
+
+    Each PDF is a single-bar-per-tile chart so the protocol-vs-protocol
+    comparison happens in print layout (figures placed side-by-side) rather
+    than packed into a single chart. Per-bar tile coloring stays consistent
+    across all six (red=tile-1 half-gates baseline, blue=tile-6 paper
+    optimum, gray otherwise) so the per-bar reading is the same regardless
+    of which figure you're looking at.
+
+    Returns `(online_pdfs_written, prep_pdfs_written)`.
     """
     ms_prep = ms_prep or {}
     kb_prep = kb_prep or {}
 
-    ms_p2 = [(t, ms_data[(2, n, n, t)][0]) for t in TILES if (2, n, n, t) in ms_data]
     ms_p1 = [(t, ms_data[(1, n, n, t)][0]) for t in TILES if (1, n, n, t) in ms_data]
-    kb_p2 = [(t, kb_data[(2, n, n, t)]) for t in TILES if (2, n, n, t) in kb_data]
-    kb_p1 = [(t, kb_data[(1, n, n, t)]) for t in TILES if (1, n, n, t) in kb_data]
+    ms_p2 = [(t, ms_data[(2, n, n, t)][0]) for t in TILES if (2, n, n, t) in ms_data]
+    kb_p1 = [(t, kb_data[(1, n, n, t)])    for t in TILES if (1, n, n, t) in kb_data]
+    kb_p2 = [(t, kb_data[(2, n, n, t)])    for t in TILES if (2, n, n, t) in kb_data]
 
     ms_pp = [(t, ms_prep[(n, n, t)][0]) for t in TILES if (n, n, t) in ms_prep]
     kb_pp = [(t, kb_prep[(n, n, t)])    for t in TILES if (n, n, t) in kb_prep]
 
-    wallclock_written = False
-    if ms_p2 or ms_p1 or ms_pp:
-        plot_grouped_bar(
-            out_dir / f"{n}x{n}_wallclock_bar.pdf",
-            ms_p2, ms_p1, "Time (ms)",
-            prep_pairs=ms_pp or None,
-            show_legend=(n, "wallclock") == LEGEND_CELL,
-        )
-        wallclock_written = True
+    online_written = 0
+    if ms_p1:
+        plot_single_bar(out_dir / f"{n}x{n}_p1_wallclock.pdf",     ms_p1, "Time (ms)")
+        online_written += 1
+    if kb_p1:
+        plot_single_bar(out_dir / f"{n}x{n}_p1_communication.pdf", kb_p1, "Comm (KB)")
+        online_written += 1
+    if ms_p2:
+        plot_single_bar(out_dir / f"{n}x{n}_p2_wallclock.pdf",     ms_p2, "Time (ms)")
+        online_written += 1
+    if kb_p2:
+        plot_single_bar(out_dir / f"{n}x{n}_p2_communication.pdf", kb_p2, "Comm (KB)")
+        online_written += 1
 
-    comm_written = False
-    if kb_p2 or kb_p1 or kb_pp:
-        plot_grouped_bar(
-            out_dir / f"{n}x{n}_communication.pdf",
-            kb_p2, kb_p1, "Comm (KB)",
-            prep_pairs=kb_pp or None,
-            show_legend=(n, "communication") == LEGEND_CELL,
-        )
-        comm_written = True
+    prep_written = 0
+    if ms_pp:
+        plot_single_bar(out_dir / f"{n}x{n}_prep_wallclock.pdf",     ms_pp, "Time (ms)")
+        prep_written += 1
+    if kb_pp:
+        plot_single_bar(out_dir / f"{n}x{n}_prep_communication.pdf", kb_pp, "Comm (KB)")
+        prep_written += 1
 
-    return wallclock_written, comm_written
+    return online_written, prep_written
 
 
 def auto_detect_log() -> Optional[Path]:
@@ -506,13 +455,13 @@ def main() -> int:
     })
     sizes = parse_sizes_arg(args.sizes, sizes_in_data)
 
-    n_wc, n_comm = 0, 0
+    n_online, n_prep = 0, 0
     for n in sizes:
-        wc, comm = plot_size(ms_data, kb_data, n, args.out,
-                             ms_prep=ms_prep, kb_prep=kb_prep)
-        n_wc += int(wc)
-        n_comm += int(comm)
-    print(f"  wrote {n_wc} wallclock + {n_comm} communication PDFs into {args.out}/")
+        online_w, prep_w = plot_size(ms_data, kb_data, n, args.out,
+                                     ms_prep=ms_prep, kb_prep=kb_prep)
+        n_online += online_w
+        n_prep   += prep_w
+    print(f"  wrote {n_online} online + {n_prep} prep PDFs into {args.out}/")
     return 0
 
 
