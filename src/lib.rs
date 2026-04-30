@@ -41,7 +41,7 @@ pub const SSP: usize = 40;
 ///
 /// `assemble_e_input_wire_blocks_p1` and `assemble_c_alpha_beta_blocks_p2`
 /// live in the private `assemble_helpers` module so they don't leak into the
-/// stable public API (TD-01, Phase 3.1). Benchmarks reach them via this gated
+/// stable public API. Benchmarks reach them via this gated
 /// re-export module — activated by `--features bench-internals` (also auto-active
 /// under `cfg(test)` so in-crate tests keep their existing call sites). Not
 /// for production use.
@@ -285,7 +285,7 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // Phase 1.2 / BUG-02: input encoding phase. Populates gb/ev x_dgb/y_dgb,
+        // Input encoding phase. Populates gb/ev x_dgb/y_dgb,
         // masked_x_dgb/masked_y_dgb, and cleartext masked-bit vectors
         // (gb.masked_*_bits = 0-vec; ev.masked_*_bits = d-vector) per the
         // GGM-tree convention. get_first_inputs / evaluate_first_half / etc.
@@ -388,8 +388,8 @@ mod tests {
     /// invariant — preprocessing must populate all four `*_eval_shares` fields
     /// with shares that XOR to `bit · delta_ev`.
     ///
-    /// Per `references/Authenticated_Garbling_with_Tensor_Gates/CCS2026/5_online.tex`
-    /// lines 226–247 (CheckZero) and 211–217 (input encoding), the consistency check
+    /// Per `5_online.tex` lines 226–247 (CheckZero) and 211–217 (input
+    /// encoding), the consistency check
     /// builds e_a, e_b shares on tensor-gate INPUT wires under D_ev (delta_ev), with
     /// the formula `e = v ⊕ l ⊕ L`. For honest input-encoded shares this reconstructs
     /// to zero by paper Lemma `lem:protocol1-correctness` (line 297).
@@ -553,13 +553,13 @@ mod tests {
             "P2 garble_final_p2 must produce shares that reconstruct to x⊗y · δ_gb"
         );
 
-        // AUDIT-2.4 D2: symmetric D_ev correctness. The wide-leaf `_ev`
-        // accumulators (`first_half_out_dev` / `second_half_out_dev`) are folded
-        // into `first_half_out_dev` by `garble_final_p2` (paired-with-`evaluate_final_p2`
-        // on eval's side). Combined under δ_ev, they must reconstruct to
-        // (x ⊗ y) · δ_ev — the headline P2 invariant on the D_ev path that
-        // distinguishes Protocol 2 from Protocol 1. Closes the SCAFFOLDING-
-        // flagged D_ev output coverage gap. (`gb` has no `delta_ev` field;
+        // Symmetric D_ev correctness. The wide-leaf `_ev` accumulators
+        // (`first_half_out_dev` / `second_half_out_dev`) are folded into
+        // `first_half_out_dev` by `garble_final_p2` (paired with
+        // `evaluate_final_p2` on eval's side). Combined under δ_ev, they
+        // must reconstruct to (x ⊗ y) · δ_ev — the headline P2 invariant
+        // on the D_ev path that distinguishes Protocol 2 from Protocol 1.
+        // (`gb` has no `delta_ev` field;
         // `ev.delta_ev` is the simulation reach into eval's state — same
         // pattern used at lines 695-708 below for `c_α` / `c_β` assembly.)
         assert!(
@@ -665,7 +665,7 @@ mod tests {
         let mut gb = AuthTensorGen::new_from_fpre_gen(fpre_gen);
         let mut ev = AuthTensorEval::new_from_fpre_eval(fpre_eval);
 
-        // Phase 1.2 / BUG-02: install garble-time input labels (x = y = 0).
+        // Install garble-time input labels (x = y = 0).
         let mut prep_rng = rand::rng();
         encode_inputs(&mut gb, &mut ev, 0, 0, &mut prep_rng);
 

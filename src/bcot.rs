@@ -233,12 +233,12 @@ mod tests {
     }
 
     /// Paper §F Construction 2 requires `lsb(Δ_gb ⊕ Δ_ev) == 1` for masked reveal to work.
-    /// Verified by `delta_gb.lsb() == 1` (invariant) and `delta_ev.lsb() == 0` (new for Phase 4).
+    /// Verified by `delta_gb.lsb() == 1` and `delta_ev.lsb() == 0` invariants.
     #[test]
     fn test_delta_xor_lsb_is_one() {
         let bcot = IdealBCot::new(42, 99);
         assert!(bcot.delta_gb.as_block().lsb(), "Δ_gb lsb must be 1");
-        assert!(!bcot.delta_ev.as_block().lsb(), "Δ_ev lsb must be 0 (Phase 4 change)");
+        assert!(!bcot.delta_ev.as_block().lsb(), "Δ_ev lsb must be 0");
         let xor_lsb = bcot.delta_gb.as_block().lsb() ^ bcot.delta_ev.as_block().lsb();
         assert!(xor_lsb, "Paper §F requires lsb(Δ_gb ⊕ Δ_ev) == 1");
     }

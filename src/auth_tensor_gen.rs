@@ -63,14 +63,12 @@ pub struct AuthTensorGen {
     /// `gb_second_half_out_dgb()`.
     pub(crate) gb_second_half_out_dgb: BlockMatrix,
 
-    /// D_ev (rho-half) accumulator for the first half-outer-product. Phase 9 P2-02.
-    /// Mirrors `gb_first_half_out_dgb` but accumulates the rho-half PRG outputs from
+    /// D_ev (rho-half) accumulator for the first half-outer-product.    /// Mirrors `gb_first_half_out_dgb` but accumulates the rho-half PRG outputs from
     /// `gen_unary_outer_product_wide`. Written by `garble_first_half_p2` /
     /// `garble_second_half_p2`; consumed by `garble_final_p2`. Read via
     /// `gb_first_half_out_dev()`.
     pub(crate) gb_first_half_out_dev: BlockMatrix,
-    /// D_ev (rho-half) accumulator for the second half-outer-product. Phase 9 P2-02.
-    /// Read via `gb_second_half_out_dev()`.
+    /// D_ev (rho-half) accumulator for the second half-outer-product.    /// Read via `gb_second_half_out_dev()`.
     pub(crate) gb_second_half_out_dev: BlockMatrix,
 
     /// Set to `true` by `garble_final()`. `compute_lambda_gamma()` asserts
@@ -80,16 +78,16 @@ pub struct AuthTensorGen {
 
 impl AuthTensorGen {
     pub fn new_from_fpre_gen(fpre_gen: TensorFpreGen) -> Self {
-        // AUDIT-2.3 D7: paper's chunking-size matching invariant requires the
-        // GGM-tree tile boundaries used by P1 to match those baked into
-        // preprocessing. A zero chunking_factor (no tiles) silently breaks tile
-        // alignment downstream and breaks `gen_chunked_half_outer_product`'s
+        // Paper's chunking-size matching invariant requires the GGM-tree tile
+        // boundaries used by P1 to match those baked into preprocessing. A
+        // zero chunking_factor (no tiles) silently breaks tile alignment
+        // downstream and breaks `gen_chunked_half_outer_product`'s
         // chunk-iteration arithmetic. Per-party defense-in-depth check; the
         // cross-party `gb.chunking_factor == ev.chunking_factor` invariant is
         // verified by `verify_chunking_factor_cross_party` at preprocessing exit.
         assert!(
             fpre_gen.chunking_factor > 0,
-            "fpre_gen.chunking_factor must be at least 1 (AUDIT-2.3 D7)"
+            "fpre_gen.chunking_factor must be at least 1"
         );
         Self {
             cipher: &(*FIXED_KEY_AES),
@@ -160,8 +158,7 @@ impl AuthTensorGen {
         (chunk_levels, chunk_cts)
     }
 
-    /// Wide-leaf variant of `gen_chunked_half_outer_product`. Phase 9 P2-02.
-    /// Writes BOTH the D_gb output (`gb_first_half_out_dgb` or `gb_second_half_out_dgb`) AND the
+    /// Wide-leaf variant of `gen_chunked_half_outer_product`.    /// Writes BOTH the D_gb output (`gb_first_half_out_dgb` or `gb_second_half_out_dgb`) AND the
     /// D_ev output (`gb_first_half_out_dev` or `gb_second_half_out_dev`) in a single pass
     /// over the GGM tree.
     ///
@@ -169,7 +166,7 @@ impl AuthTensorGen {
     /// - `chunk_levels: Vec<Vec<Block>>` — paper-faithful single-Block-per-level
     ///   tree ciphertexts (Construction 4 / `5_online.tex:43-72`); leaf-level only.
     /// - `chunk_cts: Vec<Vec<(Block, Block)>>` — wide leaf cts at `(κ, κ)` width.
-    ///   Paper-faithful `(κ, ρ)` width via `RhoBlock` is deferred (AUDIT-2.4 D1
+    ///   Paper-faithful `(κ, ρ)` width via `RhoBlock` is deferred (RhoBlock
     ///   second half); current shape preserves the κ-bit ρ-half.
     pub(crate) fn gen_chunked_half_outer_product_wide(
         &mut self,
@@ -392,13 +389,13 @@ impl AuthTensorGen {
         y_ev
     }
 
-    /// Phase 9 P2-02. Drives the wide GGM tree expansion for the first
+    /// Drives the wide GGM tree expansion for the first
     /// half-outer-product. Returns `(chunk_levels, chunk_cts_wide)` where:
     /// - `chunk_levels: Vec<Vec<Block>>` is the paper-faithful single-Block-
     ///   per-level tree-cts shape (Construction 4).
     /// - `chunk_cts_wide: Vec<Vec<(Block, Block)>>` carries the kappa-half AND
     ///   rho-half ciphertexts (paper-faithful (κ, ρ) width via `RhoBlock` is
-    ///   deferred — see AUDIT-2.4 D1 second half).
+    ///   deferred).
     ///
     /// Writes BOTH `gb_first_half_out_dgb` (D_gb) and `gb_first_half_out_dev` (D_ev) in
     /// a single pass.
@@ -413,7 +410,7 @@ impl AuthTensorGen {
         )
     }
 
-    /// Phase 9 P2-02. Drives the wide GGM tree expansion for the second
+    /// Drives the wide GGM tree expansion for the second
     /// half-outer-product. Mirrors `garble_first_half_p2` with second-half
     /// inputs.
     pub fn garble_second_half_p2(&mut self) -> (Vec<Vec<Block>>, Vec<Vec<(Block, Block)>>) {
@@ -427,7 +424,7 @@ impl AuthTensorGen {
         )
     }
 
-    /// Phase 9 P2-02. Combines both halves into the final D_gb and D_ev output
+    /// Combines both halves into the final D_gb and D_ev output
     /// shares.
     ///
     /// Returns `(d_gb_out, d_ev_out)`:
@@ -436,7 +433,7 @@ impl AuthTensorGen {
     /// - `d_ev_out[j*n + i]` = `[v_gamma D_ev]^gb` for gate (i, j); the new D_ev
     ///   path.
     ///
-    /// CRITICAL — Protocol-2 garbler privacy (CONTEXT.md D-10): this method
+    /// CRITICAL — Protocol-2 garbler privacy: this method
     /// NEVER returns a masked wire value (no `bool` / no `Vec<bool>`). The
     /// garbler retains both shares privately. The static return type
     /// `(Vec<Block>, Vec<Block>)` enforces the privacy property at compile
@@ -511,8 +508,8 @@ mod tests {
     use rand_chacha::ChaCha12Rng;
 
     /// Test helper: run the input-encoding phase so
-    /// `gb.garble_*_half` and `ev.evaluate_*_half` can run. Per BUG-02 /
-    /// Phase 1.2, input wire labels are no longer populated by
+    /// `gb.garble_*_half` and `ev.evaluate_*_half` can run.
+    /// Input wire labels are no longer populated by
     /// preprocessing — tests must call this between `new_from_fpre_*`
     /// and the first `garble_*` / `evaluate_*` call.
     fn install_test_input_labels(
@@ -561,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_garble_final_p2_returns_two_block_vecs_no_lambda() {
-        // P2-02: garble_final_p2 return type contains NO masked wire value (no Vec<bool>).
+        // garble_final_p2 return type contains NO masked wire value (no Vec<bool>).
         // Statically the type is (Vec<Block>, Vec<Block>) — there is no bool field.
         let n = 4;
         let m = 3;
@@ -580,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_garble_first_half_p2_returns_wide_ciphertexts() {
-        // P2-01/P2-02: garble_first_half_p2 returns wide chunk_cts of type Vec<Vec<(Block, Block)>>.
+        // garble_first_half_p2 returns wide chunk_cts of type Vec<Vec<(Block, Block)>>.
         let n = 4;
         let m = 3;
         let (fpre_gen, fpre_eval) = IdealPreprocessingBackend.run(n, m, 1);
@@ -599,7 +596,7 @@ mod tests {
         assert!(!chunk_cts.is_empty(), "chunk_cts must be non-empty");
     }
 
-    /// AUDIT-2.1 D2 / AUDIT-2.3 D3: chunked wrappers must propagate the paper-
+    /// Chunked wrappers must propagate the paper-
     /// faithful single-Block-per-level shape (Construction 4 / 5_online.tex:43-72).
     /// HK21's two-ct-per-level shape would surface as `Vec<Vec<(Block, Block)>>`
     /// here; the static type bound + element count check catches both regressions.

@@ -26,7 +26,7 @@ pub struct AuthTensorEval {
     pub gamma_dgb:  Vec<Block>,
 
     /// Eval's half of (sharing of x under δ_gb). Length n. Populated by
-    /// `install_input_labels` (BUG-02 / Phase 1.2). Auth-bit-style: this
+    /// `install_input_labels`. Auth-bit-style: this
     /// is the `key` half handed off by gen; gen retains the `mac` half
     /// in `AuthTensorGen.x_dgb`. Pair encodes `x_i · δ_gb`.
     pub x_dgb: Vec<Block>,
@@ -37,8 +37,7 @@ pub struct AuthTensorEval {
     /// Equals `x_dgb[i] XOR mac_e_α` where `mac_e_α` is eval's
     /// α-share `mac` from `alpha_auth_bit_shares`. Pair with gen's
     /// `masked_x_dgb` encodes `(x XOR α) · δ_gb`. Used as the GGM-tree
-    /// seed input by `evaluate_first_half` once callers migrate
-    /// (Phase 1.2(b)).
+    /// seed input by `evaluate_first_half`.
     pub masked_x_dgb: Vec<Block>,
     /// Eval's half of (sharing of y XOR β under δ_gb). Length m.
     pub masked_y_dgb: Vec<Block>,
@@ -63,14 +62,12 @@ pub struct AuthTensorEval {
     /// `ev_second_half_out_dgb()`.
     pub(crate) ev_second_half_out_dgb: BlockMatrix,
 
-    /// D_ev (rho-half) accumulator for the first half-outer-product. Phase 9 P2-03.
-    /// Mirrors `ev_first_half_out_dgb` but accumulates the rho-half PRG outputs from
+    /// D_ev (rho-half) accumulator for the first half-outer-product.    /// Mirrors `ev_first_half_out_dgb` but accumulates the rho-half PRG outputs from
     /// `eval_unary_outer_product_wide`. Written by `evaluate_first_half_p2` /
     /// `evaluate_second_half_p2`; consumed by `evaluate_final_p2`. Read via
     /// `ev_first_half_out_dev()`.
     pub(crate) ev_first_half_out_dev: BlockMatrix,
-    /// D_ev (rho-half) accumulator for the second half-outer-product. Phase 9 P2-03.
-    /// Read via `ev_second_half_out_dev()`.
+    /// D_ev (rho-half) accumulator for the second half-outer-product.    /// Read via `ev_second_half_out_dev()`.
     pub(crate) ev_second_half_out_dev: BlockMatrix,
 
     /// Set to `true` by `evaluate_final()`. `compute_lambda_gamma()` asserts
@@ -80,10 +77,10 @@ pub struct AuthTensorEval {
 
 impl AuthTensorEval {
     pub fn new_from_fpre_eval(fpre_eval: TensorFpreEval) -> Self {
-        // AUDIT-2.3 D7: see `AuthTensorGen::new_from_fpre_gen` for rationale.
+        // See `AuthTensorGen::new_from_fpre_gen` for rationale.
         assert!(
             fpre_eval.chunking_factor > 0,
-            "fpre_eval.chunking_factor must be at least 1 (AUDIT-2.3 D7)"
+            "fpre_eval.chunking_factor must be at least 1"
         );
         Self {
             cipher: &(*FIXED_KEY_AES),
@@ -115,8 +112,8 @@ impl AuthTensorEval {
 
 /// Choice bits for GGM-tree traversal MUST be supplied explicitly via
     /// `choice_bits` (typically `&self.ev_masked_x_bits` for first half, or
-    /// `&self.ev_masked_y_bits` for second half). Per BUG-02 / Phase 1.2, the
-    /// previous LSB-of-wire-label readout is no longer correct under the
+    /// `&self.ev_masked_y_bits` for second half). The previous
+    /// LSB-of-wire-label readout is no longer correct under the
     /// auth-bit-style construction — eval's wire-label LSB is now the
     /// local α-share (`b_α`), not the masked input bit `d_α`.
     ///
@@ -184,7 +181,7 @@ impl AuthTensorEval {
         }
     }
 
-    /// Phase 9 P2-03. Wide-leaf variant of `eval_chunked_half_outer_product`.
+    /// Wide-leaf variant of `eval_chunked_half_outer_product`.
     /// Consumes paper-faithful single-Block-per-level tree cts
     /// `chunk_levels: Vec<Vec<Block>>` (Construction 4) plus wide leaf cts
     /// `chunk_cts: Vec<Vec<(Block, Block)>>` (κ-half AND ρ-half), and writes
@@ -192,8 +189,8 @@ impl AuthTensorEval {
     /// D_ev output (`ev_first_half_out_dev` / `ev_second_half_out_dev`) in a single
     /// pass.
     ///
-    /// Choice bits MUST be supplied explicitly via `choice_bits` (BUG-02 /
-    /// Phase 1.2). `choice_bits.len()` must equal `x.rows()`.
+    /// Choice bits MUST be supplied explicitly via `choice_bits`.
+    /// `choice_bits.len()` must equal `x.rows()`.
     fn eval_chunked_half_outer_product_wide(
         &mut self,
         x: &MatrixViewRef<Block>,
@@ -424,7 +421,7 @@ impl AuthTensorEval {
         self.final_computed = true;
     }
 
-    /// Phase 9 P2-03. Drives the wide GGM tree expansion for the first
+    /// Drives the wide GGM tree expansion for the first
     /// half-outer-product on the ev side. Consumes wide ciphertexts emitted
     /// by `AuthTensorGen::garble_first_half_p2`. Writes BOTH `ev_first_half_out_dgb`
     /// (D_gb) and `ev_first_half_out_dev` (D_ev) in a single pass.
@@ -447,7 +444,7 @@ impl AuthTensorEval {
         );
     }
 
-    /// Phase 9 P2-03. Drives the wide GGM tree expansion for the second
+    /// Drives the wide GGM tree expansion for the second
     /// half-outer-product on the ev side.
     pub fn evaluate_second_half_p2(
         &mut self,
@@ -468,7 +465,7 @@ impl AuthTensorEval {
         );
     }
 
-    /// Phase 9 P2-03. Combines both halves into the final D_ev output share.
+    /// Combines both halves into the final D_ev output share.
     ///
     /// Returns `[v_gamma D_ev]^ev` — length `n * m` in column-major (j*n + i)
     /// order. Also XORs the D_gb half into `ev_first_half_out_dgb` for symmetry with
@@ -485,7 +482,7 @@ impl AuthTensorEval {
     /// `correlated_dev.key` on the ev side is the local key view that
     /// pairs with `correlated_dev.mac` on the gb side under `delta_ev`.
     ///
-    /// Per CONTEXT.md D-11: returns the eval's D_ev output share vector;
+    /// Returns the eval's D_ev output share vector;
     /// struct does not gain new persistent fields beyond `ev_first_half_out_dev` /
     /// `ev_second_half_out_dev` (private accumulators).
     pub fn evaluate_final_p2(&mut self) -> Vec<Block> {
@@ -541,7 +538,7 @@ mod tests {
 
     /// Build a paired (gb, ev) and run the input-encoding phase for
     /// x = y = 0 with a fixed seed so unit tests stay deterministic.
-    /// After Phase 1.2 / BUG-02, `garble_*_half` and `evaluate_*_half`
+    /// `garble_*_half` and `evaluate_*_half`
     /// require `encode_inputs` to have been called first.
     /// Tests needing non-zero inputs should call the builders directly.
     fn build_pair(n: usize, m: usize) -> (AuthTensorGen, AuthTensorEval) {
@@ -555,7 +552,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_final_p2_returns_d_ev_share_vec() {
-        // P2-03: evaluate_final_p2 returns Vec<Block> of length n*m (D_ev output share).
+        // evaluate_final_p2 returns Vec<Block> of length n*m (D_ev output share).
         let n = 4;
         let m = 3;
         let (mut gb, mut ev) = build_pair(n, m);

@@ -7,7 +7,7 @@ edition = "2024"
 # Re-exports crate-internal helpers (e.g. `assemble_e_input_wire_blocks_p1`,
 # `assemble_c_alpha_beta_blocks_p2`) under the `bench_internals` module so the
 # Criterion bench target can reach them. Off by default — these helpers are
-# not part of the stable public API surface (TD-01, Phase 3.1).
+# not part of the stable public API surface.
 bench-internals = []
 
 [dependencies]

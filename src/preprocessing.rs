@@ -4,14 +4,14 @@
 //! real two-party preprocessing protocol produces, together with the `run_preprocessing`
 //! entry point. The ideal trusted-dealer functionality stays in `auth_tensor_fpre`.
 //!
-//! AUDIT-2.4 C2 — F_cpre / F_pre coupling note: the paper distinguishes
+//! F_cpre / F_pre coupling note: the paper distinguishes
 //! `F_pre` (uncompressed preprocessing, paper Construction 4 / `appendix_krrw_pre.tex`)
 //! from `F_cpre` (compressed preprocessing, paper Section 4). The current
 //! implementation realizes only the uncompressed `F_pre` flavour; the same
 //! `TensorFpreGen` / `TensorFpreEval` structs are consumed by both Protocol 1
 //! and Protocol 2 callers without a type-system marker for which flavour is
-//! intended. When `F_cpre` lands (deferred to v3 — see master plan / PRE-05),
-//! introduce marker types to prevent silent cross-flavour mixing at call sites.
+//! intended. When `F_cpre` lands, introduce marker types to prevent silent
+//! cross-flavour mixing at call sites.
 
 use crate::{block::Block, delta::Delta, sharing::{AuthBitShare, build_share}};
 use crate::bcot::IdealBCot;
@@ -24,18 +24,18 @@ use rand_chacha::ChaCha12Rng;
 /// Default master seed used by the unparameterized preprocessing entry points
 /// (`run_preprocessing`, `<Backend as TensorPreprocessing>::run`). Tests and
 /// benchmarks that want to vary fixture data should reach for the
-/// `*_with_seed` variants instead. SEC-05.
+/// `*_with_seed` variants instead..
 pub const DEFAULT_PREP_SEED: u64 = 0;
 
 /// Per-call deterministic sub-seeds derived from a single master seed. Each
 /// sub-seed feeds a distinct internal RNG so that varying the master cleanly
 /// shifts the entire preprocessing fixture without callers needing to know
-/// the internal pipeline shape. SEC-05.
+/// the internal pipeline shape..
 ///
 /// Offset choice: each field uses a distinct large power-of-16 offset, so the
 /// per-triple seeds `triple_base + t` (which loop up to `bucket_size`, ~21
-/// for the headline parameters in `references/.../appendix_F.tex`) cannot
-/// collide with `shuffle` or `gamma` for any bucket size below `0x10_000`.
+/// for the headline parameters per Construction 4) cannot collide with
+/// `shuffle` or `gamma` for any bucket size below `0x10_000`.
 /// `wrapping_add` keeps the derivation total over the full `u64` range.
 struct PrepSubseeds {
     fpre: u64,
@@ -164,7 +164,7 @@ pub struct TensorFpreEval {
 /// All implementations are zero-field (unit) structs — no state, just behavior.
 /// Using `&self` even though no data is read: makes the trait object-safe
 /// (usable as `dyn TensorPreprocessing`) consistent with the codebase's `&self` / `&mut self`
-/// convention. See CONTEXT.md D-01.
+/// convention.
 pub trait TensorPreprocessing {
     fn run(
         &self,
@@ -176,13 +176,13 @@ pub trait TensorPreprocessing {
 
 /// Backend that wraps the real two-party uncompressed preprocessing protocol (Pi_aTensor',
 /// Construction 4). Callers should use `UncompressedPreprocessingBackend.run(n, m, cf)`
-/// instead of calling `run_preprocessing` directly. See CONTEXT.md D-02.
+/// instead of calling `run_preprocessing` directly.
 pub struct UncompressedPreprocessingBackend;
 
 impl UncompressedPreprocessingBackend {
     /// Seed-parameterized uncompressed preprocessing. Delegates to
     /// `run_preprocessing_with_seed`. Tests and benches that want varied
-    /// fixtures call this directly. SEC-05.
+    /// fixtures call this directly.
     pub fn run_with_seed(
         seed: u64,
         n: usize,
@@ -207,18 +207,17 @@ impl TensorPreprocessing for UncompressedPreprocessingBackend {
 /// Backend that uses an ideal trusted-dealer oracle (in-process, not cryptographically secure).
 ///
 /// Fixed seed 0 used internally — matches the `IdealBCot::new(0, 1)` precedent (see
-/// src/bcot.rs). For tests and benchmarks only. See CONTEXT.md D-03, D-07, D-08.
+/// src/bcot.rs). For tests and benchmarks only.
 ///
 /// `gamma_auth_bit_shares` is populated with `n*m` independent random IT-MAC authenticated
 /// bits for l_gamma (the gate output mask). `gen_auth_bit()` calls MUST precede
 /// `into_gen_eval()` because `into_gen_eval(self)` consumes `fpre` by value.
-/// See RESEARCH.md Pitfall 2 and Pattern 3.
 pub struct IdealPreprocessingBackend;
 
 impl IdealPreprocessingBackend {
     /// Seed-parameterized ideal preprocessing. The trait `run` implementation
     /// is a thin wrapper that passes `DEFAULT_PREP_SEED`. Tests and benches
-    /// that want varied fixtures call this directly. SEC-05.
+    /// that want varied fixtures call this directly.
     pub fn run_with_seed(
         seed: u64,
         n: usize,
@@ -309,7 +308,7 @@ pub fn run_preprocessing(
     run_preprocessing_with_seed(DEFAULT_PREP_SEED, n, m, chunking_factor)
 }
 
-/// Seed-parameterized variant of `run_preprocessing`. SEC-05.
+/// Seed-parameterized variant of `run_preprocessing`..
 ///
 /// Routes `seed` through `PrepSubseeds::from_master` to derive the six
 /// internal RNG seeds (fpre, bCOT delta_gb, bCOT delta_ev, per-triple base,
@@ -344,13 +343,9 @@ pub fn run_preprocessing_with_seed(
     let (mut gen_out, mut eval_out) =
         combine_leaky_triples(triples, bucket_size, n, m, chunking_factor, sub.shuffle);
 
-    // BUG-02 / Phase 1.2(c): the post-bucketing input-label populator was
-    // removed here. Input wire labels are no longer a preprocessing artifact —
-    // they are generated at garble time by AuthTensorGen::prepare_input_labels.
-    // The previous block faked labels using x = y = 0 with the input-dependent
-    // formula `(x XOR alpha) · delta_gb`, which encoded the mask itself rather
-    // than any real input — a "works because both sides use the same dummy
-    // convention" hack flagged by LABELS-BUG-CONTEXT.md.
+    // The post-bucketing input-label populator was removed here. Input wire
+    // labels are no longer a preprocessing artifact — they are generated at
+    // garble time by AuthTensorGen::prepare_input_labels.
 
     // Post-bucketing local lowering: each party computes its own _eval and _gen
     // Block-form components from auth-bit shares + own delta. No interaction.
@@ -406,7 +401,7 @@ pub fn run_preprocessing_with_seed(
     eval_out.gamma_dev = gamma_eval_e;
     eval_out.gamma_dgb  = gamma_gen_e;
 
-    // AUDIT-2.3 D7: cross-party `chunking_factor` parity invariant. Trivially
+    // Cross-party `chunking_factor` parity invariant. Trivially
     // true here since both outputs were derived from the single `chunking_factor`
     // argument — but this is the canonical enforcement site for the simulation,
     // and breaks loudly if `combine_leaky_triples` ever gets a divergence bug.
@@ -482,7 +477,7 @@ mod tests {
         // No panic = success
     }
 
-    // PRE-01: trait is object-safe — both backends work through a dyn reference.
+    // trait is object-safe — both backends work through a dyn reference.
     // Note: bindings named `gen_out` / `eval_out` because `gen` is a reserved keyword
     // in Rust 2024 edition (same reason as IdealPreprocessingBackend::run body).
     #[test]
@@ -505,7 +500,7 @@ mod tests {
         assert_eq!(eval_out.m, 4);
     }
 
-    // PRE-03: UncompressedPreprocessingBackend delegates to run_preprocessing exactly
+    // UncompressedPreprocessingBackend delegates to run_preprocessing exactly
     #[test]
     fn test_uncompressed_backend_delegates_to_run_preprocessing() {
         let (gen_out, _eval_out) = UncompressedPreprocessingBackend.run(4, 4, 1);
@@ -593,7 +588,7 @@ mod tests {
         }
     }
 
-    // PRE-02: IdealPreprocessingBackend returns correctly dimensioned output.
+    // IdealPreprocessingBackend returns correctly dimensioned output.
     // Note: bindings named `gen_out` / `eval_out` because `gen` is a reserved keyword
     // in Rust 2024 edition.
     #[test]
@@ -609,7 +604,7 @@ mod tests {
         assert_eq!(eval_out.correlated_auth_bit_shares.len(), 16);
     }
 
-    // PRE-04: gamma_auth_bit_shares length is n*m on both sides
+    // gamma_auth_bit_shares length is n*m on both sides
     #[test]
     fn test_ideal_backend_gamma_auth_bit_shares_length() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
@@ -619,9 +614,9 @@ mod tests {
             "eval.gamma_auth_bit_shares must have n*m=16 entries");
     }
 
-    // PRE-04 + D-09: IT-MAC invariant (mac = key XOR bit * delta) holds for all gamma shares.
+    // IT-MAC invariant (mac = key XOR bit * delta) holds for all gamma shares.
     // WARNING: Do NOT call share.verify(delta) directly — it panics on correctly-formed
-    // cross-party shares. Always use verify_cross_party (see RESEARCH.md Pitfall 3).
+    // cross-party shares. Always use verify_cross_party.
     #[test]
     fn test_ideal_backend_gamma_auth_bit_shares_mac_invariant() {
         let (gen_out, eval_out) = IdealPreprocessingBackend.run(4, 4, 1);
@@ -636,8 +631,8 @@ mod tests {
         // If no panic: all 16 gamma shares satisfy the IT-MAC invariant.
     }
 
-    // P2-01 (Phase 9 D-04, D-06): All three new D_ev field pairs are populated
-    // and have correct lengths n, m, n*m respectively.
+    // All three new D_ev field pairs are populated and have correct lengths
+    // n, m, n*m respectively.
     #[test]
     fn test_ideal_backend_eval_shares_lengths() {
         let n = 4;
@@ -657,7 +652,7 @@ mod tests {
             "eval.correlated_dev must have length n*m");
     }
 
-    // P2-01: D_ev label pairs XOR to `bit * delta_ev` — the core correctness invariant.
+    // D_ev label pairs XOR to `bit * delta_ev` — the core correctness invariant.
     // gen_label XOR eval_label == lambda_i * D_ev for each alpha/beta/correlated bit.
     #[test]
     fn test_ideal_backend_eval_shares_bit_correlation() {
@@ -687,7 +682,7 @@ mod tests {
         }
     }
 
-    // PRE-04 + D-05: gamma_auth_bit_shares (l_gamma) is a different random sample
+    // gamma_auth_bit_shares (l_gamma) is a different random sample
     // from correlated_auth_bit_shares (l_gamma*). Basic distinctness: not all-zero bits.
     #[test]
     fn test_ideal_backend_gamma_distinct_from_correlated() {

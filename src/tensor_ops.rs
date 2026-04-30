@@ -294,7 +294,7 @@ pub(crate) fn eval_unary_outer_product(
 ///
 /// Without this tag, level-loop tweaks `i ∈ [1, n-1]` would overlap leaf-
 /// expansion tweaks `m·j + i ∈ [0, m·2^n)` (paper `5_online.tex` C2 input-
-/// distinctness latent assumption — see AUDIT-2.1 C2). Setting bit 65 puts
+/// distinctness latent assumption). Setting bit 65 puts
 /// every loop tweak above the (m·2^n) leaf range and disjoint from
 /// `WIDE_DOMAIN`, bringing the narrow path in line with the wide path's
 /// explicit domain hardening.
@@ -314,7 +314,7 @@ const WIDE_DOMAIN: u128 = 1u128 << 64;
 /// accumulates each half into a separate output matrix. Returns wide ciphertexts
 /// as `Vec<(Block, Block)>` where `.0` is the κ-half and `.1` is the ρ-half.
 ///
-/// Phase 9 / P2-01. See CONTEXT.md D-01, D-02, D-03 and 6_total.tex Construction 4.
+/// See `6_total.tex` Construction 4.
 ///
 /// Tweak convention (domain-separated from narrow tweaks via `WIDE_DOMAIN`):
 ///   - κ-half:  cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1)),     seeds[i])
@@ -344,7 +344,7 @@ pub(crate) fn gen_unary_outer_product_wide(
         for i in 0..seeds.len() {
             let base = (seeds.len() * j + i) as u128;
             // Domain-separated even/odd tweak split: WIDE_DOMAIN bit 64 ensures
-            // wide tweaks never collide with narrow tweaks (CONTEXT.md D-03).
+            // wide tweaks never collide with narrow tweaks.
             let s_gb = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1)),     seeds[i]);
             let s_ev = cipher.tccr(Block::from(WIDE_DOMAIN | (base << 1 | 1)), seeds[i]);
             row_gb ^= s_gb;
@@ -371,7 +371,7 @@ pub(crate) fn gen_unary_outer_product_wide(
 /// into BOTH `out_gb` and `out_ev` using the wide ciphertexts
 /// `gen_cts: &[(Block, Block)]`.
 ///
-/// Phase 9 / P2-01. See CONTEXT.md D-01, D-03 and 6_total.tex Construction 4 step 4.
+/// See `6_total.tex` Construction 4 step 4.
 ///
 /// Preconditions:
 /// - `y_d_gb.len() == m == y_d_ev.len() == gen_cts.len()`
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_gen_unary_outer_product_wide_tweak_independence() {
-        // P2-01: kappa-half and rho-half outputs MUST differ — even/odd tweak split
+        // Kappa-half and rho-half outputs MUST differ — even/odd tweak split
         // ensures TCCR outputs are pseudorandomly independent.
         // Deterministic seeds (n=2 -> 4 leaves, m=2 columns).
         let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x1000)).collect();
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_eval_unary_outer_product_wide_round_trip_kappa() {
-        // P2-01: With matching missing index, gen + eval round-trip on the kappa half
+        // With matching missing index, gen + eval round-trip on the kappa half
         // produces the same accumulator behavior as the narrow gen + narrow eval.
         // Use n=2 (4 leaves), m=1 column, missing=2 (arbitrary leaf).
         let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x10)).collect();
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_eval_unary_outer_product_wide_round_trip_rho() {
-        // P2-01: same round-trip property for the rho half (tweak base<<1|1).
+        // Same round-trip property for the rho half (tweak base<<1|1).
         let seeds: Vec<Block> = (0..4).map(|i| Block::from((i as u128) + 0x10)).collect();
         let mut y_gb_mat = BlockMatrix::new(1, 1);
         let mut y_ev_mat = BlockMatrix::new(1, 1);
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_wide_signature_shapes() {
-        // P2-01: shape invariants — gen_cts.len() == m; out_gb / out_ev are written.
+        // Shape invariants — gen_cts.len() == m; out_gb / out_ev are written.
         let seeds: Vec<Block> = (0..4).map(|i| Block::from(i as u128)).collect();
         let mut y_gb_mat = BlockMatrix::new(3, 1);
         let mut y_ev_mat = BlockMatrix::new(3, 1);

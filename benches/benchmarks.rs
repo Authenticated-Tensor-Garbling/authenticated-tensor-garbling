@@ -23,18 +23,9 @@ use authenticated_tensor_garbling::{
 };
 use authenticated_tensor_garbling::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
 
-// Network model from `appendix_experiments.tex` line 13: 100 Mbps, no jitter,
-// no delay. The new `online` group simulates transit deterministically by
-// computing `bytes * 8 / NETWORK_BANDWIDTH_BPS` ns per round and adding it
-// onto the measured compute time — no tokio, no scheduler jitter.
+
 const NETWORK_BANDWIDTH_BPS: u64 = 100_000_000;
-// Byte widths derived from κ (CSP) and ρ (SSP). KAPPA_BYTES is the on-wire
-// width for κ-bit objects (GGM-tree ciphertexts, P1 narrow ciphertexts, the
-// CheckZero digest, and the κ-half of P2 wide ciphertexts); RHO_BYTES is the
-// width for the ρ-half of P2 wide leaf ciphertexts (`6_total.tex:90`,
-// Construction 4). When ρ later changes in the actual computation, bumping
-// `SSP` in `src/lib.rs` is the single source-of-truth knob — bench accounting
-// and the network-simulator transit time track automatically.
+
 const KAPPA_BYTES: usize = (CSP + 7) / 8;
 const RHO_BYTES:   usize = (SSP + 7) / 8;
 
@@ -55,15 +46,15 @@ static RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
 // Benchmark parameters — (n, m) pairs matching the paper's sweep
 // (appendix_experiments.tex, §Methodology).
 const BENCHMARK_PARAMS: &[(usize, usize)] = &[
-    // (4, 4),
-    // (8, 8),
-    // (16, 16),
-    // (24, 24),
-    // (32, 32),
-    // (48, 48),
-    // (64, 64),
-    // // (96, 96),
-    // (128, 128),
+    (4, 4),
+    (8, 8),
+    (16, 16),
+    (24, 24),
+    (32, 32),
+    (48, 48),
+    (64, 64),
+    (96, 96),
+    (128, 128),
     (256, 256),
 ];
 
@@ -89,17 +80,12 @@ fn setup_auth_pair(n: usize, m: usize, chunking_factor: usize) -> (AuthTensorGen
 
 /// Total GC byte count for Protocol 1 garble output at `(n, m, chunking_factor)`.
 /// Sum is `chunk_levels.len() * KAPPA_BYTES + chunk_cts.len() * KAPPA_BYTES`
-/// per chunk over both halves. Tree-level cts are paper-faithful one-Block-
-/// per-level (paper Construction 4 / `5_online.tex:43-72`, AUDIT-2.1 D1).
-/// Output count is determined by `(n, m, chunking_factor)` alone, so this is
-/// called once per cell outside the timed iter loop.
+/// per chunk over both halves.
 ///
 /// All P1 ciphertexts are κ-wide (no ρ widening); the protocol is unauthenticated.
 fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
-    // Garble output sizes are input-independent (determined by n/m/chunking
-    // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
-    // n > usize::BITS without tripping the encode_inputs bit-pack assert.
+
     encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = gb.garble_first_half();
     let (second_levels, second_cts) = gb.garble_second_half();
@@ -116,7 +102,7 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// `Vec<Vec<(Block, Block)>>` (wide leaf ciphertexts per `6_total.tex:90`, the
 /// κ + ρ extension): the .0 component carries the κ-bit Δ_gb-label material,
 /// .1 carries the ρ-bit Δ_ev-MAC material. GGM-tree level ciphertexts are
-/// paper-faithful one-Block-per-level (Construction 4 / AUDIT-2.1 D1).
+/// paper-faithful one-Block-per-level (Construction 4).
 ///
 /// Per-row width on the wire:
 ///   * `levels`: KAPPA_BYTES per tree level (paper improved one-hot).
@@ -128,15 +114,12 @@ fn gc_bytes_p1(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// formulas refer to.
 fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
     let (mut gb, mut ev) = setup_auth_pair(n, m, chunking_factor);
-    // Garble output sizes are input-independent (determined by n/m/chunking
-    // factor alone), so pass 0/0 — this also keeps `gc_bytes_*` callable at
-    // n > usize::BITS without tripping the encode_inputs bit-pack assert.
     encode_inputs(&mut gb, &mut ev, 0, 0, &mut rand::rng());
     let (first_levels, first_cts) = gb.garble_first_half_p2();
     let (second_levels, second_cts) = gb.garble_second_half_p2();
-    // Paper-faithful: one κ-wide ciphertext per tree level.
+    
     let levels_bytes_1: usize = first_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
-    // Wide leaf ciphertexts: κ + ρ bits per row (`6_total.tex:90`, Construction 4).
+    
     let cts_bytes_1:    usize = first_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
     let levels_bytes_2: usize = second_levels.iter().map(|row| row.len() * KAPPA_BYTES).sum();
     let cts_bytes_2:    usize = second_cts.iter().map(|row| row.len() * (KAPPA_BYTES + RHO_BYTES)).sum();
@@ -160,41 +143,8 @@ fn gc_bytes_p2(n: usize, m: usize, chunking_factor: usize) -> usize {
 /// Total on-wire byte count for one uncompressed preprocessing run, measured by
 /// instrumenting the actual emission sites of our chunked `Π_LeakyTensor` +
 /// bucketing implementation rather than evaluating a closed-form formula.
-///
-/// Mirrors `run_preprocessing(n, m, cf)`'s pipeline structure (`B` leaky
-/// triples, then `B − 1` two-to-one combines) but routes through the
-/// `_with_bytes` helpers so the per-emission `Vec<Vec<Block>>` lengths fall out
-/// of the actual call shapes — chunking-aware by construction.
-///
-/// **What is counted** (matches the paper's `Π_LeakyTensor` + bucketing
-/// envelope at `appendix_krrw_pre.tex:495-499`, but with our impl's actual
-/// struct sizes):
-///   * `B · (g_1 + g_2)` chunked tensor-macro ciphertexts (level cts + leaf
-///     cts, full κ-bit Blocks).
-///   * `B · 2·⌈n·m / 8⌉` bytes for `lsb(S_1)` + `lsb(S_2)` D-extraction
-///     reveal across the bucket.
-///   * `2 · (B − 1) · ⌈m / 8⌉` bytes for the symmetric d-reveal across
-///     the two-to-one combines (each party broadcasts their m-bit
-///     `*_d.value` row so both learn `d = y' ⊕ y''`).
-///
-/// **What is NOT counted** (ideal subprotocols, exactly as in the paper
-/// formula):
-///   * `IdealBCot::transfer_*` (F_COT realization).
-///   * `feq::check` (F_eq).
-///   * `verify_cross_party` MAC checks inside `two_to_one_combine` (F_check).
-///
-/// **Divergence from the paper formula** `B · [2(n + m − 1)·κ + 2nm] +
-/// (B − 1)·m`: the paper analyses a non-chunked `Π_LeakyTensor` whose leaf
-/// ciphertexts compress to one bit per cell, giving the `2nm`-bits-per-bucket
-/// term; our `chunked_tensor_garbler` (AUDIT-2.2 B2) emits full κ-bit `Block`s
-/// per leaf for cache-locality and amortization, so the leaf-ct contribution
-/// is `~κ×` larger and varies with `chunking_factor` (the level-ct count
-/// scales with `⌈log₂(cf)⌉ · num_chunks` rather than `n − 1`).
 fn prep_bytes(n: usize, m: usize, cf: usize) -> usize {
     let bucket = bucket_size_for(n, 1);
-    // Seed values are arbitrary — the byte count is RNG-independent (it's
-    // determined entirely by the Vec shapes inside `chunked_tensor_garbler`,
-    // which depend only on (n, m, cf)).
     let mut bcot = IdealBCot::new(0, 1);
     let mut triples = Vec::with_capacity(bucket);
     let mut total: usize = 0;
@@ -214,27 +164,6 @@ fn prep_bytes(n: usize, m: usize, cf: usize) -> usize {
 /// network model. Each iteration's measured wall-clock includes both the local
 /// compute time (`run_preprocessing`) and the deterministic transit time
 /// (`transit_ns(prep_bytes(n, m))`).
-///
-/// Sweeps `BENCHMARK_PARAMS × chunking_factor 1..=8` to mirror the
-/// `bench_online_p{1|2}` structure — preprocessing wall-clock varies with the
-/// chunking factor (GGM-tree tile size affects local cache / per-chunk
-/// overhead) even though wire-level communication does not (paper formula at
-/// `appendix_krrw_pre.tex:495-499` is chunking-invariant). Tile-matched data
-/// lets the per-N plots stack a third "Prep" bar alongside P1/P2 in the same
-/// tile cluster.
-///
-/// Throughput is reported in two complementary units:
-///   - ms per tensor op  — elapsed_ns / iterations / 1_000_000  (paper style)
-///   - Criterion's AND-gates/s via `Throughput::Elements(n * m)`  (literature style)
-///
-/// Per-cell, prints one `KB,prep,N=…,M=…,tile=…,kappa=…,rho=…,B=…,kb=…` line
-/// on first invocation (deduped via `OnceCell`). With the Phase 3.7
-/// instrumentation `KB` now varies across tiles for a fixed `(n, m)` —
-/// chunking changes the `chunked_tensor_garbler` ciphertext shape (number of
-/// chunks × `⌈log₂(cf)⌉` level cts plus per-chunk leaf cts), so the per-tile
-/// emit reflects real wire-level traffic rather than the paper-formula flat
-/// estimate. `B` is retained as informational sanity-check
-/// (= `bucket_size_for(n, 1)`).
 fn bench_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("preprocessing");
     group.warm_up_time(std::time::Duration::from_secs(5));
@@ -253,12 +182,8 @@ fn bench_preprocessing(c: &mut Criterion) {
         let bucket = bucket_size_for(n, 1);
 
         for chunking_factor in 1usize..=8 {
-            // Phase 3.7 instrumentation: byte count varies per tile because the
-            // `chunked_tensor_garbler` ciphertext shape depends on `cf`.
             let bytes = prep_bytes(n, m, chunking_factor);
 
-            // OnceCell-deduped KB emit per (n, m, tile) cell — Criterion calls
-            // the closure once per sample so we'd otherwise spam the log.
             let kb_cache: OnceCell<()> = OnceCell::new();
 
             group.bench_with_input(
@@ -669,7 +594,7 @@ criterion_group!(
     bench_128x128_runtime_with_networking,
     bench_256x256_runtime_with_networking,
 );
-// AUDIT-2.2 D2: `preprocessing_benches` is re-registered now that
+// `preprocessing_benches` is registered alongside the online groups now that
 // `LeakyTensorPre::generate` chunks via the `chunking_factor` parameter
 // (closes the OOM blocker that previously made any production-sized
 // preprocessing bench infeasible). `network_benches` remains dormant —

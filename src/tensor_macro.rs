@@ -70,7 +70,7 @@ pub(crate) struct ChunkedTensorMacroCiphertexts {
 ///
 /// Communication cost realized: `(n-1) + m` ciphertexts of length κ — paper's
 /// claim at `5_online.tex:28`. (HK21's two-ciphertext-per-level construction
-/// emitted `2(n-1) + m`; the prior code matched HK21, see AUDIT-2.1 B1.)
+/// emits `2(n-1) + m`.)
 pub(crate) struct TensorMacroCiphertexts {
     /// Length `n - 1`. `level_cts[i-1] = G_i`.
     pub level_cts: Vec<Block>,
@@ -97,7 +97,7 @@ pub(crate) struct TensorMacroCiphertexts {
 /// - `a_keys.len() == n`
 /// - `t_gen.rows() == m` and `t_gen.cols() == 1`
 ///
-/// Caller responsibility (NOT re-asserted in this function — see AUDIT-2.1 C1):
+/// Caller responsibility (NOT re-asserted in this function):
 /// - Every `a_keys[i].lsb() == 0`. Established by `Key::new()`'s LSB-clear
 ///   invariant; relied on by the level-0 init's "0-key" / "1-key" branch
 ///   placement. A future caller passing raw `Block`s in place of `Key`s
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(z_eval.rows(), n, "z_eval rows mismatch");
         assert_eq!(z_eval.cols(), m, "z_eval cols mismatch");
         // Paper's improved one-hot: ONE Block per level (n-1 total). Counts
-        // half of HK21's two-ct scheme that the prior code emitted (AUDIT-2.1 D2).
+        // half of HK21's two-ct scheme.
         assert_eq!(g.level_cts.len(), n.saturating_sub(1), "G level_cts length");
         // Element type is `Block` (not `(Block, Block)`); verified at the type level
         // by `Vec<Block>` typing of `TensorMacroCiphertexts.level_cts`. A bytewise

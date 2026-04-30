@@ -3,7 +3,7 @@
 //! In the real protocol, parties send L_1 and L_2 to F_eq, which compares
 //! them and returns 0 (abort) if they differ, 1 (continue) otherwise. This
 //! in-process ideal version panics on mismatch, matching the protocol's
-//! abort semantics (per CONTEXT.md D-04).
+//! abort semantics.
 //!
 //! TODO: Replace with a real equality-check protocol (e.g., commit-and-open
 //!       hash) for production.

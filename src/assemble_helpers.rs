@@ -2,9 +2,8 @@
 //!
 //! These are crate-internal helpers used by the online protocol body and by
 //! the `benches/benchmarks.rs` Criterion target. They are exposed externally
-//! only through the feature-gated `crate::bench_internals` re-export module
-//! (TD-01, Phase 3.1) — the helpers themselves are not part of the stable
-//! public API.
+//! only through the feature-gated `crate::bench_internals` re-export module —
+//! the helpers themselves are not part of the stable public API.
 
 use crate::auth_tensor_eval::AuthTensorEval;
 use crate::auth_tensor_gen::AuthTensorGen;
@@ -124,7 +123,7 @@ pub fn assemble_e_input_wire_blocks_p1(
 /// this thin alias preserves the paper-mapped name at P2 call sites without
 /// duplicating logic.
 ///
-/// AUDIT-2.3 C2 — alias coupling note: the P1/P2 algebraic equivalence holds
+/// Alias coupling note: the P1/P2 algebraic equivalence holds
 /// only because both protocols assemble the same three-term XOR over the same
 /// `[v D_ev]` / `[l D_ev]` / `L · D_ev` shares. If P2's input-encoding spec
 /// ever diverges from P1's (e.g., different L-vector semantics, additional

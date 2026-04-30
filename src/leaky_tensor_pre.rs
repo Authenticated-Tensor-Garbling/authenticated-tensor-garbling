@@ -1,8 +1,7 @@
 //! Pi_LeakyTensor preprocessing protocol — paper Construction 2 (Appendix F).
 //!
 //! This file contains the `LeakyTriple` output struct and the
-//! `LeakyTensorPre` orchestrator. The `generate()` body is implemented in
-//! Plan 2 of Phase 4; Plan 3 adds paper-invariant tests.
+//! `LeakyTensorPre` orchestrator.
 
 use crate::{
     bcot::IdealBCot,
@@ -56,16 +55,15 @@ pub struct LeakyTriple {
 ///
 /// Borrows `&mut IdealBCot` so every triple produced by a single
 /// `run_preprocessing` call shares the same Δ_gb and Δ_ev (required for
-/// Phase 5 XOR combining to preserve the MAC invariant).
+/// downstream XOR combining to preserve the MAC invariant).
 ///
 /// `chunking_factor` controls the GGM-tree sub-tiling inside the two
 /// `chunked_tensor_garbler` calls in `generate()` — required so
 /// preprocessing's GGM expansion stays within memory at production-sized
-/// `n` (paper Construction 4 / AUDIT-2.2 B2 / AUDIT-2.3 D7). Must equal
-/// the `chunking_factor` that downstream `AuthTensor{Gen, Eval}` consume
-/// from `TensorFpre*`; the cross-party parity assertion at AuthTensor
-/// construction enforces this once preprocessing's chunked output flows
-/// through.
+/// `n` (paper Construction 4). Must equal the `chunking_factor` that
+/// downstream `AuthTensor{Gen, Eval}` consume from `TensorFpre*`; the
+/// cross-party parity assertion at AuthTensor construction enforces this
+/// once preprocessing's chunked output flows through.
 pub struct LeakyTensorPre<'a> {
     pub n: usize,
     pub m: usize,
@@ -121,10 +119,10 @@ impl<'a> LeakyTensorPre<'a> {
         let block_bytes: usize = std::mem::size_of::<Block>();
 
         // ========================================================
-        // Step 1: Correlated randomness from IdealBCot (PROTO-04)
+        // Step 1: Correlated randomness from IdealBCot
         // ========================================================
 
-        // Sample BOTH parties' bits independently (D-01; paper-symmetric).
+        // Sample BOTH parties' bits independently (paper-symmetric).
         let x_a_bits: Vec<bool> = (0..self.n).map(|_| self.rng.random_bool(0.5)).collect();
         let x_b_bits: Vec<bool> = (0..self.n).map(|_| self.rng.random_bool(0.5)).collect();
         let y_a_bits: Vec<bool> = (0..self.m).map(|_| self.rng.random_bool(0.5)).collect();
@@ -135,7 +133,6 @@ impl<'a> LeakyTensorPre<'a> {
         // Five bCOT batch pairs — 6 calls into IdealBCot.
         //   transfer_gb_to_ev(&v_b_bits): A is sender (Δ_ev correlation), B picks on v_B.
         //   transfer_ev_to_gb(&v_a_bits): B is sender (Δ_gb correlation), A picks on v_A.
-        // This is Pattern 1 in 04-PATTERNS.md.
         let cot_x_gb_to_ev = self.bcot.transfer_gb_to_ev(&x_b_bits);
         let cot_x_ev_to_gb = self.bcot.transfer_ev_to_gb(&x_a_bits);
         let cot_y_gb_to_ev = self.bcot.transfer_gb_to_ev(&y_b_bits);
@@ -176,7 +173,7 @@ impl<'a> LeakyTensorPre<'a> {
         }).collect();
 
         // ========================================================
-        // Step 2: Compute C_A, C_B, C_A^(R), C_B^(R) inline (PROTO-05, D-10)
+        // Step 2: Compute C_A, C_B, C_A^(R), C_B^(R) inline
         // ========================================================
         //
         // Per paper Construction 2 (Appendix F, lines 208-216):
@@ -185,7 +182,7 @@ impl<'a> LeakyTensorPre<'a> {
         //   C_A^(R)[k]:= R_A[k]·Δ_gb ⊕ key(R_B@A)[k]  ⊕ mac(R_A@B)[k]
         //   C_B^(R)[k]:= R_B[k]·Δ_ev ⊕ mac(R_B@A)[k]  ⊕ key(R_A@B)[k]
         //
-        // Field mapping (Pitfall 3 in RESEARCH.md):
+        // Field mapping:
         //   key(y_B@A)[j] = gb_y_shares[j].key     mac(y_A@B)[j] = gb_y_shares[j].mac
         //   mac(y_B@A)[j] = ev_y_shares[j].mac    key(y_A@B)[j] = ev_y_shares[j].key
 
@@ -227,7 +224,7 @@ impl<'a> LeakyTensorPre<'a> {
         }
 
         // ========================================================
-        // Step 3: Two tensor_macro calls (PROTO-06, D-13/D-14/D-15)
+        // Step 3: Two tensor_macro calls
         // ========================================================
         //
         // Wrap C_A and C_B as m×1 BlockMatrix column vectors for tensor_macro.
@@ -242,8 +239,8 @@ impl<'a> LeakyTensorPre<'a> {
         //   Keys: cot_x_gb_to_ev.sender_keys (A's keys; LSB=0 by Key invariant).
         //   MACs: cot_x_gb_to_ev.receiver_macs (B's MACs = K[0] XOR x_B * Δ_gb; lsb=x_b since Δ_gb.lsb()=1).
         //   Explicit bits x_b_bits passed to ev for GGM tree navigation.
-        // Chunked variant: sub-tile the n-dimension into ⌈n / cf⌉ trees
-        // (AUDIT-2.2 B2). Output Z shape unchanged.
+        // Chunked variant: sub-tile the n-dimension into ⌈n / cf⌉ trees.
+        // Output Z shape unchanged.
         let (z_gb1, g_1) = chunked_tensor_garbler(
             self.n, self.m, self.chunking_factor, self.bcot.delta_gb,
             &cot_x_gb_to_ev.sender_keys,
@@ -279,7 +276,7 @@ impl<'a> LeakyTensorPre<'a> {
         );
 
         // ========================================================
-        // Step 4: Masked reveal — S_1, S_2, D (PROTO-07, D-16)
+        // Step 4: Masked reveal — S_1, S_2, D
         // ========================================================
         //
         // Wrap C_A^(R) and C_B^(R) (Vec<Block> length n*m, column-major k=j*n+i)
@@ -307,7 +304,7 @@ impl<'a> LeakyTensorPre<'a> {
         comm_bytes += 2 * nm_bytes;
 
         // D = lsb(S_1) ⊕ lsb(S_2), stored column-major (k = j*n + i).
-        // Paper correctness precondition: lsb(Δ_gb ⊕ Δ_ev) == 1 (enforced by Plan 1
+        // Paper correctness precondition: lsb(Δ_gb ⊕ Δ_ev) == 1 (enforced
         // via Δ_ev.lsb() == 0 in IdealBCot::new; regression test
         // bcot::tests::test_delta_xor_lsb_is_one).
         let mut d_bits: Vec<bool> = Vec::with_capacity(self.n * self.m);
@@ -318,7 +315,7 @@ impl<'a> LeakyTensorPre<'a> {
         }
 
         // ========================================================
-        // Step 5: F_eq check + final Z assembly (PROTO-07 + PROTO-08, D-17)
+        // Step 5: F_eq check + final Z assembly
         // ========================================================
         //
         // L_1, L_2 are n×m BlockMatrix with L_1 = S_1 ⊕ D·Δ_gb and L_2 = S_2 ⊕ D·Δ_ev.
@@ -334,13 +331,13 @@ impl<'a> LeakyTensorPre<'a> {
             }
         }
 
-        // In-process ideal F_eq. Panics with "F_eq abort: ..." on mismatch (D-04).
+        // In-process ideal F_eq. Panics with "F_eq abort: ..." on mismatch.
         feq::check(&l_1, &l_2);
 
         // itmac{Z}{Δ} = itmac{R}{Δ} ⊕ itmac{D}{Δ}.
         // D is public ⇒ each party locally constructs a "trivial" share of D.
         //
-        // Corrected A1 convention (TEST-02 gate, Plan 3 fix):
+        // A1 convention:
         //   gb_d: holds the bit value AND the Δ_ev MAC mass (so verify_cross_party
         //          step 1 sees: mac = gen_r.mac XOR d*Δ_ev = K_B[0] XOR (r_a XOR d)*Δ_ev ✓)
         //   ev_d: zero key, zero mac, zero value (eval holds no Δ mass for D)
@@ -391,13 +388,12 @@ mod tests {
         IdealBCot::new(42, 99)
     }
 
-    // ===== Plan 1 shape test (compile-time + runtime struct access) =====
+    // ===== shape test (compile-time + runtime struct access) =====
 
     #[test]
     fn test_leaky_triple_shape_field_access() {
         // Prove the 10 fields exist and have the expected types by touching
-        // them via a default-initialized instance. This is NOT a semantic
-        // test — Plan 3 adds the real PROTO-09 / paper-invariant tests.
+        // them via a default-initialized instance. This is NOT a semantic test.
         let bcot = make_bcot();
         let delta_gb = bcot.delta_gb;
         let delta_ev = bcot.delta_ev;
@@ -424,7 +420,7 @@ mod tests {
         let _ = &triple.delta_gb;
         let _ = &triple.delta_ev;
 
-        // Plan 3 extension (PROTO-09): real generate() output respects the same shape.
+        // Real generate() output respects the same shape.
         let mut bcot2 = IdealBCot::new(42, 99);
         let real = LeakyTensorPre::new(7, 2, 3, 2, &mut bcot2).generate();
         assert_eq!(real.n, 2);
@@ -437,7 +433,7 @@ mod tests {
         assert_eq!(real.ev_z_shares.len(), 6);
     }
 
-    // ===== Task 3.1: PROTO-04, PROTO-05, PROTO-09 (extended), Key-LSB regression =====
+    // ===== Correlated-randomness, BDOZ identity, key-LSB regression =====
 
     #[test]
     fn test_correlated_randomness_dimensions() {
@@ -474,7 +470,7 @@ mod tests {
         // (The Delta_gb term inside C_A (y_A * Delta_gb) and the Delta_ev term
         // inside C_B (y_B * Delta_ev) XOR to (y_A XOR y_B) * (Delta_gb XOR Delta_ev)
         // = y_full * (Delta_gb XOR Delta_ev) exactly when the four cross-party
-        // field XORs cancel in the expected pattern. See Pattern 2 in 04-PATTERNS.md.)
+        // field XORs cancel in the expected pattern.)
         let (n, m) = (4, 4);
         let mut bcot = IdealBCot::new(42, 99);
         let delta_xor_block: Block = *bcot.delta_gb.as_block() ^ *bcot.delta_ev.as_block();
@@ -489,7 +485,7 @@ mod tests {
             let rhs = if y_full { delta_xor_block } else { Block::ZERO };
             assert_eq!(
                 lhs, rhs,
-                "PROTO-05 cross-party BDOZ identity violated at j={} (y_full={})",
+                "cross-party BDOZ identity violated at j={} (y_full={})",
                 j, y_full
             );
         }
@@ -519,15 +515,15 @@ mod tests {
         }
     }
 
-    // ===== Task 3.2: PROTO-06, PROTO-07, PROTO-08, TEST-02, TEST-03, TEST-04 =====
+    // ===== Macro determinism, MAC invariants, product invariant, F_eq =====
 
     #[test]
     fn test_leaky_triple_mac_invariants() {
-        // TEST-02: IT-MAC invariant under cross-party layout.
+        // IT-MAC invariant under cross-party layout.
         //
         // For each share in x, y, Z: mac_A == key_A XOR bit_A * Delta_ev (verified by
-        // verify_cross_party). A failure on z_shares signals Plan 2's A1
-        // convention for itmac{D}{Delta} needs to be swapped (see Plan 2 Step 5 doc).
+        // verify_cross_party). A failure on z_shares signals the A1
+        // convention for itmac{D}{Delta} needs to be swapped (see Step 5 doc).
         let (n, m) = (4, 4);
         let mut bcot = IdealBCot::new(42, 99);
         let triple = LeakyTensorPre::new(17, n, m, 2, &mut bcot).generate();
@@ -559,10 +555,9 @@ mod tests {
 
     #[test]
     fn test_leaky_triple_product_invariant() {
-        // TEST-03: z_full[j*n+i] == x_full[i] AND y_full[j] for all (i, j).
+        // z_full[j*n+i] == x_full[i] AND y_full[j] for all (i, j).
         //
-        // This is the headline correctness property of Pi_LeakyTensor — the
-        // whole phase exists to make this test pass.
+        // This is the headline correctness property of Pi_LeakyTensor.
         for (seed, n, m) in [(21u64, 1, 1), (22, 2, 3), (23, 4, 4)] {
             let mut bcot = IdealBCot::new(42, 99);
             let triple = LeakyTensorPre::new(seed, n, m, 2, &mut bcot).generate();
@@ -579,7 +574,7 @@ mod tests {
                     let expected = x_full[i] & y_full[j];
                     assert_eq!(
                         z_full_k, expected,
-                        "TEST-03 product invariant: z_full[{}] = {} but x_full[{}]({}) & y_full[{}]({}) = {} (seed={}, n={}, m={})",
+                        "product invariant: z_full[{}] = {} but x_full[{}]({}) & y_full[{}]({}) = {} (seed={}, n={}, m={})",
                         k, z_full_k, i, x_full[i], j, y_full[j], expected, seed, n, m
                     );
                 }
@@ -589,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_macro_outputs_xor_invariant() {
-        // PROTO-06 regression: the two internal tensor_macro calls are deterministic
+        // Determinism regression: the two internal tensor_macro calls are deterministic
         // under a fixed seed, so repeating generate() twice on fresh (but equally-seeded)
         // IdealBCot instances yields bit-identical Z outputs. A change in macro
         // wiring or RNG consumption order breaks this assertion and surfaces as a
@@ -602,30 +597,30 @@ mod tests {
         for k in 0..(n * m) {
             assert_eq!(
                 t1.gb_z_shares[k].value, t2.gb_z_shares[k].value,
-                "PROTO-06 determinism: gen_z[{}].value diverged", k
+                "determinism:gen_z[{}].value diverged", k
             );
             assert_eq!(
                 t1.ev_z_shares[k].value, t2.ev_z_shares[k].value,
-                "PROTO-06 determinism: eval_z[{}].value diverged", k
+                "determinism:eval_z[{}].value diverged", k
             );
             assert_eq!(
                 t1.gb_z_shares[k].key.as_block(), t2.gb_z_shares[k].key.as_block(),
-                "PROTO-06 determinism: gen_z[{}].key diverged", k
+                "determinism:gen_z[{}].key diverged", k
             );
             assert_eq!(
                 t1.gb_z_shares[k].mac.as_block(), t2.gb_z_shares[k].mac.as_block(),
-                "PROTO-06 determinism: gen_z[{}].mac diverged", k
+                "determinism:gen_z[{}].mac diverged", k
             );
         }
     }
 
     #[test]
     fn test_d_extraction_and_z_assembly() {
-        // PROTO-07: on every (i, j), the final Z share pair satisfies the
-        // cross-party IT-MAC invariant — the direct observable consequence of
-        // correct D extraction and itmac{Z}{Delta} = itmac{R}{Delta} XOR itmac{D}{Delta}
-        // assembly. (This overlaps with TEST-02 but is kept separate for
-        // traceability to PROTO-07 in the validation map.)
+        // On every (i, j), the final Z share pair satisfies the cross-party
+        // IT-MAC invariant — the direct observable consequence of correct D
+        // extraction and itmac{Z}{Delta} = itmac{R}{Delta} XOR itmac{D}{Delta}
+        // assembly. (Overlaps with the MAC-invariant test above but is kept
+        // separate for D-extraction traceability.)
         let (n, m) = (2, 2);
         let mut bcot = IdealBCot::new(42, 99);
         let triple = LeakyTensorPre::new(41, n, m, 2, &mut bcot).generate();
@@ -641,7 +636,7 @@ mod tests {
 
     #[test]
     fn test_feq_passes_on_honest_run() {
-        // PROTO-08: honest execution of generate() invokes feq::check internally
+        // Honest execution of generate() invokes feq::check internally
         // and does NOT panic. Any panic here signals a transcript inconsistency
         // (either in macro wiring, C_A/C_B construction, or L_1/L_2 assembly).
         let mut bcot = IdealBCot::new(42, 99);
@@ -651,9 +646,9 @@ mod tests {
 
     #[test]
     fn test_chunking_factor_varied_invariant() {
-        // AUDIT-2.2 B2 / Phase 2.6.1: vary `chunking_factor` over values that
-        // trigger 1, 2, 4, and ⌈n/cf⌉=non-power-of-2 chunks. The product
-        // invariant z_full = x_full ⊗ y_full must hold regardless of cf.
+        // Vary `chunking_factor` over values that trigger 1, 2, 4, and
+        // ⌈n/cf⌉=non-power-of-2 chunks. The product invariant
+        // z_full = x_full ⊗ y_full must hold regardless of cf.
         // This catches: (a) cf-vs-non-cf path divergence, (b) non-uniform
         // last-chunk size (n=8, cf=3 → chunks of 3, 3, 2), (c) cf > n
         // (n=4, cf=8 → single chunk smaller than cf).
@@ -692,9 +687,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "F_eq abort")]
     fn test_f_eq_abort_on_tampered_transcript() {
-        // TEST-04 integration: construct a deliberately-inconsistent pair of
-        // L-matrices (one bit flipped) and confirm feq::check aborts with the
-        // expected message. Complements the unit tests in feq::tests.
+        // Construct a deliberately-inconsistent pair of L-matrices (one bit
+        // flipped) and confirm feq::check aborts with the expected message.
+        // Complements the unit tests in feq::tests.
         use crate::matrix::BlockMatrix;
         let mut l_1 = BlockMatrix::new(2, 2);
         let mut l_2 = BlockMatrix::new(2, 2);

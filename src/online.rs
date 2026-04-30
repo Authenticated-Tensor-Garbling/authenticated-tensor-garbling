@@ -2,8 +2,8 @@
 //!
 //! Hosts `block_check_zero` (per-index full-block equality) and
 //! `block_hash_check_zero` (the paper's `H({V_w})` digest). `open()` and its
-//! wrong-delta negative test are deferred per Phase 8 CONTEXT.md D-01 — they
-//! will live in this module once the message-passing design is settled.
+//! wrong-delta negative test are deferred — they will live in this module
+//! once the message-passing design is settled.
 
 use crate::aes::FIXED_KEY_AES;
 use crate::block::Block;

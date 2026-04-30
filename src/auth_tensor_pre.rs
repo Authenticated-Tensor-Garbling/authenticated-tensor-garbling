@@ -8,16 +8,16 @@ use rand::{SeedableRng, seq::SliceRandom};
 use rand_chacha::ChaCha12Rng;
 
 /// Perform one two-to-one combining step from paper Construction 3
-/// (references/appendix_krrw_pre.tex §3.1 lines 415-444).
+/// (`appendix_krrw_pre.tex` §3.1 lines 415-444).
 ///
 /// Inputs: two LeakyTriples `prime` (consumed) and `dprime` (borrowed), both with the
 /// same (n, m, delta_gb, delta_ev). Output: a single combined LeakyTriple.
 ///
 /// Algorithm (paper lines 427-443):
-///   x := x' XOR x''                           (D-01)
-///   y := y'                                   (D-02)
-///   d := y' XOR y'' (revealed with MACs)      (D-05, D-06)
-///   Z := Z' XOR Z'' XOR itmac{x''}{Δ} ⊗ d    (D-03, D-04)
+///   x := x' XOR x''
+///   y := y'
+///   d := y' XOR y'' (revealed with MACs)
+///   Z := Z' XOR Z'' XOR itmac{x''}{Δ} ⊗ d
 ///
 /// The `itmac{x''}{Δ} ⊗ d` term is computed locally since d is public (paper line
 /// 437). For each (i, j), the IT-MAC share at column-major index j*n+i is
@@ -31,7 +31,7 @@ pub(crate) fn two_to_one_combine(
     dprime: &LeakyTriple,
 ) -> LeakyTriple {
     // Precondition: same (n, m, delta_gb, delta_ev). The outer combine_leaky_triples
-    // already asserts this, but re-assert for unit-test safety (per 05-CONTEXT D-11).
+    // already asserts this, but re-assert for unit-test safety.
     assert_eq!(prime.n, dprime.n, "two_to_one_combine: n mismatch");
     assert_eq!(prime.m, dprime.m, "two_to_one_combine: m mismatch");
     assert_eq!(
@@ -66,7 +66,7 @@ pub(crate) fn two_to_one_combine(
         d_bits.push(gb_d[j].value ^ ev_d[j].value);
     }
 
-    // ---- Step C: x = x' XOR x'' (paper line 427, D-01) ----
+    // ---- Step C: x = x' XOR x'' (paper line 427) ----
     let x_dgb: Vec<AuthBitShare> = (0..n)
         .map(|i| prime.gb_x_shares[i] + dprime.gb_x_shares[i])
         .collect();
@@ -76,7 +76,7 @@ pub(crate) fn two_to_one_combine(
 
     // ---- Step D: Z = Z' XOR Z'' XOR (x'' tensor d), paper line 443 ----
     // Column-major nested loop: outer j in 0..m, inner i in 0..n, k = j*n + i.
-    // Zero-share when d[j] == 0 (D-03).
+    // Zero-share when d[j] == 0.
     let zero_share = AuthBitShare::default();
     let mut gen_z: Vec<AuthBitShare> = Vec::with_capacity(n * m);
     let mut eval_z: Vec<AuthBitShare> = Vec::with_capacity(n * m);
@@ -99,7 +99,7 @@ pub(crate) fn two_to_one_combine(
         }
     }
 
-    // ---- Step E: y = y' (paper line 427, D-02) ----
+    // ---- Step E: y = y' (paper line 427) ----
     // Move the vectors out of prime (it is owned); no clone needed.
     let y_dgb = prime.gb_y_shares;
     let ev_y = prime.ev_y_shares;
@@ -149,7 +149,7 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
     1 + (SSP + log2_p - 1) / log2_p
 }
 
-/// AUDIT-2.3 D7: in-process simulation substitute for the paper's cross-party
+/// In-process simulation substitute for the paper's cross-party
 /// `chunking_factor` agreement step. In a real two-party deployment, parties
 /// would publicly reveal (or commit-and-open hash) their chunking factors and
 /// abort on mismatch — paper Construction 4's "shared randomness" implies the
@@ -157,20 +157,20 @@ pub fn bucket_size_for(n: usize, ell: usize) -> usize {
 ///
 /// Mismatched factors silently break tile alignment between preprocessing and
 /// `AuthTensor{Gen,Eval}` consumers (paper-cited "Chunking-size matching
-/// invariant" / AUDIT-2.2 B2). This helper panics on disagreement, matching
-/// the simulation envelope of `verify_cross_party` and `feq::check`.
+/// invariant"). This helper panics on disagreement, matching the simulation
+/// envelope of `verify_cross_party` and `feq::check`.
 pub fn verify_chunking_factor_cross_party(fpre_gen: &TensorFpreGen, fpre_eval: &TensorFpreEval) {
     assert_eq!(
         fpre_gen.chunking_factor, fpre_eval.chunking_factor,
         "chunking_factor mismatch: gen = {}, eval = {} \
-         (AUDIT-2.3 D7 cross-party invariant violated)",
+         (cross-party invariant violated)",
         fpre_gen.chunking_factor, fpre_eval.chunking_factor,
     );
 }
 
 /// Combine B leaky triples into one authenticated tensor triple (Pi_aTensor', Construction 4).
 ///
-/// Implements the paper's two-to-one combining (references/appendix_krrw_pre.tex §3.1
+/// Implements the paper's two-to-one combining (`appendix_krrw_pre.tex` §3.1
 /// lines 415-444) iteratively: start with `triples[0]`, fold the remaining B-1 triples
 /// into the accumulator one at a time via `two_to_one_combine`.
 ///
@@ -181,7 +181,7 @@ pub fn verify_chunking_factor_cross_party(fpre_gen: &TensorFpreGen, fpre_eval: &
 ///
 /// Output shapes: alpha_auth_bit_shares (length n), beta_auth_bit_shares (length m),
 /// correlated_auth_bit_shares (length n*m, column-major j*n+i). Labels are stubbed to
-/// Vec::new() per Phase 4 D-07.
+/// Vec::new(); generated at garble time.
 ///
 /// triples: Vec of LeakyTriple, length must equal bucket_size.
 /// chunking_factor: passed through to TensorFpreGen/Eval output.
@@ -268,7 +268,7 @@ fn combine_leaky_triples_inner(
     assert_eq!(triples.len(), bucket_size, "triples.len() must equal bucket_size");
     assert!(bucket_size >= 1);
 
-    // W-04: Assert all triples share the same delta_gb and delta_ev before combining.
+    // Assert all triples share the same delta_gb and delta_ev before combining.
     // This invariant is guaranteed by run_preprocessing using a single shared IdealBCot.
     // If violated, the XOR combination MAC invariant mac = key XOR bit*delta breaks
     // because keys and MACs from different deltas cannot be XOR-combined correctly.
@@ -289,7 +289,7 @@ fn combine_leaky_triples_inner(
         );
     }
 
-    // ---- Construction 4 permutation step (PROTO-13, PROTO-14) ----
+    // ---- Construction 4 permutation step ----
     // For each triple j, sample a fresh per-triple ChaCha12Rng seeded
     // with shuffle_seed.wrapping_add(j), generate a uniform permutation
     // π_j ∈ S_n via Fisher-Yates (SliceRandom::shuffle), and apply it
@@ -316,8 +316,8 @@ fn combine_leaky_triples_inner(
     assert_eq!(acc.m, m, "combine_leaky_triples: m parameter disagrees with triple.m");
 
     // Package the combined LeakyTriple into the preprocessing output structs.
-    // Input wire labels (alpha_labels / beta_labels) removed in Phase 1.2(c) —
-    // they are now generated at garble time by AuthTensorGen::prepare_input_labels.
+    // Input wire labels (alpha_labels / beta_labels) are generated at garble
+    // time by AuthTensorGen::prepare_input_labels, not at preprocessing time.
     // _eval / _gen Block stubs and gamma_* stubs are populated by
     // run_preprocessing post-bucketing via derive_sharing_blocks (local-only).
     (
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_bucket_size_formula_edge_cases() {
-        // product = n * ell <= 1 → SSP fallback per D-02.
+        // product = n * ell <= 1 → SSP fallback.
         assert_eq!(bucket_size_for(1, 0), 40, "n*ell=0 must return SSP fallback");
         assert_eq!(bucket_size_for(1, 1), 40, "n*ell=1 must return SSP fallback");
     }
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_two_to_one_combine_product_invariant() {
-        // TEST-05 happy path: two concrete leaky triples, combine once, verify the paper's
+        // Happy path: two concrete leaky triples, combine once, verify the paper's
         // product invariant Z_combined[j*n+i] = x_combined[i] AND y_combined[j]
         // (Construction 3 correctness, appendix_krrw_pre.tex line 443).
         let n = 4;
@@ -609,7 +609,7 @@ mod tests {
                 assert_eq!(
                     z_full,
                     x_full[i] & y_full[j],
-                    "TEST-05 product invariant failed at (i={}, j={}, k={})",
+                    "product invariant failed at (i={}, j={}, k={})",
                     i,
                     j,
                     k
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "MAC mismatch in share")]
     fn test_two_to_one_combine_tampered_d_panics() {
-        // TEST-05 tamper path: flip one y'' value bit on the ev side without touching
+        // Tamper path: flip one y'' value bit on the ev side without touching
         // the MAC. The assembled d[0] share (d = y' XOR y'') now has inconsistent
         // (value, mac, key) and verify_cross_party inside two_to_one_combine Step B
         // detects the mismatch and panics. Matches the paper's "publicly reveal with
@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_combine_full_bucket_product_invariant() {
-        // TEST-05 complement: verify the iterative fold in combine_leaky_triples produces
+        // Iterative-fold complement: verify combine_leaky_triples produces
         // a tensor triple that still satisfies the product invariant over a full bucket
         // (B = bucket_size_for(n, 1) = 21 for n=4). Catches regressions in the fold wrapper beyond
         // the two-triple unit test.
@@ -719,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_run_preprocessing_product_invariant_construction_4() {
-        // TEST-06 (Phase 6): end-to-end Pi_aTensor' / Construction 4 invariant.
+        // End-to-end Pi_aTensor' / Construction 4 invariant.
         // Generate an authenticated tensor triple via the full preprocessing
         // pipeline (IdealBCot → LeakyTensorPre × B → combine_leaky_triples with
         // per-triple permutation → TensorFpreGen/Eval) and assert:
@@ -729,12 +729,12 @@ mod tests {
         //      but entered via run_preprocessing, not combine_leaky_triples).
         //   3. Dimensions: |alpha| = n, |beta| = m, |correlated| = n*m
         //      on both parties' outputs.
-        //   4. D-12 bucket-size improvement: bucket_size_for(4, 1) == 21 < 40.
+        //   4. Bucket-size improvement: bucket_size_for(4, 1) == 21 < 40.
 
         let n = 4usize;
         let m = 4usize;
 
-        // D-12 pin: confirm Construction 4's bucket is smaller than Construction 3's 40.
+        // Confirm Construction 4's bucket is smaller than Construction 3's 40.
         let b_new = bucket_size_for(n, 1);
         assert_eq!(b_new, 21, "Construction 4 bucket_size_for(4, 1) must be 21");
         assert!(b_new < 40, "Construction 4 B must be smaller than Construction 3 B=40");
@@ -797,7 +797,7 @@ mod tests {
                 assert_eq!(
                     z_full,
                     x_full[i] & y_full[j],
-                    "TEST-06 product invariant failed at (i={}, j={}, k={})",
+                    "product invariant failed at (i={}, j={}, k={})",
                     i,
                     j,
                     k
@@ -846,9 +846,9 @@ mod tests {
         // (c) Chunking-aware: at n >= 2 the `chunked_tensor_garbler` shape
         // differs between cf=1 (n single-leaf chunks) and cf=n (one
         // n-leaf chunk), so total bytes must differ. This is the headline
-        // property the Phase 3.7 instrumentation exists to capture — the
-        // Phase 3.5 paper-formula `prep_bytes` returned the same value for
-        // both.
+        // property the wire-level instrumentation exists to capture — the
+        // paper-formula prep_bytes is chunking-blind and returns the same
+        // value for both.
         let b841_a = pipeline_bytes_for_test(8, 4, 1);
         let b841_b = pipeline_bytes_for_test(8, 4, 8);
         assert_ne!(
@@ -856,7 +856,7 @@ mod tests {
             "chunking_factor must change instrumented byte count (cf=1 vs cf=8)"
         );
 
-        // (d) Sanity check against the Phase 3.5 paper-formula at (4, 4).
+        // (d) Sanity check against the paper-formula bytes at (4, 4).
         // Paper: prep_bits = B·[2(n+m−1)·κ + 2·n·m] + (B−1)·m at κ=128.
         // Our impl emits full κ-bit Blocks for every leaf ct, so the
         // instrumented count must exceed the paper-formula bytes (the
@@ -874,9 +874,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "AUDIT-2.3 D7 cross-party invariant violated")]
+    #[should_panic(expected = "cross-party invariant violated")]
     fn test_chunking_factor_parity_mismatch_panics() {
-        // AUDIT-2.3 D7: parity helper must abort on mismatch (paper's
+        // Parity helper must abort on mismatch (paper's
         // "publicly reveal then check" step in simulation form).
         use crate::preprocessing::{IdealPreprocessingBackend, TensorPreprocessing};
         let (gen_out, mut eval_out) = IdealPreprocessingBackend.run(4, 3, 2);
