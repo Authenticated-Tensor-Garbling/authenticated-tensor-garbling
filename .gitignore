@@ -37,6 +37,7 @@ tools/.venv/
 tools/__pycache__/
 
 # Local-only working-tree paths that must never ship
+.planning/
 references/
 .claude/
 .DS_Store
