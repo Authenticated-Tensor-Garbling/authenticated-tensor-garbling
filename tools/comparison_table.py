@@ -40,6 +40,23 @@ Usage:
     python3 tools/comparison_table.py vertical --tile-select comm           # argmin-by-comm
 
 A single bench run feeds both this tool and `parse_results.py`.
+
+# Reproducing the full paper figure set
+
+One bench run + four python invocations = every PDF and .tex the paper needs:
+
+    RUSTFLAGS="-C target-cpu=native" cargo bench --features bench-internals 2>&1 \
+      | tee bench-$(date +%Y%m%d-%H%M).log
+
+    tools/.venv/bin/python3 tools/parse_results.py main          # 6 PDFs → figures/main/
+    tools/.venv/bin/python3 tools/parse_results.py appendix      # 18 PDFs → figures/appendix/
+    tools/.venv/bin/python3 tools/comparison_table.py vertical   # main-paper table
+    tools/.venv/bin/python3 tools/comparison_table.py horizontal # appendix table
+
+The `parse_results.py` and `comparison_table.py` scripts both auto-detect the
+latest `bench-*.log` and read the same Criterion estimates, so a single bench
+run feeds the entire output directory. Re-runs of the python scripts on the
+same log are deterministic and cheap (no recomputation).
 """
 
 from __future__ import annotations
