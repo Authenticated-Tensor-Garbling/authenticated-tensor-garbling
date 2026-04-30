@@ -33,12 +33,17 @@ reference bar at x=0; that bar has been removed and the red color is now
 applied directly to the tile=1 pair, which is the equivalent half-gates
 baseline configuration of our protocol.
 
-Usage:
-    python3 tools/parse_results.py                               # auto-detect latest bench-*.log
-    python3 tools/parse_results.py --log bench-20260426-1901.log
-    python3 tools/parse_results.py --sizes 64,128,256            # default — paper's headline sizes
-    python3 tools/parse_results.py --sizes all                   # every size that ran
-    python3 tools/parse_results.py --no-plots                    # CSV only
+Usage (subcommands):
+    python3 tools/parse_results.py main                          # N=256, 6 PDFs → figures/main/
+    python3 tools/parse_results.py appendix                      # N in {64,128,256}, 18 PDFs → figures/appendix/
+    python3 tools/parse_results.py csv                           # CSV only, no PDFs → figures/
+    python3 tools/parse_results.py custom --sizes all            # one-off explorations
+    python3 tools/parse_results.py main --log bench-20260429-1815.log
+
+Each subcommand auto-detects the latest `bench-*.log` if --log is omitted.
+The `main` and `appendix` subcommands together regenerate the full paper
+figure set; run both after a fresh `cargo bench` and the headline 6 PDFs
+land in `figures/main/`, the supplementary 18 in `figures/appendix/`.
 
 Requires: matplotlib (everything else is stdlib).
 """
@@ -395,28 +400,31 @@ def parse_sizes_arg(arg: str, all_sizes_in_data: list[int]) -> list[int]:
     return [int(s) for s in arg.split(",") if s.strip()]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--log", type=Path, default=None, help="bench log file (default: latest bench-*.log)")
-    ap.add_argument("--criterion-root", type=Path, default=Path("target/criterion/online"))
-    ap.add_argument("--criterion-prep-root", type=Path,
-                    default=Path("target/criterion/preprocessing"),
-                    help="criterion output root for the preprocessing group")
-    ap.add_argument("--out", type=Path, default=Path("figures"))
-    ap.add_argument("--sizes", default=",".join(str(s) for s in PAPER_SIZES_DEFAULT),
-                    help="comma-separated N values (square sizes), or 'all' (default: paper's 64,128,256)")
-    ap.add_argument("--no-plots", action="store_true", help="write CSV only, skip PDFs")
-    args = ap.parse_args()
+# ---------------------------------------------------------------------------
+# Subcommand plumbing
+#
+# Three named targets (`main`, `appendix`, `csv`) cover the canonical paper
+# regen flow; `custom` is a power-user escape that exposes the full
+# --sizes / --no-plots surface for one-off explorations. Each command shares
+# the same data-loading prelude (`load_data`) so a single bench log feeds
+# every output.
+# ---------------------------------------------------------------------------
 
+
+# Sizes used in each named target. Adjust here, not at the call site.
+SIZES_MAIN = [256]
+SIZES_APPENDIX = [64, 128, 256]
+
+
+def load_data(args):
+    """Common data-loading prelude — shared by every subcommand."""
     log_path = args.log or auto_detect_log()
     if log_path is None or not log_path.exists():
         print("error: no bench log found. pass --log <path>.", file=sys.stderr)
-        return 2
+        return None
     if not args.criterion_root.is_dir():
         print(f"error: {args.criterion_root} not found. run the bench first.", file=sys.stderr)
-        return 2
-
-    args.out.mkdir(parents=True, exist_ok=True)
+        return None
 
     print(f"reading KB lines from {log_path}")
     kb_data, params_data = parse_kb(log_path)
@@ -442,27 +450,136 @@ def main() -> int:
     if distinct_params:
         print(f"  (κ, ρ) seen: {distinct_params}")
 
-    write_csv(args.out, ms_data, kb_data, params_data,
-              ms_prep=ms_prep, kb_prep=kb_prep, params_prep=params_prep)
+    return {
+        "ms_data":     ms_data,
+        "kb_data":     kb_data,
+        "params_data": params_data,
+        "ms_prep":     ms_prep,
+        "kb_prep":     kb_prep,
+        "params_prep": params_prep,
+    }
 
-    if args.no_plots:
-        return 0
 
-    sizes_in_data = sorted({
-        n for (_p, n, m, _t) in (set(kb_data) | set(ms_data)) if n == m
-    } | {
-        n for (n, m, _t) in (set(kb_prep) | set(ms_prep)) if n == m
-    })
-    sizes = parse_sizes_arg(args.sizes, sizes_in_data)
-
+def emit_pdfs(data, sizes: list[int], out_dir: Path) -> None:
+    """Run `plot_size` for each requested N into `out_dir`. Used by `main`
+    and `appendix` subcommands."""
+    out_dir.mkdir(parents=True, exist_ok=True)
     n_online, n_prep = 0, 0
     for n in sizes:
-        online_w, prep_w = plot_size(ms_data, kb_data, n, args.out,
-                                     ms_prep=ms_prep, kb_prep=kb_prep)
-        n_online += online_w
-        n_prep   += prep_w
-    print(f"  wrote {n_online} online + {n_prep} prep PDFs into {args.out}/")
+        ow, pw = plot_size(
+            data["ms_data"], data["kb_data"], n, out_dir,
+            ms_prep=data["ms_prep"], kb_prep=data["kb_prep"],
+        )
+        n_online += ow
+        n_prep   += pw
+    print(f"  wrote {n_online} online + {n_prep} prep PDFs into {out_dir}/")
+
+
+def cmd_main(args) -> int:
+    """N=256 only, all 6 PDFs into `<out>/main/`."""
+    data = load_data(args)
+    if data is None:
+        return 2
+    out_dir = args.out / "main"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(out_dir, data["ms_data"], data["kb_data"], data["params_data"],
+              ms_prep=data["ms_prep"], kb_prep=data["kb_prep"],
+              params_prep=data["params_prep"])
+    emit_pdfs(data, SIZES_MAIN, out_dir)
     return 0
+
+
+def cmd_appendix(args) -> int:
+    """N ∈ {64,128,256}, all 6 PDFs per N (= 18 PDFs) into `<out>/appendix/`."""
+    data = load_data(args)
+    if data is None:
+        return 2
+    out_dir = args.out / "appendix"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(out_dir, data["ms_data"], data["kb_data"], data["params_data"],
+              ms_prep=data["ms_prep"], kb_prep=data["kb_prep"],
+              params_prep=data["params_prep"])
+    emit_pdfs(data, SIZES_APPENDIX, out_dir)
+    return 0
+
+
+def cmd_csv(args) -> int:
+    """CSV-only emit, no PDFs. Lands in `<out>/results.csv`."""
+    data = load_data(args)
+    if data is None:
+        return 2
+    args.out.mkdir(parents=True, exist_ok=True)
+    write_csv(args.out, data["ms_data"], data["kb_data"], data["params_data"],
+              ms_prep=data["ms_prep"], kb_prep=data["kb_prep"],
+              params_prep=data["params_prep"])
+    return 0
+
+
+def cmd_custom(args) -> int:
+    """Power-user escape: explicit --sizes + optional --no-plots."""
+    data = load_data(args)
+    if data is None:
+        return 2
+    args.out.mkdir(parents=True, exist_ok=True)
+    write_csv(args.out, data["ms_data"], data["kb_data"], data["params_data"],
+              ms_prep=data["ms_prep"], kb_prep=data["kb_prep"],
+              params_prep=data["params_prep"])
+    if args.no_plots:
+        return 0
+    sizes_in_data = sorted({
+        n for (_p, n, m, _t) in (set(data["kb_data"]) | set(data["ms_data"])) if n == m
+    } | {
+        n for (n, m, _t) in (set(data["kb_prep"]) | set(data["ms_prep"])) if n == m
+    })
+    sizes = parse_sizes_arg(args.sizes, sizes_in_data)
+    emit_pdfs(data, sizes, args.out)
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    def add_shared(sub):
+        sub.add_argument("--log", type=Path, default=None,
+                         help="bench log file (default: latest bench-*.log)")
+        sub.add_argument("--criterion-root", type=Path,
+                         default=Path("target/criterion"),
+                         help="criterion output root (rglobs for online_p{1,2}/...)")
+        sub.add_argument("--criterion-prep-root", type=Path,
+                         default=Path("target/criterion/preprocessing"),
+                         help="criterion output root for the preprocessing group")
+        sub.add_argument("--out", type=Path, default=Path("figures"),
+                         help="output root (default: figures/). Subcommands "
+                              "write into <out>/main/ and <out>/appendix/.")
+
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
+
+    p_main = sub.add_parser("main", help="N=256 only, all 6 PDFs (paper main section)")
+    add_shared(p_main)
+    p_main.set_defaults(func=cmd_main)
+
+    p_app = sub.add_parser("appendix", help="N in {64,128,256}, 18 PDFs (paper appendix)")
+    add_shared(p_app)
+    p_app.set_defaults(func=cmd_appendix)
+
+    p_csv = sub.add_parser("csv", help="CSV only, no PDFs")
+    add_shared(p_csv)
+    p_csv.set_defaults(func=cmd_csv)
+
+    p_cus = sub.add_parser("custom", help="explicit --sizes / --no-plots escape hatch")
+    add_shared(p_cus)
+    p_cus.add_argument("--sizes",
+                       default=",".join(str(s) for s in PAPER_SIZES_DEFAULT),
+                       help="comma-separated N values, or 'all' (default: 64,128,256)")
+    p_cus.add_argument("--no-plots", action="store_true",
+                       help="write CSV only, skip PDFs")
+    p_cus.set_defaults(func=cmd_custom)
+
+    args = ap.parse_args()
+    return args.func(args)
 
 
 if __name__ == "__main__":
