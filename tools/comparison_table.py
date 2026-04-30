@@ -22,20 +22,22 @@ Both communication (KB) and wallclock time (ms) are reported per size,
 and the comparison is self-contained within each protocol — no external
 CWYY dual-execution multiplier.
 
-Output formats:
+Subcommands:
 
-  - `separate`: one small table per size — drops directly into the paper's
-    existing single-cell table style.
-  - `combined` (recommended for the paper's combined figure block): one
-    stacked table covering all three sizes.
-  - `csv`: raw numbers for spreadsheet / sanity-check use.
+  - `vertical [--n 256]`: single-N transposed table (Π-row × metric-col ×
+    {Tile 1, Tile k, Improvement}). Drops into the paper's main section.
+    Writes `<out>/comparison_table_vertical.tex`.
+  - `horizontal [--sizes 64,128,256]`: multi-N table comparing tile k vs
+    tile 1 across N's. Drops into the paper's appendix as a `figure*`
+    (two-column-spanning). Writes `<out>/comparison_table_horizontal.tex`.
+  - `csv [--sizes 64,128,256]`: raw numbers for spreadsheet / sanity-check
+    use. Writes `<out>/comparison_table.csv`.
 
 Usage:
-    python3 tools/comparison_table.py                       # combined, tile=6
-    python3 tools/comparison_table.py --tile-select comm    # argmin-by-comm instead of fixed-6
-    python3 tools/comparison_table.py --format separate
-    python3 tools/comparison_table.py --format csv
-    python3 tools/comparison_table.py --sizes 64,128,256 --log bench-….log
+    python3 tools/comparison_table.py vertical                              # N=256
+    python3 tools/comparison_table.py horizontal --sizes 64,128,256
+    python3 tools/comparison_table.py csv --sizes 64,128,256
+    python3 tools/comparison_table.py vertical --tile-select comm           # argmin-by-comm
 
 A single bench run feeds both this tool and `parse_results.py`.
 """
@@ -204,7 +206,13 @@ def gather_row(
 
 
 def fmt(x: Optional[float], digits: int) -> str:
+    """Plain decimal format, no thousands separator."""
     return f"{x:.{digits}f}" if x is not None else "?"
+
+
+def fmt_grouped(x: Optional[float], digits: int) -> str:
+    """Decimal format with comma thousands separator (for LaTeX tables)."""
+    return f"{x:,.{digits}f}" if x is not None else "?"
 
 
 def header_comment(rows, tile_mode: str) -> str:
@@ -255,175 +263,208 @@ def _has_any_prep(rows) -> bool:
     )
 
 
-def emit_separate(rows, tile_mode: str) -> None:
-    """One table per size.
+# ---------------------------------------------------------------------------
+# Vertical (single-N) and horizontal (multi-N) emitters
+# ---------------------------------------------------------------------------
 
-    Without prep:  7-column layout — [label, P1.{Std,Perf,Imp}, P2.{Std,Perf,Imp}]
-    With prep:    10-column layout — adds Prep.{Std,Perf,Imp}
+
+VERTICAL_CAPTION = (
+    "Tile 1 vs. tile 6 comparison for $\\twopct$, $\\twopctauth$, "
+    "and uncompressed preprocessing. All three comparisons show "
+    "communication improvement near-linear in the tile size, with "
+    "a corresponding wall-clock speedup."
+)
+
+HORIZONTAL_CAPTION = (
+    "Tile 6 vs. tile 1 at $N \\in \\{{{ns}\\}}$ for $\\twopct$, "
+    "$\\twopctauth$, and uncompressed preprocessing. Both metric blocks "
+    "share a column structure; values are absolute, with the per-protocol "
+    "improvement ratio."
+)
+
+
+def emit_vertical(row, tile_mode: str, has_prep: bool, out_path: Path) -> None:
+    """Single-N transposed table — Π-row × {Tile 1, Tile k, Improvement}
+    sub-rows × {Comm. (KB), Time (ms)} columns. Uses booktabs rules and
+    `\\twopct` / `\\twopctauth` macros (defined by the paper). Comma
+    thousands separator on values >999. Each protocol block is followed
+    by `\\midrule`.
+
+    The prep block is omitted entirely when `has_prep` is false (rather
+    than emitting `?` rows) — keeps the table clean on partial bench runs.
     """
-    print(header_comment(rows, tile_mode))
-    has_prep = _has_any_prep(rows)
-    for r in rows:
-        p1_label = f"Tile {r['p1_tile']}"
-        p2_label = f"Tile {r['p2_tile']}"
-        prep_label = f"Tile {r['prep_tile']}" if r.get("prep_tile") is not None else "Tile ?"
-        print()
-        prep_note = f", Prep @ tile={r.get('prep_tile')}" if has_prep else ""
-        print(f"% N={r['n']}: P1 @ tile={r['p1_tile']}, P2 @ tile={r['p2_tile']}{prep_note}")
-        print(r"\begin{figure}[ht]")
-        print(r"  \centering")
-        if has_prep:
-            print(r"\begin{tabular}{l@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr}")
-            print(r"            & \multicolumn{3}{c}{P1}                          & \multicolumn{3}{c}{P2}                          & \multicolumn{3}{c}{Prep}                        \\")
-            print(rf"            & Tile 1    & {p1_label:<9} & Imp.            & Tile 1    & {p2_label:<9} & Imp.            & Tile 1    & {prep_label:<9} & Imp.            \\")
-            print(
-                "Comm. (KB)  & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ & {sp:>9} & {pp:>9} & {ppi}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_kb"], 1),
-                    p1=fmt(r["p1_kb"], 1),
-                    p1i=fmt(r["p1_imp_kb"], 2),
-                    s2=fmt(r["p2_std_kb"], 1),
-                    p2=fmt(r["p2_kb"], 1),
-                    p2i=fmt(r["p2_imp_kb"], 2),
-                    sp=fmt(r.get("prep_std_kb"), 1),
-                    pp=fmt(r.get("prep_kb"), 1),
-                    ppi=fmt(r.get("prep_imp_kb"), 2),
-                )
-            )
-            print(
-                "Time (ms)   & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ & {sp:>9} & {pp:>9} & {ppi}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_ms"], 1),
-                    p1=fmt(r["p1_ms"], 1),
-                    p1i=fmt(r["p1_imp_ms"], 2),
-                    s2=fmt(r["p2_std_ms"], 1),
-                    p2=fmt(r["p2_ms"], 1),
-                    p2i=fmt(r["p2_imp_ms"], 2),
-                    sp=fmt(r.get("prep_std_ms"), 1),
-                    pp=fmt(r.get("prep_ms"), 1),
-                    ppi=fmt(r.get("prep_imp_ms"), 2),
-                )
-            )
-        else:
-            print(r"\begin{tabular}{l@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr}")
-            print(r"            & \multicolumn{3}{c}{P1}                          & \multicolumn{3}{c}{P2}                          \\")
-            print(rf"            & Tile 1    & {p1_label:<9} & Imp.            & Tile 1    & {p2_label:<9} & Imp.            \\")
-            print(
-                "Comm. (KB)  & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_kb"], 1),
-                    p1=fmt(r["p1_kb"], 1),
-                    p1i=fmt(r["p1_imp_kb"], 2),
-                    s2=fmt(r["p2_std_kb"], 1),
-                    p2=fmt(r["p2_kb"], 1),
-                    p2i=fmt(r["p2_imp_kb"], 2),
-                )
-            )
-            print(
-                "Time (ms)   & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_ms"], 1),
-                    p1=fmt(r["p1_ms"], 1),
-                    p1i=fmt(r["p1_imp_ms"], 2),
-                    s2=fmt(r["p2_std_ms"], 1),
-                    p2=fmt(r["p2_ms"], 1),
-                    p2i=fmt(r["p2_imp_ms"], 2),
-                )
-            )
-        print(r"\end{tabular}")
-        print(r"% \caption{}")
-        print(rf"  \label{{fig:table-{r['n']}}}")
-        print(r"\end{figure}")
+    n = row["n"]
+    p1_tile = row["p1_tile"]
+    p2_tile = row["p2_tile"]
+    prep_tile = row.get("prep_tile") if has_prep else None
 
+    lines: list[str] = []
+    lines.append(header_comment([row], tile_mode))
+    lines.append(r"\begin{figure}[ht]")
+    lines.append(r"  \centering")
+    lines.append(r"\begin{tabular}{llrr}")
+    lines.append(r"           &              & Comm. (KB) & Time (ms) \\")
+    lines.append(r"\toprule")
 
-def emit_combined(rows, tile_mode: str) -> None:
-    """One stacked table for all sizes.
+    def emit_block(label: str, baseline_tile: int, perf_tile: int,
+                   std_kb, perf_kb, imp_kb, std_ms, perf_ms, imp_ms,
+                   trailing_rule: str) -> None:
+        lines.append(
+            f"{label} & Tile {baseline_tile}     & {fmt_grouped(std_kb, 1):>10}  & {fmt_grouped(std_ms, 1):>10} \\\\"
+        )
+        lines.append(
+            f"           & Tile {perf_tile}     & {fmt_grouped(perf_kb, 1):>10}  & {fmt_grouped(perf_ms, 1):>10} \\\\"
+        )
+        lines.append(
+            f"           & \\textit{{Improvement}} & {fmt(imp_kb, 2)}$\\times$ & {fmt(imp_ms, 2)}$\\times$ \\\\"
+        )
+        if trailing_rule:
+            lines.append(trailing_rule)
 
-    Without prep:  8-column layout — [N, label, P1.{Std,Perf,Imp}, P2.{Std,Perf,Imp}]
-    With prep:    11-column layout — adds Prep.{Std,Perf,Imp}
-    """
-    print(header_comment(rows, tile_mode))
-    has_prep = _has_any_prep(rows)
-    p1_label = _perf_label(rows, "p1_tile")
-    p2_label = _perf_label(rows, "p2_tile")
-    print(r"\begin{figure}[ht]")
-    print(r"  \centering")
+    emit_block(
+        r"$\twopct$",
+        BASELINE_TILE, p1_tile,
+        row["p1_std_kb"], row["p1_kb"], row["p1_imp_kb"],
+        row["p1_std_ms"], row["p1_ms"], row["p1_imp_ms"],
+        r"\midrule",
+    )
+    emit_block(
+        r"$\twopctauth$",
+        BASELINE_TILE, p2_tile,
+        row["p2_std_kb"], row["p2_kb"], row["p2_imp_kb"],
+        row["p2_std_ms"], row["p2_ms"], row["p2_imp_ms"],
+        r"\midrule" if has_prep else r"\bottomrule",
+    )
     if has_prep:
-        prep_label = _perf_label(rows, "prep_tile")
-        print(r"\begin{tabular}{ll@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr}")
-        print(r"           &              & \multicolumn{3}{c}{P1}                          & \multicolumn{3}{c}{P2}                          & \multicolumn{3}{c}{Prep}                        \\")
-        print(rf"           &              & Tile 1    & {p1_label:<9} & Imp.            & Tile 1    & {p2_label:<9} & Imp.            & Tile 1    & {prep_label:<9} & Imp.            \\")
-        for r in rows:
-            print(r"\hline")
-            print(
-                "$N={n}$    & Comm. (KB)   & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ & {sp:>9} & {pp:>9} & {ppi}$\\times$ \\\\".format(
-                    n=r["n"],
-                    s1=fmt(r["p1_std_kb"], 1),
-                    p1=fmt(r["p1_kb"], 1),
-                    p1i=fmt(r["p1_imp_kb"], 2),
-                    s2=fmt(r["p2_std_kb"], 1),
-                    p2=fmt(r["p2_kb"], 1),
-                    p2i=fmt(r["p2_imp_kb"], 2),
-                    sp=fmt(r.get("prep_std_kb"), 1),
-                    pp=fmt(r.get("prep_kb"), 1),
-                    ppi=fmt(r.get("prep_imp_kb"), 2),
-                )
-            )
-            print(
-                "           & Time (ms)    & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ & {sp:>9} & {pp:>9} & {ppi}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_ms"], 1),
-                    p1=fmt(r["p1_ms"], 1),
-                    p1i=fmt(r["p1_imp_ms"], 2),
-                    s2=fmt(r["p2_std_ms"], 1),
-                    p2=fmt(r["p2_ms"], 1),
-                    p2i=fmt(r["p2_imp_ms"], 2),
-                    sp=fmt(r.get("prep_std_ms"), 1),
-                    pp=fmt(r.get("prep_ms"), 1),
-                    ppi=fmt(r.get("prep_imp_ms"), 2),
-                )
-            )
+        emit_block(
+            r"Uncomp. Pre.",
+            BASELINE_TILE, prep_tile,
+            row["prep_std_kb"], row["prep_kb"], row["prep_imp_kb"],
+            row["prep_std_ms"], row["prep_ms"], row["prep_imp_ms"],
+            r"\bottomrule",
+        )
+
+    lines.append(r"\end{tabular}")
+    lines.append(rf"\caption{{{VERTICAL_CAPTION}}}")
+    lines.append(rf"  \label{{fig:table-vertical-{n}}}")
+    lines.append(r"\end{figure}")
+
+    out_path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {out_path}")
+
+
+def emit_horizontal(rows, tile_mode: str, has_prep: bool, out_path: Path) -> None:
+    """Multi-N table — N-rows × {P1, P2, Prep} × {Tile 1, Tile k, Imp}
+    columns, with Comm. and Time. blocks stacked under a single column
+    structure (intra-block separator via `\\multicolumn{10}{l}{\\textit{...}}`).
+
+    Renders as `figure*` (two-column-spanning) since the 10-column layout
+    is too wide for a single column. Uses `cmidrule(lr)` rather than
+    `cline` for booktabs consistency.
+    """
+    if has_prep:
+        col_spec = "lrrrrrrrrr"      # N + 3 protocols × 3 cols
+        protocol_groups = (
+            r" & \multicolumn{3}{c}{$\twopct$}"
+            r" & \multicolumn{3}{c}{$\twopctauth$}"
+            r" & \multicolumn{3}{c}{Uncomp. Pre.} \\"
+        )
+        midrules = r"\cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}"
+        sub_header = (
+            f"$N$ & Tile {BASELINE_TILE} & Tile {{p1}} & Imp."
+            f" & Tile {BASELINE_TILE} & Tile {{p2}} & Imp."
+            f" & Tile {BASELINE_TILE} & Tile {{pp}} & Imp. \\\\"
+        )
+        n_cols = 10
     else:
-        print(r"\begin{tabular}{ll@{\hspace{15pt}}rrr@{\hspace{15pt}}rrr}")
-        print(r"           &              & \multicolumn{3}{c}{P1}                          & \multicolumn{3}{c}{P2}                          \\")
-        print(rf"           &              & Tile 1    & {p1_label:<9} & Imp.            & Tile 1    & {p2_label:<9} & Imp.            \\")
+        col_spec = "lrrrrrr"
+        protocol_groups = (
+            r" & \multicolumn{3}{c}{$\twopct$}"
+            r" & \multicolumn{3}{c}{$\twopctauth$} \\"
+        )
+        midrules = r"\cmidrule(lr){2-4} \cmidrule(lr){5-7}"
+        sub_header = (
+            f"$N$ & Tile {BASELINE_TILE} & Tile {{p1}} & Imp."
+            f" & Tile {BASELINE_TILE} & Tile {{p2}} & Imp. \\\\"
+        )
+        n_cols = 7
+
+    # Use the first row's tile picks for the column header. _perf_label
+    # already handles the "all rows agree" → "Tile k" / mixed → "Best tile"
+    # convention; we strip "Tile " for the format slot.
+    p1_label = _perf_label(rows, "p1_tile").replace("Tile ", "")
+    p2_label = _perf_label(rows, "p2_tile").replace("Tile ", "")
+    pp_label = _perf_label(rows, "prep_tile").replace("Tile ", "") if has_prep else ""
+    sub_header_filled = sub_header.format(p1=p1_label, p2=p2_label, pp=pp_label)
+
+    def emit_metric_block(metric_label: str, suffix: str, digits: int) -> list[str]:
+        """One metric block (Comm. or Time.) — header row + one row per N.
+
+        `suffix` is "kb" or "ms"; row keys are `{proto}_std_{suffix}`,
+        `{proto}_{suffix}`, `{proto}_imp_{suffix}`.
+        """
+        block: list[str] = [
+            rf"\multicolumn{{{n_cols}}}{{l}}{{\textit{{{metric_label}}}}} \\"
+        ]
         for r in rows:
-            print(r"\hline")
-            print(
-                "$N={n}$    & Comm. (KB)   & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ \\\\".format(
-                    n=r["n"],
-                    s1=fmt(r["p1_std_kb"], 1),
-                    p1=fmt(r["p1_kb"], 1),
-                    p1i=fmt(r["p1_imp_kb"], 2),
-                    s2=fmt(r["p2_std_kb"], 1),
-                    p2=fmt(r["p2_kb"], 1),
-                    p2i=fmt(r["p2_imp_kb"], 2),
-                )
-            )
-            print(
-                "           & Time (ms)    & {s1:>9} & {p1:>9} & {p1i}$\\times$ & {s2:>9} & {p2:>9} & {p2i}$\\times$ \\\\".format(
-                    s1=fmt(r["p1_std_ms"], 1),
-                    p1=fmt(r["p1_ms"], 1),
-                    p1i=fmt(r["p1_imp_ms"], 2),
-                    s2=fmt(r["p2_std_ms"], 1),
-                    p2=fmt(r["p2_ms"], 1),
-                    p2i=fmt(r["p2_imp_ms"], 2),
-                )
-            )
-    print(r"\end{tabular}")
-    print(r"% \caption{}")
-    print(r"  \label{fig:table-combined}")
-    print(r"\end{figure}")
+            cells: list[str] = [str(r["n"])]
+            cells += [
+                fmt_grouped(r[f"p1_std_{suffix}"], digits),
+                fmt_grouped(r[f"p1_{suffix}"], digits),
+                f"{fmt(r[f'p1_imp_{suffix}'], 2)}$\\times$",
+                fmt_grouped(r[f"p2_std_{suffix}"], digits),
+                fmt_grouped(r[f"p2_{suffix}"], digits),
+                f"{fmt(r[f'p2_imp_{suffix}'], 2)}$\\times$",
+            ]
+            if has_prep:
+                cells += [
+                    fmt_grouped(r.get(f"prep_std_{suffix}"), digits),
+                    fmt_grouped(r.get(f"prep_{suffix}"), digits),
+                    f"{fmt(r.get(f'prep_imp_{suffix}'), 2)}$\\times$",
+                ]
+            block.append(" & ".join(cells) + r" \\")
+        return block
+
+    lines: list[str] = []
+    lines.append(header_comment(rows, tile_mode))
+    lines.append(r"\begin{figure*}[ht]")
+    lines.append(r"  \centering")
+    lines.append(rf"\begin{{tabular}}{{{col_spec}}}")
+    lines.append(r"\toprule")
+    lines.append(protocol_groups)
+    lines.append(midrules)
+    lines.append(sub_header_filled)
+    lines.append(r"\midrule")
+    lines.extend(emit_metric_block("Communication (KB)", "kb", 1))
+    lines.append(r"\midrule")
+    lines.extend(emit_metric_block("Time (ms)", "ms", 1))
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    ns_str = ", ".join(str(r["n"]) for r in rows)
+    lines.append(rf"\caption{{{HORIZONTAL_CAPTION.format(ns=ns_str)}}}")
+    lines.append(r"\label{fig:table-horizontal}")
+    lines.append(r"\end{figure*}")
+
+    out_path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {out_path}")
 
 
 def _maybe_fmt(x: Optional[float], digits: int) -> str:
     return fmt(x, digits) if x is not None else ""
 
 
-def emit_csv(rows) -> None:
-    print(
-        "N,baseline_tile,p1_tile,p2_tile,prep_tile,"
-        "p1_std_kb,p1_std_ms,p1_kb,p1_ms,p1_imp_kb,p1_imp_ms,"
-        "p2_std_kb,p2_std_ms,p2_kb,p2_ms,p2_imp_kb,p2_imp_ms,"
-        "prep_std_kb,prep_std_ms,prep_kb,prep_ms,prep_imp_kb,prep_imp_ms"
-    )
+CSV_HEADER = (
+    "N,baseline_tile,p1_tile,p2_tile,prep_tile,"
+    "p1_std_kb,p1_std_ms,p1_kb,p1_ms,p1_imp_kb,p1_imp_ms,"
+    "p2_std_kb,p2_std_ms,p2_kb,p2_ms,p2_imp_kb,p2_imp_ms,"
+    "prep_std_kb,prep_std_ms,prep_kb,prep_ms,prep_imp_kb,prep_imp_ms"
+)
+
+
+def csv_lines(rows) -> list[str]:
+    out = [CSV_HEADER]
     for r in rows:
-        print(",".join([
+        out.append(",".join([
             str(r["n"]),
             str(r["baseline_tile"]),
             str(r["p1_tile"]),
@@ -448,40 +489,20 @@ def emit_csv(rows) -> None:
             _maybe_fmt(r.get("prep_imp_kb"), 4),
             _maybe_fmt(r.get("prep_imp_ms"), 4),
         ]))
+    return out
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("--log", type=Path, default=None,
-                    help="bench log file (default: latest bench-*.log)")
-    ap.add_argument("--criterion-root", type=Path,
-                    default=Path("target/criterion/online"))
-    ap.add_argument("--criterion-prep-root", type=Path,
-                    default=Path("target/criterion/preprocessing"),
-                    help="criterion output root for the preprocessing group")
-    ap.add_argument("--sizes", default=",".join(str(s) for s in SIZES_DEFAULT),
-                    help="comma-separated N values for square N×N cells "
-                         f"(default: {','.join(str(s) for s in SIZES_DEFAULT)})")
-    ap.add_argument("--tile-select", default="6",
-                    help="tile reported under each protocol's Performance: "
-                         "an integer (default '6' — paper's time/comm sweet-spot), "
-                         "'comm' (argmin KB), or 'time' (argmin ms)")
-    ap.add_argument("--format", choices=["separate", "combined", "csv"],
-                    default="combined",
-                    help="output layout (default: combined — paper's preferred "
-                         "format for the experiments section)")
-    ap.add_argument("--no-prep", action="store_true",
-                    help="omit prep columns even when prep data is available")
-    args = ap.parse_args()
+# ---------------------------------------------------------------------------
+# Subcommand plumbing
+# ---------------------------------------------------------------------------
 
+
+def load_data(args, *, need_criterion: bool):
     log_path = args.log or auto_detect_log()
     if log_path is None or not log_path.exists():
         print("error: no bench log found. pass --log <path>.", file=sys.stderr)
-        return 2
-    if not args.criterion_root.is_dir() and args.format != "csv":
+        return None
+    if need_criterion and not args.criterion_root.is_dir():
         print(f"warning: {args.criterion_root} not found; ms columns will be '?'",
               file=sys.stderr)
 
@@ -498,8 +519,10 @@ def main() -> int:
             else {}
         )
 
-    sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
+    return kb_data, ms_data, kb_prep, ms_prep
 
+
+def collect_rows(args, kb_data, ms_data, kb_prep, ms_prep, sizes: list[int]):
     rows = []
     for n in sizes:
         r = gather_row(n, kb_data, ms_data, args.tile_select,
@@ -509,20 +532,115 @@ def main() -> int:
                   file=sys.stderr)
             continue
         rows.append(r)
+    return rows
 
+
+def cmd_vertical(args) -> int:
+    """Single-N transposed table → <out>/comparison_table_vertical.tex."""
+    data = load_data(args, need_criterion=True)
+    if data is None:
+        return 2
+    kb_data, ms_data, kb_prep, ms_prep = data
+    rows = collect_rows(args, kb_data, ms_data, kb_prep, ms_prep, [args.n])
+    if not rows:
+        print(f"error: no row produced for N={args.n}", file=sys.stderr)
+        return 2
+    has_prep = _has_any_prep(rows)
+    args.out.mkdir(parents=True, exist_ok=True)
+    out_path = args.out / "comparison_table_vertical.tex"
+    emit_vertical(rows[0], args.tile_select, has_prep, out_path)
+    return 0
+
+
+def cmd_horizontal(args) -> int:
+    """Multi-N table → <out>/comparison_table_horizontal.tex."""
+    data = load_data(args, need_criterion=True)
+    if data is None:
+        return 2
+    kb_data, ms_data, kb_prep, ms_prep = data
+    sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
+    rows = collect_rows(args, kb_data, ms_data, kb_prep, ms_prep, sizes)
     if not rows:
         print("error: no rows produced — check --log / --sizes / --tile-select",
               file=sys.stderr)
         return 2
-
-    if args.format == "csv":
-        emit_csv(rows)
-    elif args.format == "combined":
-        emit_combined(rows, args.tile_select)
-    else:
-        emit_separate(rows, args.tile_select)
-
+    has_prep = _has_any_prep(rows)
+    args.out.mkdir(parents=True, exist_ok=True)
+    out_path = args.out / "comparison_table_horizontal.tex"
+    emit_horizontal(rows, args.tile_select, has_prep, out_path)
     return 0
+
+
+def cmd_csv(args) -> int:
+    """CSV → <out>/comparison_table.csv (covers --sizes for cross-check)."""
+    data = load_data(args, need_criterion=False)
+    if data is None:
+        return 2
+    kb_data, ms_data, kb_prep, ms_prep = data
+    sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
+    rows = collect_rows(args, kb_data, ms_data, kb_prep, ms_prep, sizes)
+    if not rows:
+        print("error: no rows produced — check --log / --sizes / --tile-select",
+              file=sys.stderr)
+        return 2
+    args.out.mkdir(parents=True, exist_ok=True)
+    out_path = args.out / "comparison_table.csv"
+    out_path.write_text("\n".join(csv_lines(rows)) + "\n")
+    print(f"  wrote {out_path}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    def add_shared(sub):
+        sub.add_argument("--log", type=Path, default=None,
+                         help="bench log file (default: latest bench-*.log)")
+        sub.add_argument("--criterion-root", type=Path,
+                         default=Path("target/criterion"),
+                         help="criterion output root (default: target/criterion)")
+        sub.add_argument("--criterion-prep-root", type=Path,
+                         default=Path("target/criterion/preprocessing"),
+                         help="criterion output root for the preprocessing group")
+        sub.add_argument("--out", type=Path, default=Path("figures"),
+                         help="output directory (default: figures/)")
+        sub.add_argument("--tile-select", default="6",
+                         help="performance tile: integer (default '6'), "
+                              "'comm' (argmin KB), or 'time' (argmin ms)")
+        sub.add_argument("--no-prep", action="store_true",
+                         help="omit prep columns even when prep data is available")
+
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
+
+    p_vert = sub.add_parser("vertical",
+                            help="single-N transposed table (paper main section)")
+    add_shared(p_vert)
+    p_vert.add_argument("--n", type=int, default=256,
+                        help="square size N×N (default: 256)")
+    p_vert.set_defaults(func=cmd_vertical)
+
+    p_horz = sub.add_parser("horizontal",
+                            help="multi-N tile-1-vs-tile-k table (paper appendix)")
+    add_shared(p_horz)
+    p_horz.add_argument("--sizes",
+                        default=",".join(str(s) for s in SIZES_DEFAULT),
+                        help=f"comma-separated N values "
+                             f"(default: {','.join(str(s) for s in SIZES_DEFAULT)})")
+    p_horz.set_defaults(func=cmd_horizontal)
+
+    p_csv = sub.add_parser("csv", help="raw numbers as CSV")
+    add_shared(p_csv)
+    p_csv.add_argument("--sizes",
+                       default=",".join(str(s) for s in SIZES_DEFAULT),
+                       help=f"comma-separated N values "
+                            f"(default: {','.join(str(s) for s in SIZES_DEFAULT)})")
+    p_csv.set_defaults(func=cmd_csv)
+
+    args = ap.parse_args()
+    return args.func(args)
 
 
 if __name__ == "__main__":
